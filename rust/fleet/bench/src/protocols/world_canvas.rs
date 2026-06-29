@@ -1,5 +1,6 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, SuiAnchorOpts, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::party_driver::SuiBenchContext;
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_world_canvas::{
     WorldCanvasCell, WorldCanvasCellStrategy, WorldCanvasStroke, WorldCanvasStrokeStrategy,
@@ -11,7 +12,7 @@ pub(crate) fn play_cell(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -22,7 +23,7 @@ pub(crate) fn play_cell(
         WorldCanvasCellStrategy::new(protocol, seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,
         anchor_mode,
-        sui_anchor,
+        sui_context,
         transcript_recorder,
         seed,
         kit,
@@ -39,7 +40,7 @@ pub(crate) fn play_stroke(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -49,7 +50,7 @@ pub(crate) fn play_stroke(
         WorldCanvasStrokeStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,
         anchor_mode,
-        sui_anchor,
+        sui_context,
         transcript_recorder,
         seed,
         kit,

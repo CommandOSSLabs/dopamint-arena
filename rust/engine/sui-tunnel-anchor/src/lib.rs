@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -15,7 +18,7 @@ use sui_sdk_types::{
     SplitCoins, StructTag, Transaction, TransactionEffects, TransactionKind, TypeTag,
     UserSignature,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tunnel_core::crypto::verify;
 use tunnel_core::wire::{encode_settle_body, SettleBodyEntry, Settlement};
 use tunnel_harness::{
@@ -28,6 +31,25 @@ const ED25519_SCHEME_FLAG: u8 = 0x00;
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuiOpenBatchingConfig {
+    pub enabled: bool,
+    pub max_batch_size: usize,
+    pub flush_interval_ms: u64,
+    pub max_wait_ms: u64,
+}
+
+impl Default for SuiOpenBatchingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_batch_size: 50,
+            flush_interval_ms: 250,
+            max_wait_ms: 1_000,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SuiTunnelAnchorConfig {
     pub graphql_url: String,
@@ -36,10 +58,22 @@ pub struct SuiTunnelAnchorConfig {
     pub tunnel_coin_type: String,
     pub funder_priv_key: String,
     pub funder_stake_coin_id: String,
+    pub open_batching: SuiOpenBatchingConfig,
 }
 
 #[derive(Clone)]
 pub struct SuiTunnelAnchor {
+    config: SuiTunnelAnchorConfig,
+    funder: Ed25519PrivateKey,
+    funder_address: Address,
+    chain: Arc<dyn SuiChainClient>,
+    backend: Arc<dyn SuiBackendClient>,
+    inner: Arc<Mutex<AnchorState>>,
+    open_batch_executor: Option<SuiOpenBatchExecutor>,
+}
+
+#[derive(Clone)]
+struct SuiAnchorShared {
     config: SuiTunnelAnchorConfig,
     funder: Ed25519PrivateKey,
     funder_address: Address,
@@ -62,6 +96,29 @@ struct OpenKey {
     party_b: [u8; 32],
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct OpenPartyIdentity {
+    party_a_address: Address,
+    party_a_public_key: [u8; 32],
+    party_a_signature_type: u8,
+    party_b_address: Address,
+    party_b_public_key: [u8; 32],
+    party_b_signature_type: u8,
+}
+
+impl OpenPartyIdentity {
+    fn from_request(request: &TunnelOpenRequest) -> Self {
+        Self {
+            party_a_address: Ed25519PublicKey::new(request.party_a).derive_address(),
+            party_a_public_key: request.party_a,
+            party_a_signature_type: ED25519_SCHEME_FLAG,
+            party_b_address: Ed25519PublicKey::new(request.party_b).derive_address(),
+            party_b_public_key: request.party_b,
+            party_b_signature_type: ED25519_SCHEME_FLAG,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct OpenRecord {
     tunnel_id: String,
@@ -74,6 +131,29 @@ struct OpenRecord {
 struct PendingSettle {
     request: TunnelSettleRequest,
     responder: oneshot::Sender<Result<SettledTunnel, TunnelAnchorError>>,
+}
+
+struct OpenBatchItem {
+    key: OpenKey,
+    request: TunnelOpenRequest,
+    responder: oneshot::Sender<Result<OpenedTunnel, TunnelAnchorError>>,
+    enqueued_at: Instant,
+}
+
+struct OpenBatchGroup {
+    key: OpenKey,
+    request: TunnelOpenRequest,
+    responders: Vec<oneshot::Sender<Result<OpenedTunnel, TunnelAnchorError>>>,
+}
+
+enum OpenBatchAttemptError {
+    Retryable(TunnelAnchorError),
+    Final(TunnelAnchorError),
+}
+
+#[derive(Clone)]
+struct SuiOpenBatchExecutor {
+    sender: mpsc::UnboundedSender<OpenBatchItem>,
 }
 
 #[async_trait]
@@ -287,6 +367,153 @@ impl SuiChainClient for GraphQlSuiChainClient {
     }
 }
 
+impl SuiAnchorShared {
+    fn anchor_for_executor(&self) -> SuiTunnelAnchor {
+        let mut config = self.config.clone();
+        config.open_batching.enabled = false;
+        SuiTunnelAnchor {
+            config,
+            funder: self.funder.clone(),
+            funder_address: self.funder_address,
+            chain: self.chain.clone(),
+            backend: self.backend.clone(),
+            inner: self.inner.clone(),
+            open_batch_executor: None,
+        }
+    }
+
+    async fn flush_open_batch(&self, items: Vec<OpenBatchItem>) {
+        self.anchor_for_executor().execute_open_batch(items).await;
+    }
+}
+
+impl SuiOpenBatchExecutor {
+    fn new(shared: SuiAnchorShared) -> Result<Self, TunnelAnchorError> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name("sui-open-batch-executor".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build Sui open batch runtime");
+                runtime.block_on(run_open_batch_worker(shared, receiver));
+            })
+            .map_err(|e| {
+                TunnelAnchorError::Unavailable(format!("start open batch executor: {e}"))
+            })?;
+        Ok(Self { sender })
+    }
+
+    async fn submit(
+        &self,
+        key: OpenKey,
+        request: TunnelOpenRequest,
+    ) -> Result<OpenedTunnel, TunnelAnchorError> {
+        let (responder, receiver) = oneshot::channel();
+        self.sender
+            .send(OpenBatchItem {
+                key,
+                request,
+                responder,
+                enqueued_at: Instant::now(),
+            })
+            .map_err(|_| TunnelAnchorError::Unavailable("open batch executor stopped".into()))?;
+        receiver.await.unwrap_or_else(|_| {
+            Err(TunnelAnchorError::Unavailable(
+                "open batch executor stopped".into(),
+            ))
+        })
+    }
+}
+
+async fn run_open_batch_worker(
+    shared: SuiAnchorShared,
+    mut receiver: mpsc::UnboundedReceiver<OpenBatchItem>,
+) {
+    let mut pending = Vec::new();
+    let max_batch_size = shared.config.open_batching.max_batch_size.max(1);
+
+    loop {
+        if pending.is_empty() {
+            let Some(item) = receiver.recv().await else {
+                break;
+            };
+            pending.push(item);
+        }
+
+        if pending.len() >= max_batch_size {
+            shared.flush_open_batch(std::mem::take(&mut pending)).await;
+            continue;
+        }
+
+        let deadline = open_batch_deadline(&pending, &shared.config.open_batching);
+        tokio::select! {
+            maybe_item = receiver.recv() => {
+                match maybe_item {
+                    Some(item) => pending.push(item),
+                    None => {
+                        shared.flush_open_batch(std::mem::take(&mut pending)).await;
+                        break;
+                    }
+                }
+            }
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                shared.flush_open_batch(std::mem::take(&mut pending)).await;
+            }
+        }
+    }
+}
+
+fn open_batch_deadline(items: &[OpenBatchItem], config: &SuiOpenBatchingConfig) -> Instant {
+    let oldest = items
+        .first()
+        .map(|item| item.enqueued_at)
+        .unwrap_or_else(Instant::now);
+    let flush_at = oldest + Duration::from_millis(config.flush_interval_ms);
+    let max_wait_at = oldest + Duration::from_millis(config.max_wait_ms);
+    flush_at.min(max_wait_at)
+}
+
+fn send_open_group_result(
+    responders: Vec<oneshot::Sender<Result<OpenedTunnel, TunnelAnchorError>>>,
+    result: Result<OpenedTunnel, TunnelAnchorError>,
+) {
+    match result {
+        Ok(opened) => {
+            let tunnel_id = opened.tunnel_id.clone();
+            let onchain_nonce = opened.onchain_nonce;
+            let created_at_ms = opened.created_at_ms;
+            let mut responders = responders.into_iter();
+            if let Some(responder) = responders.next() {
+                let _ = responder.send(Ok(opened));
+            }
+            for responder in responders {
+                let _ = responder.send(Ok(OpenedTunnel {
+                    tunnel_id: tunnel_id.clone(),
+                    onchain_nonce,
+                    created_at_ms,
+                    created: false,
+                }));
+            }
+        }
+        Err(error) => {
+            for responder in responders {
+                let _ = responder.send(Err(error.clone()));
+            }
+        }
+    }
+}
+
+fn clone_open_request(request: &TunnelOpenRequest) -> TunnelOpenRequest {
+    TunnelOpenRequest {
+        protocol: request.protocol.clone(),
+        party_a: request.party_a,
+        party_b: request.party_b,
+        initial: request.initial,
+    }
+}
+
 impl SuiTunnelAnchor {
     pub fn new(config: SuiTunnelAnchorConfig) -> Result<Self, TunnelAnchorError> {
         let chain = GraphQlSuiChainClient::new(&config.graphql_url)
@@ -311,13 +538,28 @@ impl SuiTunnelAnchor {
         let funder = decode_sui_ed25519_bech32_private_key(&config.funder_priv_key)
             .map_err(TunnelAnchorError::Rejected)?;
         let funder_address = funder.public_key().derive_address();
+        let inner = Arc::new(Mutex::new(AnchorState::default()));
+        let shared = SuiAnchorShared {
+            config: config.clone(),
+            funder: funder.clone(),
+            funder_address,
+            chain: chain.clone(),
+            backend: backend.clone(),
+            inner: inner.clone(),
+        };
+        let open_batch_executor = if config.open_batching.enabled {
+            Some(SuiOpenBatchExecutor::new(shared)?)
+        } else {
+            None
+        };
         Ok(Self {
             config,
             funder,
             funder_address,
             chain,
             backend,
-            inner: Arc::new(Mutex::new(AnchorState::default())),
+            inner,
+            open_batch_executor,
         })
     }
 
@@ -343,6 +585,21 @@ impl SuiTunnelAnchor {
             });
         }
 
+        if self.config.open_batching.enabled {
+            let executor = self.open_batch_executor.as_ref().ok_or_else(|| {
+                TunnelAnchorError::Unavailable("open batch executor stopped".into())
+            })?;
+            return executor.submit(key, request).await;
+        }
+
+        self.open_single_uncached(key, request).await
+    }
+
+    async fn open_single_uncached(
+        &self,
+        key: OpenKey,
+        request: TunnelOpenRequest,
+    ) -> Result<OpenedTunnel, TunnelAnchorError> {
         let stake_coin_id = parse_address(&self.config.funder_stake_coin_id)?;
         let stake_ref = self
             .chain
@@ -350,6 +607,193 @@ impl SuiTunnelAnchor {
             .await
             .map_err(TunnelAnchorError::Unavailable)?;
         let kind = self.build_open_kind(&request, stake_ref)?;
+        let effects = self.execute_sponsored_kind(kind).await?;
+        let (tunnel_id, created_at_ms) = self.opened_from_effects(&effects).await?;
+        let record = OpenRecord {
+            tunnel_id: tunnel_id.clone(),
+            party_a: request.party_a,
+            party_b: request.party_b,
+            onchain_nonce: 0,
+            created_at_ms,
+        };
+        self.inner.lock().unwrap().opens.insert(key, record);
+        Ok(OpenedTunnel {
+            tunnel_id,
+            onchain_nonce: 0,
+            created_at_ms: Some(created_at_ms),
+            created: true,
+        })
+    }
+
+    async fn execute_open_batch(&self, items: Vec<OpenBatchItem>) {
+        let mut uncached_items = Vec::new();
+        for item in items {
+            if let Some(opened) = self.cached_open(&item.key) {
+                let _ = item.responder.send(Ok(opened));
+            } else {
+                uncached_items.push(item);
+            }
+        }
+
+        if uncached_items.is_empty() {
+            return;
+        }
+
+        let mut groups: Vec<OpenBatchGroup> = Vec::new();
+        let mut group_indexes: HashMap<OpenKey, usize> = HashMap::new();
+        for item in uncached_items {
+            if let Some(index) = group_indexes.get(&item.key).copied() {
+                groups[index].responders.push(item.responder);
+            } else {
+                let index = groups.len();
+                group_indexes.insert(item.key.clone(), index);
+                groups.push(OpenBatchGroup {
+                    key: item.key,
+                    request: item.request,
+                    responders: vec![item.responder],
+                });
+            }
+        }
+
+        let mut identity_counts: HashMap<OpenPartyIdentity, usize> = HashMap::new();
+        for group in &groups {
+            *identity_counts
+                .entry(OpenPartyIdentity::from_request(&group.request))
+                .or_default() += 1;
+        }
+
+        let mut safe_groups = Vec::new();
+        let mut single_groups = Vec::new();
+        for group in groups {
+            let identity = OpenPartyIdentity::from_request(&group.request);
+            if identity_counts.get(&identity).copied().unwrap_or_default() == 1 {
+                safe_groups.push(group);
+            } else {
+                single_groups.push(group);
+            }
+        }
+
+        for group in single_groups {
+            let result = self.open_single_uncached(group.key, group.request).await;
+            send_open_group_result(group.responders, result);
+        }
+
+        self.execute_open_groups_or_split(safe_groups).await;
+    }
+
+    fn execute_open_groups_or_split(
+        &self,
+        mut groups: Vec<OpenBatchGroup>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            match groups.len() {
+                0 => {}
+                1 => {
+                    let group = groups.pop().expect("one open group");
+                    let result = self.open_single_uncached(group.key, group.request).await;
+                    send_open_group_result(group.responders, result);
+                }
+                _ => {
+                    let keys = groups
+                        .iter()
+                        .map(|group| group.key.clone())
+                        .collect::<Vec<_>>();
+                    let requests = groups
+                        .iter()
+                        .map(|group| clone_open_request(&group.request))
+                        .collect::<Vec<_>>();
+
+                    match self.open_batched_uncached(&keys, &requests).await {
+                        Ok(opened) => {
+                            for (group, opened) in groups.into_iter().zip(opened) {
+                                send_open_group_result(group.responders, Ok(opened));
+                            }
+                        }
+                        Err(OpenBatchAttemptError::Retryable(error)) => {
+                            drop(error);
+                            let right_groups = groups.split_off(groups.len() / 2);
+                            self.execute_open_groups_or_split(groups).await;
+                            self.execute_open_groups_or_split(right_groups).await;
+                        }
+                        Err(OpenBatchAttemptError::Final(error)) => {
+                            for group in groups {
+                                send_open_group_result(group.responders, Err(error.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    fn cached_open(&self, key: &OpenKey) -> Option<OpenedTunnel> {
+        self.inner
+            .lock()
+            .unwrap()
+            .opens
+            .get(key)
+            .cloned()
+            .map(|opened| OpenedTunnel {
+                tunnel_id: opened.tunnel_id,
+                onchain_nonce: opened.onchain_nonce,
+                created_at_ms: Some(opened.created_at_ms),
+                created: false,
+            })
+    }
+
+    async fn open_batched_uncached(
+        &self,
+        keys: &[OpenKey],
+        requests: &[TunnelOpenRequest],
+    ) -> Result<Vec<OpenedTunnel>, OpenBatchAttemptError> {
+        let stake_coin_id = parse_address(&self.config.funder_stake_coin_id)
+            .map_err(OpenBatchAttemptError::Final)?;
+        let stake_ref = self
+            .chain
+            .get_object_ref(stake_coin_id)
+            .await
+            .map_err(TunnelAnchorError::Unavailable)
+            .map_err(OpenBatchAttemptError::Final)?;
+        let kind = self
+            .build_batched_open_kind(requests, stake_ref)
+            .map_err(OpenBatchAttemptError::Final)?;
+        let effects = self
+            .execute_sponsored_kind(kind)
+            .await
+            .map_err(OpenBatchAttemptError::Final)?;
+        ensure_success(&effects).map_err(OpenBatchAttemptError::Retryable)?;
+        let opened = self
+            .map_created_tunnels_to_open_requests(&effects, requests)
+            .await
+            .map_err(OpenBatchAttemptError::Final)?;
+
+        let mut results = Vec::with_capacity(requests.len());
+        let mut state = self.inner.lock().unwrap();
+        for ((key, request), (tunnel_id, created_at_ms)) in
+            keys.iter().cloned().zip(requests.iter()).zip(opened)
+        {
+            let record = OpenRecord {
+                tunnel_id: tunnel_id.clone(),
+                party_a: request.party_a,
+                party_b: request.party_b,
+                onchain_nonce: 0,
+                created_at_ms,
+            };
+            state.opens.insert(key, record);
+            results.push(OpenedTunnel {
+                tunnel_id,
+                onchain_nonce: 0,
+                created_at_ms: Some(created_at_ms),
+                created: true,
+            });
+        }
+        Ok(results)
+    }
+
+    async fn execute_sponsored_kind(
+        &self,
+        kind: TransactionKind,
+    ) -> Result<TransactionEffects, TunnelAnchorError> {
         let tx_kind_bytes = base64::engine::general_purpose::STANDARD
             .encode(bcs::to_bytes(&kind).map_err(|e| TunnelAnchorError::Rejected(e.to_string()))?);
         let sponsor = self
@@ -365,7 +809,7 @@ impl SuiTunnelAnchor {
             .funder
             .sign_transaction(&tx)
             .map_err(|e| TunnelAnchorError::Rejected(format!("sign open tx: {e}")))?;
-        let effects = match sponsor.provider.as_str() {
+        Ok(match sponsor.provider.as_str() {
             "settler" => {
                 let sponsor_sig = sponsor
                     .sponsor_signature
@@ -400,9 +844,15 @@ impl SuiTunnelAnchor {
                     "unknown sponsor provider {other}"
                 )))
             }
-        };
-        ensure_success(&effects)?;
-        let tx_digest = transaction_digest(&effects);
+        })
+    }
+
+    async fn opened_from_effects(
+        &self,
+        effects: &TransactionEffects,
+    ) -> Result<(String, u64), TunnelAnchorError> {
+        ensure_success(effects)?;
+        let tx_digest = transaction_digest(effects);
         let created_at_ms = self
             .chain
             .get_transaction_timestamp_ms(&tx_digest)
@@ -413,21 +863,89 @@ impl SuiTunnelAnchor {
                     "transaction {tx_digest} timestamp not found"
                 ))
             })?;
-        let tunnel_id = self.find_created_tunnel_id(&effects).await?;
-        let record = OpenRecord {
-            tunnel_id: tunnel_id.clone(),
-            party_a: request.party_a,
-            party_b: request.party_b,
-            onchain_nonce: 0,
-            created_at_ms,
-        };
-        self.inner.lock().unwrap().opens.insert(key, record);
-        Ok(OpenedTunnel {
-            tunnel_id,
-            onchain_nonce: 0,
-            created_at_ms: Some(created_at_ms),
-            created: true,
-        })
+        let tunnel_id = self.find_created_tunnel_id(effects).await?;
+        Ok((tunnel_id, created_at_ms))
+    }
+
+    async fn map_created_tunnels_to_open_requests(
+        &self,
+        effects: &TransactionEffects,
+        requests: &[TunnelOpenRequest],
+    ) -> Result<Vec<(String, u64)>, TunnelAnchorError> {
+        ensure_success(effects)?;
+        let tx_digest = transaction_digest(effects);
+        let created_at_ms = self
+            .chain
+            .get_transaction_timestamp_ms(&tx_digest)
+            .await
+            .map_err(TunnelAnchorError::Unavailable)?
+            .ok_or_else(|| {
+                TunnelAnchorError::Unavailable(format!(
+                    "transaction {tx_digest} timestamp not found"
+                ))
+            })?;
+
+        let mut matched_results = vec![None; requests.len()];
+        let mut tunnel_count = 0usize;
+        for object_id in created_object_ids(effects) {
+            let Some(object) = self
+                .chain
+                .get_object(object_id)
+                .await
+                .map_err(TunnelAnchorError::Unavailable)?
+            else {
+                continue;
+            };
+            if self.is_tunnel_object(&object)? {
+                tunnel_count += 1;
+                let parties = parse_tunnel_parties(&object)?;
+                let matching_requests = requests
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(request_index, request)| {
+                        parties
+                            .matches_open_request(request)
+                            .then_some(request_index)
+                    })
+                    .collect::<Vec<_>>();
+
+                if matching_requests.len() > 1 {
+                    return Err(TunnelAnchorError::Rejected(format!(
+                        "created Tunnel object {object_id} matches multiple open requests"
+                    )));
+                }
+                let Some(request_index) = matching_requests.first().copied() else {
+                    return Err(TunnelAnchorError::Rejected(format!(
+                        "created Tunnel object {object_id} matches no open request"
+                    )));
+                };
+                if matched_results[request_index].is_some() {
+                    return Err(TunnelAnchorError::Rejected(format!(
+                        "multiple created Tunnel objects match open request {request_index}"
+                    )));
+                }
+                matched_results[request_index] = Some((object_id.to_string(), created_at_ms));
+            }
+        }
+        if tunnel_count != requests.len() {
+            return Err(TunnelAnchorError::Rejected(format!(
+                "open batch created {} Tunnel objects for {} requests",
+                tunnel_count,
+                requests.len()
+            )));
+        }
+
+        matched_results
+            .into_iter()
+            .enumerate()
+            .map(|(request_index, result)| {
+                result.ok_or_else(|| {
+                    TunnelAnchorError::Rejected(format!(
+                        "open request {request_index} matched no created Tunnel object"
+                    ))
+                })
+            })
+            .collect()
     }
 
     fn build_open_kind(
@@ -486,6 +1004,101 @@ impl SuiTunnelAnchor {
                 inputs,
                 commands: vec![split, call],
             },
+        ))
+    }
+
+    #[allow(dead_code)]
+    fn build_batched_open_kind(
+        &self,
+        requests: &[TunnelOpenRequest],
+        stake_ref: ObjectReference,
+    ) -> Result<TransactionKind, TunnelAnchorError> {
+        if requests.is_empty() {
+            return Err(TunnelAnchorError::Rejected("open batch is empty".into()));
+        }
+        if requests.len() > 50 {
+            return Err(TunnelAnchorError::Rejected("open batch too large".into()));
+        }
+        let command_count = 1 + requests.len();
+        if command_count >= 1024 {
+            return Err(TunnelAnchorError::Rejected(
+                "open batch exceeds PTB command limit".into(),
+            ));
+        }
+        let event_count = 4 * requests.len();
+        if event_count > 1024 {
+            return Err(TunnelAnchorError::Rejected(
+                "open batch exceeds event limit".into(),
+            ));
+        }
+
+        let package = parse_address(&self.config.package_id)?;
+        let coin_struct = StructTag::from_str(&self.config.tunnel_coin_type)
+            .map_err(|e| TunnelAnchorError::Rejected(format!("invalid Sui coin type: {e}")))?;
+        let coin_type = TypeTag::from(coin_struct);
+        let clock = Address::from_str(CLOCK_ADDRESS).expect("static clock address");
+
+        let mut inputs = Vec::with_capacity(2 + requests.len() * 10);
+        inputs.push(Input::ImmutableOrOwned(stake_ref));
+        for request in requests {
+            inputs.push(pure(&request.initial.a)?);
+            inputs.push(pure(&request.initial.b)?);
+        }
+        for request in requests {
+            let party_a_address = Ed25519PublicKey::new(request.party_a).derive_address();
+            let party_b_address = Ed25519PublicKey::new(request.party_b).derive_address();
+            inputs.push(pure(&party_a_address)?);
+            inputs.push(pure(&request.party_a.to_vec())?);
+            inputs.push(pure(&ED25519_SCHEME_FLAG)?);
+            inputs.push(pure(&party_b_address)?);
+            inputs.push(pure(&request.party_b.to_vec())?);
+            inputs.push(pure(&ED25519_SCHEME_FLAG)?);
+            inputs.push(pure(&DEFAULT_TIMEOUT_MS)?);
+            inputs.push(pure(&0u64)?);
+        }
+        let clock_input = inputs.len();
+        inputs.push(Input::Shared(SharedInput::new(clock, 1, false)));
+
+        let split_amounts = (0..requests.len() * 2)
+            .map(|offset| input_argument(1 + offset))
+            .collect::<Result<Vec<_>, _>>()?;
+        let split = Command::SplitCoins(SplitCoins {
+            coin: Argument::Input(0),
+            amounts: split_amounts,
+        });
+
+        let mut commands = Vec::with_capacity(command_count);
+        commands.push(split);
+        let metadata_start = 1 + requests.len() * 2;
+        for request_index in 0..requests.len() {
+            let request_input = metadata_start + request_index * 8;
+            let coin_a = request_index * 2;
+            let coin_b = coin_a + 1;
+            commands.push(Command::MoveCall(MoveCall {
+                package,
+                module: Identifier::new("tunnel")
+                    .map_err(|e| TunnelAnchorError::Rejected(e.to_string()))?,
+                function: Identifier::new("create_and_fund")
+                    .map_err(|e| TunnelAnchorError::Rejected(e.to_string()))?,
+                type_arguments: vec![coin_type.clone()],
+                arguments: vec![
+                    input_argument(request_input)?,
+                    input_argument(request_input + 1)?,
+                    input_argument(request_input + 2)?,
+                    input_argument(request_input + 3)?,
+                    input_argument(request_input + 4)?,
+                    input_argument(request_input + 5)?,
+                    nested_result_argument(0, coin_a)?,
+                    nested_result_argument(0, coin_b)?,
+                    input_argument(request_input + 6)?,
+                    input_argument(request_input + 7)?,
+                    input_argument(clock_input)?,
+                ],
+            }));
+        }
+
+        Ok(TransactionKind::ProgrammableTransaction(
+            ProgrammableTransaction { inputs, commands },
         ))
     }
 
@@ -737,6 +1350,152 @@ fn verify_paired_settle(
     Ok((a, b))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TunnelParties {
+    party_a_address: Address,
+    party_a_public_key: Vec<u8>,
+    party_a_signature_type: u8,
+    party_b_address: Address,
+    party_b_public_key: Vec<u8>,
+    party_b_signature_type: u8,
+}
+
+impl TunnelParties {
+    fn matches_open_request(&self, request: &TunnelOpenRequest) -> bool {
+        self.party_a_address == Ed25519PublicKey::new(request.party_a).derive_address()
+            && self.party_a_public_key == request.party_a
+            && self.party_a_signature_type == ED25519_SCHEME_FLAG
+            && self.party_b_address == Ed25519PublicKey::new(request.party_b).derive_address()
+            && self.party_b_public_key == request.party_b
+            && self.party_b_signature_type == ED25519_SCHEME_FLAG
+    }
+}
+
+fn parse_tunnel_parties(object: &Object) -> Result<TunnelParties, TunnelAnchorError> {
+    let move_struct = object.as_struct().ok_or_else(|| {
+        TunnelAnchorError::Rejected("Tunnel object payload is not a Move struct".into())
+    })?;
+    let contents = move_struct.contents();
+    let mut offset = 0usize;
+
+    let _id = read_tunnel_address(contents, &mut offset, "id")?;
+    read_tunnel_u64(contents, &mut offset, "version")?;
+    let party_a_address = read_tunnel_address(contents, &mut offset, "party_a.address")?;
+    let party_a_public_key = read_tunnel_bytes(contents, &mut offset, "party_a.public_key")?;
+    let party_a_signature_type = read_tunnel_u8(contents, &mut offset, "party_a.signature_type")?;
+    let party_b_address = read_tunnel_address(contents, &mut offset, "party_b.address")?;
+    let party_b_public_key = read_tunnel_bytes(contents, &mut offset, "party_b.public_key")?;
+    let party_b_signature_type = read_tunnel_u8(contents, &mut offset, "party_b.signature_type")?;
+
+    Ok(TunnelParties {
+        party_a_address,
+        party_a_public_key,
+        party_a_signature_type,
+        party_b_address,
+        party_b_public_key,
+        party_b_signature_type,
+    })
+}
+
+fn read_tunnel_address(
+    contents: &[u8],
+    offset: &mut usize,
+    field: &str,
+) -> Result<Address, TunnelAnchorError> {
+    let end = offset.checked_add(Address::LENGTH).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} offset overflow"))
+    })?;
+    let bytes = contents.get(*offset..end).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} is truncated"))
+    })?;
+    let mut address = [0u8; Address::LENGTH];
+    address.copy_from_slice(bytes);
+    *offset = end;
+    Ok(Address::new(address))
+}
+
+fn read_tunnel_u64(
+    contents: &[u8],
+    offset: &mut usize,
+    field: &str,
+) -> Result<u64, TunnelAnchorError> {
+    let end = offset.checked_add(8).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} offset overflow"))
+    })?;
+    let bytes = contents.get(*offset..end).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} is truncated"))
+    })?;
+    let mut value = [0u8; 8];
+    value.copy_from_slice(bytes);
+    *offset = end;
+    Ok(u64::from_le_bytes(value))
+}
+
+fn read_tunnel_u8(
+    contents: &[u8],
+    offset: &mut usize,
+    field: &str,
+) -> Result<u8, TunnelAnchorError> {
+    let value = *contents.get(*offset).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} is truncated"))
+    })?;
+    *offset += 1;
+    Ok(value)
+}
+
+fn read_tunnel_bytes(
+    contents: &[u8],
+    offset: &mut usize,
+    field: &str,
+) -> Result<Vec<u8>, TunnelAnchorError> {
+    let length = read_bcs_sequence_length(contents, offset, field)?;
+    let end = offset.checked_add(length).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} length overflow"))
+    })?;
+    let bytes = contents.get(*offset..end).ok_or_else(|| {
+        TunnelAnchorError::Rejected(format!("Tunnel object field {field} is truncated"))
+    })?;
+    *offset = end;
+    Ok(bytes.to_vec())
+}
+
+fn read_bcs_sequence_length(
+    contents: &[u8],
+    offset: &mut usize,
+    field: &str,
+) -> Result<usize, TunnelAnchorError> {
+    let mut value = 0usize;
+    let mut shift = 0u32;
+
+    loop {
+        let byte = *contents.get(*offset).ok_or_else(|| {
+            TunnelAnchorError::Rejected(format!(
+                "Tunnel object field {field} has truncated BCS length"
+            ))
+        })?;
+        *offset += 1;
+
+        let chunk = usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            TunnelAnchorError::Rejected(format!(
+                "Tunnel object field {field} BCS length is too large"
+            ))
+        })?;
+        value = value.checked_add(chunk).ok_or_else(|| {
+            TunnelAnchorError::Rejected(format!("Tunnel object field {field} BCS length overflows"))
+        })?;
+
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+        shift += 7;
+        if shift >= usize::BITS {
+            return Err(TunnelAnchorError::Rejected(format!(
+                "Tunnel object field {field} BCS length is too large"
+            )));
+        }
+    }
+}
+
 fn created_object_ids(effects: &TransactionEffects) -> Vec<Address> {
     match effects {
         TransactionEffects::V1(v1) => v1
@@ -787,6 +1546,20 @@ fn pure<T: Serialize>(value: &T) -> Result<Input, TunnelAnchorError> {
         .map_err(|e| TunnelAnchorError::Rejected(format!("bcs pure input: {e}")))
 }
 
+fn input_argument(index: usize) -> Result<Argument, TunnelAnchorError> {
+    let index = u16::try_from(index)
+        .map_err(|_| TunnelAnchorError::Rejected("PTB input index exceeds u16".into()))?;
+    Ok(Argument::Input(index))
+}
+
+fn nested_result_argument(command: usize, result: usize) -> Result<Argument, TunnelAnchorError> {
+    let command = u16::try_from(command)
+        .map_err(|_| TunnelAnchorError::Rejected("PTB command index exceeds u16".into()))?;
+    let result = u16::try_from(result)
+        .map_err(|_| TunnelAnchorError::Rejected("PTB result index exceeds u16".into()))?;
+    Ok(Argument::NestedResult(command, result))
+}
+
 fn decode_user_signature(s: &str) -> Result<UserSignature, TunnelAnchorError> {
     UserSignature::from_base64(s)
         .map_err(|e| TunnelAnchorError::Rejected(format!("bad sponsor signature: {e}")))
@@ -813,10 +1586,11 @@ pub fn decode_sui_ed25519_bech32_private_key(input: &str) -> Result<Ed25519Priva
 mod tests {
     use super::*;
     use bech32::ToBase32;
+    use std::collections::VecDeque;
     use std::sync::Mutex as StdMutex;
     use sui_sdk_types::{
-        Digest, GasCostSummary, GasPayment, MoveStruct, ObjectData, ObjectReferenceWithOwner,
-        Owner, TransactionEffectsV1, TransactionExpiration,
+        Digest, ExecutionError, GasCostSummary, GasPayment, MoveStruct, ObjectData,
+        ObjectReferenceWithOwner, Owner, TransactionEffectsV1, TransactionExpiration,
     };
     use tunnel_core::protocol_id::ProtocolId;
     use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
@@ -827,6 +1601,7 @@ mod tests {
         object_ref: StdMutex<Option<ObjectReference>>,
         objects: StdMutex<HashMap<Address, Object>>,
         effects: StdMutex<Option<TransactionEffects>>,
+        effects_queue: StdMutex<VecDeque<TransactionEffects>>,
         transaction_effects: StdMutex<Option<TransactionEffects>>,
         transaction_timestamp_ms: StdMutex<Option<u64>>,
         execute_signature_count: StdMutex<Option<usize>>,
@@ -854,6 +1629,9 @@ mod tests {
             signatures: &[UserSignature],
         ) -> Result<TransactionEffects, String> {
             *self.execute_signature_count.lock().unwrap() = Some(signatures.len());
+            if let Some(effects) = self.effects_queue.lock().unwrap().pop_front() {
+                return Ok(effects);
+            }
             self.effects
                 .lock()
                 .unwrap()
@@ -878,8 +1656,10 @@ mod tests {
     #[derive(Default)]
     struct FakeBackend {
         sponsor: StdMutex<Option<SponsorResponse>>,
+        sponsor_queue: StdMutex<VecDeque<SponsorResponse>>,
         enoki_digest: StdMutex<Option<String>>,
         settle_digest: StdMutex<Option<String>>,
+        sponsor_call_count: StdMutex<usize>,
         sponsor_sender: StdMutex<Option<String>>,
         tx_kind_bytes: StdMutex<Option<String>>,
         enoki_execute: StdMutex<Option<(String, String)>>,
@@ -893,8 +1673,12 @@ mod tests {
             sender: String,
             tx_kind_bytes: String,
         ) -> Result<SponsorResponse, TunnelAnchorError> {
+            *self.sponsor_call_count.lock().unwrap() += 1;
             *self.sponsor_sender.lock().unwrap() = Some(sender);
             *self.tx_kind_bytes.lock().unwrap() = Some(tx_kind_bytes);
+            if let Some(response) = self.sponsor_queue.lock().unwrap().pop_front() {
+                return Ok(response);
+            }
             self.sponsor
                 .lock()
                 .unwrap()
@@ -946,6 +1730,7 @@ mod tests {
             tunnel_coin_type: "0x2::sui::SUI".into(),
             funder_priv_key: test_bech32_key(),
             funder_stake_coin_id: "0x7".into(),
+            open_batching: SuiOpenBatchingConfig::default(),
         }
     }
 
@@ -971,14 +1756,40 @@ mod tests {
     }
 
     fn tunnel_object(id: Address) -> Object {
+        tunnel_object_with_contents(id, {
+            let mut contents = id.into_inner().to_vec();
+            contents.extend([0u8; 8]);
+            contents
+        })
+    }
+
+    fn tunnel_object_for_request(id: Address, request: &TunnelOpenRequest) -> Object {
+        let mut contents = id.into_inner().to_vec();
+        contents.extend(1u64.to_le_bytes());
+        contents.extend(
+            Ed25519PublicKey::new(request.party_a)
+                .derive_address()
+                .into_inner(),
+        );
+        contents.extend(bcs::to_bytes(&request.party_a.to_vec()).unwrap());
+        contents.push(ED25519_SCHEME_FLAG);
+        contents.extend(
+            Ed25519PublicKey::new(request.party_b)
+                .derive_address()
+                .into_inner(),
+        );
+        contents.extend(bcs::to_bytes(&request.party_b.to_vec()).unwrap());
+        contents.push(ED25519_SCHEME_FLAG);
+        tunnel_object_with_contents(id, contents)
+    }
+
+    fn tunnel_object_with_contents(_id: Address, contents: Vec<u8>) -> Object {
         let tag = StructTag::new(
             Address::TWO,
             Identifier::new("tunnel").unwrap(),
             Identifier::new("Tunnel").unwrap(),
             vec![StructTag::sui().into()],
         );
-        let mut contents = id.into_inner().to_vec();
-        contents.extend([0u8; 8]);
         let move_struct = MoveStruct::new(tag, false, 1, contents).expect("valid move object");
         Object::new(
             ObjectData::Struct(move_struct),
@@ -989,10 +1800,17 @@ mod tests {
     }
 
     fn success_effects(tunnel_id: Address) -> TransactionEffects {
-        let created = ObjectReferenceWithOwner {
-            reference: object_ref(tunnel_id),
-            owner: Owner::Shared(1),
-        };
+        success_effects_with_created(vec![tunnel_id])
+    }
+
+    fn success_effects_with_created(tunnel_ids: Vec<Address>) -> TransactionEffects {
+        let created = tunnel_ids
+            .into_iter()
+            .map(|tunnel_id| ObjectReferenceWithOwner {
+                reference: object_ref(tunnel_id),
+                owner: Owner::Shared(1),
+            })
+            .collect();
         let gas_object = ObjectReferenceWithOwner {
             reference: object_ref(Address::ZERO),
             owner: Owner::Address(Address::ZERO),
@@ -1004,7 +1822,34 @@ mod tests {
             modified_at_versions: Vec::new(),
             consensus_objects: Vec::new(),
             transaction_digest: Digest::ZERO,
-            created: vec![created],
+            created,
+            mutated: Vec::new(),
+            unwrapped: Vec::new(),
+            deleted: Vec::new(),
+            unwrapped_then_deleted: Vec::new(),
+            wrapped: Vec::new(),
+            gas_object,
+            events_digest: None,
+            dependencies: Vec::new(),
+        }))
+    }
+
+    fn failed_effects() -> TransactionEffects {
+        let gas_object = ObjectReferenceWithOwner {
+            reference: object_ref(Address::ZERO),
+            owner: Owner::Address(Address::ZERO),
+        };
+        TransactionEffects::V1(Box::new(TransactionEffectsV1 {
+            status: ExecutionStatus::Failure {
+                error: ExecutionError::InsufficientGas,
+                command: None,
+            },
+            epoch: 0,
+            gas_used: GasCostSummary::default(),
+            modified_at_versions: Vec::new(),
+            consensus_objects: Vec::new(),
+            transaction_digest: Digest::ZERO,
+            created: Vec::new(),
             mutated: Vec::new(),
             unwrapped: Vec::new(),
             deleted: Vec::new(),
@@ -1023,15 +1868,57 @@ mod tests {
         SuiTunnelAnchor::with_clients(config(), chain, backend)
     }
 
-    fn open_request() -> TunnelOpenRequest {
-        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
-        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+    fn open_request_with_secrets(
+        party_a_secret: [u8; 32],
+        party_b_secret: [u8; 32],
+        initial: Balances,
+    ) -> TunnelOpenRequest {
+        let signer_a = LocalSigner::from_secret(&party_a_secret);
+        let signer_b = LocalSigner::from_secret(&party_b_secret);
         TunnelOpenRequest {
             protocol: ProtocolId::parse("blackjack.bet.v1").unwrap(),
             party_a: signer_a.public_key(),
             party_b: signer_b.public_key(),
-            initial: Balances { a: 7, b: 3 },
+            initial,
         }
+    }
+
+    fn open_request() -> TunnelOpenRequest {
+        open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 })
+    }
+
+    fn open_request_with_protocol(protocol: &str) -> TunnelOpenRequest {
+        let mut request = open_request();
+        request.protocol = ProtocolId::parse(protocol).unwrap();
+        request
+    }
+
+    fn settler_open_fixture(
+        tunnel_id: Address,
+        created_at_ms: u64,
+    ) -> (Arc<FakeChain>, Arc<FakeBackend>) {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects(tunnel_id));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(created_at_ms);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        (chain, backend)
     }
 
     #[test]
@@ -1044,29 +1931,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn batched_open_kind_uses_one_split_and_one_move_call_per_tunnel() {
+        let chain = Arc::new(FakeChain::default());
+        let backend = Arc::new(FakeBackend::default());
+        let anchor = anchor_with(chain, backend).expect("anchor");
+        let stake_ref = object_ref(Address::from_str("0x7").unwrap());
+        let requests = vec![
+            open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 }),
+            open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 }),
+        ];
+        let kind = anchor
+            .build_batched_open_kind(&requests, stake_ref)
+            .expect("kind");
+        let TransactionKind::ProgrammableTransaction(ptb) = kind else {
+            panic!("expected programmable transaction");
+        };
+        assert_eq!(ptb.commands.len(), 3);
+        assert!(matches!(ptb.commands[0], Command::SplitCoins(_)));
+        assert!(matches!(ptb.commands[1], Command::MoveCall(_)));
+        assert!(matches!(ptb.commands[2], Command::MoveCall(_)));
+    }
+
     #[tokio::test]
     async fn settler_sponsored_open_executes_with_graphql_and_extracts_tunnel_id() {
-        let tx = test_transaction();
-        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
-        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
         let tunnel_id = Address::from_str("0x42").unwrap();
-        let chain = Arc::new(FakeChain::default());
-        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
-        chain
-            .objects
-            .lock()
-            .unwrap()
-            .insert(tunnel_id, tunnel_object(tunnel_id));
-        *chain.effects.lock().unwrap() = Some(success_effects(tunnel_id));
-        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
-
-        let backend = Arc::new(FakeBackend::default());
-        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
-            provider: "settler".into(),
-            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
-            sponsor_signature: Some(sponsor_signature),
-            digest: None,
-        });
+        let (chain, backend) = settler_open_fixture(tunnel_id, 1_770_000_000_123);
 
         let anchor = anchor_with(chain.clone(), backend.clone()).expect("anchor");
         let opened = anchor.open(open_request()).await.expect("open");
@@ -1083,6 +1973,330 @@ mod tests {
             *backend.sponsor_sender.lock().unwrap(),
             Some(anchor.funder_address().to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn disabled_open_batching_config_preserves_single_open_behavior() {
+        let tunnel_id = Address::from_str("0x42").unwrap();
+        let (chain, backend) = settler_open_fixture(tunnel_id, 1_770_000_000_123);
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain.clone(), backend).expect("anchor");
+        let opened = anchor.open(open_request()).await.expect("open");
+
+        assert_eq!(opened.tunnel_id, tunnel_id.to_string());
+        assert_eq!(opened.created_at_ms, Some(1_770_000_000_123));
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn batched_open_resolves_each_caller_with_matching_tunnel_id() {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let tunnel_a = Address::from_str("0x42").unwrap();
+        let tunnel_b = Address::from_str("0x43").unwrap();
+        let req_a = open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+        let req_b = open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 });
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_a, tunnel_object_for_request(tunnel_a, &req_a));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_b, tunnel_object_for_request(tunnel_b, &req_b));
+        *chain.effects.lock().unwrap() =
+            Some(success_effects_with_created(vec![tunnel_a, tunnel_b]));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_789);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 10_000,
+            max_wait_ms: 10_000,
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+
+        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let opened_a = opened_a.expect("open a");
+        let opened_b = opened_b.expect("open b");
+
+        assert_eq!(opened_a.tunnel_id, tunnel_a.to_string());
+        assert_eq!(opened_b.tunnel_id, tunnel_b.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn batched_open_maps_out_of_order_created_objects() {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let tunnel_a = Address::from_str("0x42").unwrap();
+        let tunnel_b = Address::from_str("0x43").unwrap();
+        let req_a = open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+        let req_b = open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 });
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_a, tunnel_object_for_request(tunnel_a, &req_a));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_b, tunnel_object_for_request(tunnel_b, &req_b));
+        *chain.effects.lock().unwrap() =
+            Some(success_effects_with_created(vec![tunnel_b, tunnel_a]));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_789);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 10_000,
+            max_wait_ms: 10_000,
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+
+        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let opened_a = opened_a.expect("open a");
+        let opened_b = opened_b.expect("open b");
+
+        assert_eq!(opened_a.tunnel_id, tunnel_a.to_string());
+        assert_eq!(opened_b.tunnel_id, tunnel_b.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn batched_open_avoids_party_identity_ambiguous_requests() {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let sponsor_response = || SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature.clone()),
+            digest: None,
+        };
+        let tunnel_a = Address::from_str("0x42").unwrap();
+        let tunnel_b = Address::from_str("0x43").unwrap();
+        let req_a = open_request_with_protocol("blackjack.bet.v1");
+        let req_b = open_request_with_protocol("poker.bet.v1");
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_a, tunnel_object_for_request(tunnel_a, &req_a));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_b, tunnel_object_for_request(tunnel_b, &req_b));
+        chain
+            .effects_queue
+            .lock()
+            .unwrap()
+            .extend([success_effects(tunnel_a), success_effects(tunnel_b)]);
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_789);
+
+        let backend = Arc::new(FakeBackend::default());
+        backend
+            .sponsor_queue
+            .lock()
+            .unwrap()
+            .extend([sponsor_response(), sponsor_response()]);
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 10_000,
+            max_wait_ms: 10_000,
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+
+        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let opened_a = opened_a.expect("open a");
+        let opened_b = opened_b.expect("open b");
+
+        assert_eq!(opened_a.tunnel_id, tunnel_a.to_string());
+        assert_eq!(opened_b.tunnel_id, tunnel_b.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn batched_open_coalesces_duplicate_open_keys() {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let tunnel_id = Address::from_str("0x42").unwrap();
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects(tunnel_id));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_999);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 10_000,
+            max_wait_ms: 10_000,
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let req_a = open_request();
+        let req_b = open_request();
+
+        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let opened_a = opened_a.expect("open a");
+        let opened_b = opened_b.expect("open b");
+
+        assert_eq!(opened_a.tunnel_id, tunnel_id.to_string());
+        assert_eq!(opened_b.tunnel_id, tunnel_id.to_string());
+        assert_ne!(opened_a.created, opened_b.created);
+        assert!(opened_a.created || opened_b.created);
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn batched_open_splits_failed_batch() {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let sponsor_response = || SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature.clone()),
+            digest: None,
+        };
+        let tunnel_a = Address::from_str("0x42").unwrap();
+        let req_a = open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+        let req_b = open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 });
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_a, tunnel_object_for_request(tunnel_a, &req_a));
+        chain.effects_queue.lock().unwrap().extend([
+            failed_effects(),
+            success_effects(tunnel_a),
+            failed_effects(),
+        ]);
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_789);
+
+        let backend = Arc::new(FakeBackend::default());
+        backend.sponsor_queue.lock().unwrap().extend([
+            sponsor_response(),
+            sponsor_response(),
+            sponsor_response(),
+        ]);
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 10_000,
+            max_wait_ms: 10_000,
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+
+        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+
+        assert_eq!(opened_a.unwrap().tunnel_id, tunnel_a.to_string());
+        let Err(error_b) = opened_b else {
+            panic!("open b unexpectedly succeeded");
+        };
+        assert!(matches!(error_b, TunnelAnchorError::Rejected(_)));
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn batched_open_does_not_retry_after_successful_batch_mapping_failure() {
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let tunnel_a = Address::from_str("0x42").unwrap();
+        let tunnel_b = Address::from_str("0x43").unwrap();
+        let req_a = open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+        let req_b = open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 });
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        *chain.effects.lock().unwrap() =
+            Some(success_effects_with_created(vec![tunnel_a, tunnel_b]));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_789);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 10_000,
+            max_wait_ms: 10_000,
+        };
+        let anchor = SuiTunnelAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+
+        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+
+        assert!(opened_a.is_err());
+        assert!(opened_b.is_err());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 1);
     }
 
     #[tokio::test]

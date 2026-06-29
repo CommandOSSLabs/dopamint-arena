@@ -3,6 +3,7 @@
 //! explanatory errors rather than silently ignoring them.
 
 use clap::{CommandFactory, Parser};
+use sui_tunnel_anchor::SuiOpenBatchingConfig;
 use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,6 +74,7 @@ pub struct SuiAnchorOpts {
     pub tunnel_coin_type: String,
     pub funder_priv_key: String,
     pub funder_stake_coin_id: String,
+    pub open_batching: SuiOpenBatchingConfig,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -108,6 +110,7 @@ bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
 postcard: compact default candidate for bot-vs-bot\n\n\
 Anchor values:\n  \
 memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n\
+sui: Sui Tunnel anchor for sponsored open and settle transactions\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
 memory: retain committed transitions in memory during each match; useful for measuring recorder overhead"
@@ -139,8 +142,8 @@ struct Raw {
     /// Protocol scenario: varied gameplay or the protocol's golden regression case.
     #[arg(long, default_value = "varied", value_name = "varied|golden")]
     scenario: String,
-    /// Tunnel anchor implementation. Only `memory` is implemented.
-    #[arg(long, default_value = "memory", value_name = "memory")]
+    /// Tunnel anchor implementation.
+    #[arg(long, default_value = "memory", value_name = "memory|sui")]
     anchor: String,
     /// Transcript recorder implementation: none or memory.
     #[arg(
@@ -183,6 +186,26 @@ struct Raw {
     /// Funder-owned stake coin object used by --anchor sui.
     #[arg(long = "sui-funder-stake-coin-id", value_name = "OBJECT_ID")]
     sui_funder_stake_coin_id: Option<String>,
+    /// Maximum Sui sponsored open requests per future PTB batch.
+    #[arg(long = "sui-open-batch-size", default_value_t = 50, value_name = "N")]
+    sui_open_batch_size: usize,
+    /// Future Sui open PTB flush interval in milliseconds.
+    #[arg(
+        long = "sui-open-batch-flush-ms",
+        default_value_t = 250,
+        value_name = "MS"
+    )]
+    sui_open_batch_flush_ms: u64,
+    /// Maximum future Sui open request wait time in milliseconds.
+    #[arg(
+        long = "sui-open-batch-max-wait-ms",
+        default_value_t = 1_000,
+        value_name = "MS"
+    )]
+    sui_open_batch_max_wait_ms: u64,
+    /// Disable future Sui sponsored open PTB batching.
+    #[arg(long = "sui-disable-open-batching")]
+    sui_disable_open_batching: bool,
 }
 
 pub fn help_text() -> String {
@@ -311,6 +334,21 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         if !missing.is_empty() {
             return Err(format!("--anchor sui requires {}", missing.join(", ")));
         }
+        if raw.sui_open_batch_size == 0 {
+            return Err("--sui-open-batch-size must be greater than 0".to_string());
+        }
+        if raw.sui_open_batch_size > 50 {
+            return Err("--sui-open-batch-size must be <= 50".to_string());
+        }
+        if raw.sui_open_batch_flush_ms == 0 {
+            return Err("--sui-open-batch-flush-ms must be greater than 0".to_string());
+        }
+        if raw.sui_open_batch_max_wait_ms < raw.sui_open_batch_flush_ms {
+            return Err(
+                "--sui-open-batch-max-wait-ms must be greater than or equal to --sui-open-batch-flush-ms"
+                    .to_string(),
+            );
+        }
         Some(SuiAnchorOpts {
             graphql_url: raw.sui_graphql_url.unwrap(),
             backend_url: raw.sui_backend_url.unwrap(),
@@ -318,6 +356,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             tunnel_coin_type: raw.sui_tunnel_coin_type,
             funder_priv_key: raw.sui_funder_priv_key.unwrap(),
             funder_stake_coin_id: raw.sui_funder_stake_coin_id.unwrap(),
+            open_batching: SuiOpenBatchingConfig {
+                enabled: !raw.sui_disable_open_batching,
+                max_batch_size: raw.sui_open_batch_size,
+                flush_interval_ms: raw.sui_open_batch_flush_ms,
+                max_wait_ms: raw.sui_open_batch_max_wait_ms,
+            },
         })
     } else {
         None
@@ -514,6 +558,132 @@ mod tests {
             "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
         );
         assert_eq!(sui.funder_stake_coin_id, "0xcoin");
+    }
+
+    #[test]
+    fn anchor_sui_open_batching_defaults_to_enabled_conservative_limits() {
+        let opts = parse(vec![
+            "--anchor".into(),
+            "sui".into(),
+            "--transcript-recorder".into(),
+            "memory".into(),
+            "--sui-graphql-url".into(),
+            "http://graphql".into(),
+            "--sui-backend-url".into(),
+            "http://backend".into(),
+            "--sui-package-id".into(),
+            "0x2".into(),
+            "--sui-funder-priv-key".into(),
+            "suiprivkey1example".into(),
+            "--sui-funder-stake-coin-id".into(),
+            "0x7".into(),
+        ]);
+        let opts = opts.expect("parse sui opts");
+        let sui = opts.sui_anchor.expect("sui opts");
+        assert!(sui.open_batching.enabled);
+        assert_eq!(sui.open_batching.max_batch_size, 50);
+        assert_eq!(sui.open_batching.flush_interval_ms, 250);
+        assert_eq!(sui.open_batching.max_wait_ms, 1000);
+    }
+
+    #[test]
+    fn anchor_sui_open_batching_flags_override_defaults() {
+        let opts = parse(vec![
+            "--anchor".into(),
+            "sui".into(),
+            "--transcript-recorder".into(),
+            "memory".into(),
+            "--sui-graphql-url".into(),
+            "http://graphql".into(),
+            "--sui-backend-url".into(),
+            "http://backend".into(),
+            "--sui-package-id".into(),
+            "0x2".into(),
+            "--sui-funder-priv-key".into(),
+            "suiprivkey1example".into(),
+            "--sui-funder-stake-coin-id".into(),
+            "0x7".into(),
+            "--sui-open-batch-size".into(),
+            "25".into(),
+            "--sui-open-batch-flush-ms".into(),
+            "100".into(),
+            "--sui-open-batch-max-wait-ms".into(),
+            "500".into(),
+        ]);
+        let opts = opts.expect("parse sui opts");
+        let sui = opts.sui_anchor.expect("sui opts");
+        assert_eq!(sui.open_batching.max_batch_size, 25);
+        assert_eq!(sui.open_batching.flush_interval_ms, 100);
+        assert_eq!(sui.open_batching.max_wait_ms, 500);
+    }
+
+    #[test]
+    fn anchor_sui_open_batching_can_be_disabled() {
+        let opts = parse_v(&[
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "http://graphql",
+            "--sui-backend-url",
+            "http://backend",
+            "--sui-package-id",
+            "0x2",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0x7",
+            "--sui-disable-open-batching",
+        ])
+        .expect("parse sui opts");
+        let sui = opts.sui_anchor.expect("sui opts");
+        assert!(!sui.open_batching.enabled);
+    }
+
+    #[test]
+    fn anchor_sui_open_batching_rejects_invalid_limits() {
+        let base = [
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "http://graphql",
+            "--sui-backend-url",
+            "http://backend",
+            "--sui-package-id",
+            "0x2",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0x7",
+        ];
+
+        let mut zero_batch_size = base.to_vec();
+        zero_batch_size.extend(["--sui-open-batch-size", "0"]);
+        let err = parse_v(&zero_batch_size).unwrap_err();
+        assert!(err.contains("sui-open-batch-size"), "{err}");
+
+        let mut oversized_batch = base.to_vec();
+        oversized_batch.extend(["--sui-open-batch-size", "51"]);
+        let err = parse_v(&oversized_batch).unwrap_err();
+        assert!(err.contains("sui-open-batch-size"), "{err}");
+
+        let mut zero_flush_ms = base.to_vec();
+        zero_flush_ms.extend(["--sui-open-batch-flush-ms", "0"]);
+        let err = parse_v(&zero_flush_ms).unwrap_err();
+        assert!(err.contains("sui-open-batch-flush-ms"), "{err}");
+
+        let mut max_wait_before_flush = base.to_vec();
+        max_wait_before_flush.extend([
+            "--sui-open-batch-flush-ms",
+            "250",
+            "--sui-open-batch-max-wait-ms",
+            "249",
+        ]);
+        let err = parse_v(&max_wait_before_flush).unwrap_err();
+        assert!(err.contains("sui-open-batch-max-wait-ms"), "{err}");
     }
 
     #[test]

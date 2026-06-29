@@ -1,7 +1,8 @@
 //! `fleet-bench` swarm bench binary. Parses flags, runs the rayon fleet under a
 //! resource sampler, and prints the loadbench-shaped report.
 
-use fleet_bench::cli::{self, BenchMode};
+use fleet_bench::cli::{self, AnchorMode, BenchMode};
+use fleet_bench::party_driver::build_sui_bench_context;
 use fleet_bench::report;
 use fleet_bench::{resources, swarm};
 
@@ -20,6 +21,17 @@ fn main() {
         }
     };
 
+    let sui_context = match opts.anchor_mode {
+        AnchorMode::Memory => None,
+        AnchorMode::Sui => match build_sui_bench_context(opts.sui_anchor.as_ref()) {
+            Ok(context) => Some(context),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        },
+    };
+
     let (simple, preinitialized, res) = match opts.bench_mode {
         BenchMode::PerMatchSigners => {
             let sampler = resources::start(250, opts.workers);
@@ -30,7 +42,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
-                opts.sui_anchor.as_ref(),
+                sui_context.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
@@ -45,7 +57,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
-                opts.sui_anchor.as_ref(),
+                sui_context.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
@@ -63,7 +75,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
-                opts.sui_anchor.as_ref(),
+                sui_context.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
@@ -75,7 +87,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
-                opts.sui_anchor.as_ref(),
+                sui_context.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );

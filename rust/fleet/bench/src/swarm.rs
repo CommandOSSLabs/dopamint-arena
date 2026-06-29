@@ -6,9 +6,9 @@
 //! (143*N moves), which is the golden regression gate; `--duration` is
 //! the time-bounded throughput mode.
 
-use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode, SuiAnchorOpts, TranscriptRecorderMode};
-use crate::party_driver::SeatKit;
-use crate::protocols::play_match_for;
+use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode, TranscriptRecorderMode};
+use crate::party_driver::{SeatKit, SuiBenchContext};
+use crate::protocols::{play_match_for, PlayMatchRequest};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -147,23 +147,23 @@ pub fn run_simple(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let t = Instant::now();
         let kit = SeatKit::new(&SEAT_A, &SEAT_B);
-        let r = play_match_for(
+        let r = play_match_for(PlayMatchRequest {
             protocol_id,
             codec,
-            scenario.card_seed(idx),
-            &kit,
-            &tunnel_id_for(idx),
+            card_seed: scenario.card_seed(idx),
+            kit: &kit,
+            tunnel_id: &tunnel_id_for(idx),
             anchor_mode,
-            sui_anchor,
+            sui_context,
             transcript_recorder,
-        );
+        });
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -188,7 +188,7 @@ pub fn run_fresh_keys(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -199,16 +199,16 @@ pub fn run_fresh_keys(
         getrandom::getrandom(&mut secret_b).expect("os rng");
         let t = Instant::now();
         let kit = SeatKit::new(&secret_a, &secret_b);
-        let r = play_match_for(
+        let r = play_match_for(PlayMatchRequest {
             protocol_id,
             codec,
-            scenario.card_seed(idx),
-            &kit,
-            &tunnel_id_for(idx),
+            card_seed: scenario.card_seed(idx),
+            kit: &kit,
+            tunnel_id: &tunnel_id_for(idx),
             anchor_mode,
-            sui_anchor,
+            sui_context,
             transcript_recorder,
-        );
+        });
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -236,7 +236,7 @@ pub fn run_preinitialized_signers(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -244,16 +244,16 @@ pub fn run_preinitialized_signers(
     run_with(workers, duration_secs, Some(matches), |idx| {
         let t = Instant::now();
         let kit = &kits[idx as usize];
-        let r = play_match_for(
+        let r = play_match_for(PlayMatchRequest {
             protocol_id,
             codec,
-            scenario.card_seed(idx),
+            card_seed: scenario.card_seed(idx),
             kit,
-            &tunnel_id_for(idx),
+            tunnel_id: &tunnel_id_for(idx),
             anchor_mode,
-            sui_anchor,
+            sui_context,
             transcript_recorder,
-        );
+        });
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,

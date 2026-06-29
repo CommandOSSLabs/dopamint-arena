@@ -1,5 +1,6 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, SuiAnchorOpts, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::party_driver::SuiBenchContext;
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_tic_tac_toe::{
     TicTacToe, TicTacToeDifficulty, TicTacToeSeries, TicTacToeSeriesStrategy, TicTacToeStrategy,
@@ -11,7 +12,7 @@ pub(crate) fn play_single(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -21,7 +22,7 @@ pub(crate) fn play_single(
         TicTacToeStrategy::new(TicTacToeDifficulty::Perfect, (seed ^ 0x5A5A_A5A5) as u32),
         codec,
         anchor_mode,
-        sui_anchor,
+        sui_context,
         transcript_recorder,
         seed,
         kit,
@@ -38,7 +39,7 @@ pub(crate) fn play_series(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_anchor: Option<&SuiAnchorOpts>,
+    sui_context: Option<&SuiBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -48,7 +49,7 @@ pub(crate) fn play_series(
         TicTacToeSeriesStrategy::new(TicTacToeDifficulty::Perfect, (seed ^ 0x5A5A_A5A5) as u32),
         codec,
         anchor_mode,
-        sui_anchor,
+        sui_context,
         transcript_recorder,
         seed,
         kit,
