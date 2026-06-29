@@ -8,6 +8,7 @@ import { getClient } from "./rpc";
 import {
   AccountDisabledError,
   MasterNotRetrievableError,
+  NetworkMismatchError,
   PoolNotFoundError,
 } from "./errors";
 import type { Network, PoolBlob, SealedMembers, WalletEntry } from "./types";
@@ -82,6 +83,11 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     opts.walletPoolId,
     opts.accessValue,
   );
+  if (opts.network !== blob.network) {
+    throw new NetworkMismatchError(
+      `operation network ${opts.network} does not match pool network ${blob.network}`,
+    );
+  }
   let members = loadedMembers;
   const blobRef = { current: blob };
 

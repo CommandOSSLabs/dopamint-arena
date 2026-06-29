@@ -16,6 +16,7 @@ import {
   MasterNotRetrievableError,
   AccountDisabledError,
   PoolNotFoundError,
+  NetworkMismatchError,
 } from "./errors";
 import type { PoolBlob } from "./types";
 
@@ -191,4 +192,57 @@ test("signAndExecute uses member signer and awaits effects", async () => {
     ed25519Address(members[0].kp.publicKey),
   );
   assert.equal(awaitedDigest, "0xdeadbeef");
+});
+
+test("signAndExecute awaits effects by default", async () => {
+  const { id, access, blob, members } = makePool(1);
+  const p = await open({
+    store: memStore({ [id]: serializeBlob(blob) }),
+    network: "testnet",
+    walletPoolId: id,
+    accessValue: access,
+  });
+  let awaitedDigest: string | undefined;
+  const fakeClient = {
+    signAndExecuteTransaction: async () => ({ digest: "0xdef" }),
+    waitForTransaction: async (input: { digest: string }) => {
+      awaitedDigest = input.digest;
+    },
+  } as unknown as SuiClient;
+  await p.signAndExecute({
+    by: members[0].ordinal,
+    transaction: { kind: "test" },
+    client: fakeClient,
+  });
+  assert.equal(awaitedDigest, "0xdef");
+});
+
+test("wipe clears cache and member secrets", async () => {
+  const { id, access, blob, members } = makePool(1);
+  const p = await open({
+    store: memStore({ [id]: serializeBlob(blob) }),
+    network: "testnet",
+    walletPoolId: id,
+    accessValue: access,
+  });
+  await p.getMemberKey(members[0].ordinal);
+  p.wipe();
+  await assert.rejects(
+    () => p.getMemberKey(members[0].ordinal),
+    /member secret missing/,
+  );
+});
+
+test("network mismatch throws NetworkMismatchError", async () => {
+  const { id, access, blob } = makePool(1);
+  await assert.rejects(
+    () =>
+      open({
+        store: memStore({ [id]: serializeBlob(blob) }),
+        network: "mainnet",
+        walletPoolId: id,
+        accessValue: access,
+      }),
+    NetworkMismatchError,
+  );
 });
