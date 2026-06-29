@@ -1,6 +1,9 @@
 # 0023 — Arena enter: one signature, fund-own-seat, all games vs the serving fleet
 
-- **Status**: Proposed
+- **Status**: Proposed — **open mechanics (steps 2–3) superseded by
+  [0025](0025-arena-bot-preopens-user-deposit-only.md)** (the bot, not the user,
+  creates the tunnel; the user's PTB is deposit-only). Goals and all other steps
+  stand.
 - **Date**: 2026-06-29
 - **Refs**: realizes the deferred genuine you-vs-bot of
   [0012](0012-arena-attract-cabinet-seam.md); fills the bot↔user pairing/funding
