@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -58,6 +58,10 @@ import {
   clearResumeRecord,
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameMatch } from "@/engine/react/useGameMatch";
+import type { MatchSnapshot } from "@/engine/engineApi";
 
 const STAKE_BALANCE = 1_000_000_000n; // locked per seat: 1 MTPS (9 decimals)
 const STAKE_SHIFT = 200_000_000n; // 0.2 MTPS moves loser → winner on a decisive result
@@ -682,7 +686,7 @@ function getPvpSession(windowId: string): PvpSession {
   return session;
 }
 
-export function useBattleshipPvp(windowId: string): BattleshipPvp {
+function useLegacyBattleshipPvp(windowId: string): BattleshipPvp {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
@@ -792,3 +796,51 @@ async function settle(
     });
   }
 }
+
+/** Worker path (`?engine=worker`): the tunnel client + fleet secret run in a dedicated Web
+ *  Worker; this hook only renders snapshots and forwards commands. */
+function useWorkerBattleship(windowId: string): BattleshipPvp {
+  const snap = useGameMatch(windowId, "battleship") as MatchSnapshot<
+    BattleshipView,
+    BattleshipState["winner"]
+  >;
+  // One "My Activity" row per finished match, driven off the snapshot (the engine is
+  // telemetry-free; the legacy path pushes the same row from its session).
+  const { report } = useTelemetry();
+  const rowFired = useRef(false);
+  useEffect(() => {
+    if (snap.status === "idle" || snap.status === "matching") rowFired.current = false;
+    if (snap.status === "settled" && !rowFired.current && snap.role) {
+      rowFired.current = true;
+      const iWon = snap.winner === (snap.role === "A" ? 1 : 2);
+      report.pushLocalTxn({
+        id: Date.now(),
+        game: "battleship",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: "You",
+        type: iWon ? "PvP Win" : "PvP Loss",
+        status: "Success",
+        amount: "",
+      });
+    }
+  }, [snap.status, snap.winner, snap.role, report]);
+  return {
+    status: snap.status,
+    role: snap.role,
+    view: snap.view,
+    opponentWallet: snap.opponentWallet,
+    error: snap.error,
+    auto: snap.auto,
+    findMatch: (placements: Placement[]) =>
+      engineClient.findMatch(windowId, "battleship", placements),
+    fire: (cell: number) => engineClient.submitInput(windowId, cell),
+    setAuto: (on: boolean) => engineClient.setAuto(windowId, on),
+    reset: () => engineClient.reset(windowId),
+  };
+}
+
+/** `?engine=worker` runs battleship in a Web Worker; default keeps the main-thread path.
+ *  Bound once at module load so the hook identity is stable per session (rules-of-hooks). */
+export const useBattleshipPvp: (windowId: string) => BattleshipPvp = engineEnabled()
+  ? useWorkerBattleship
+  : useLegacyBattleshipPvp;

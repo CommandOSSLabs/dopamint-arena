@@ -67,6 +67,9 @@ export interface AttachResumeArgs<State, Move> {
   identity: ResumeIdentity;
   graceMs?: number;
   onGraceExpired?: (latest: CoSignedUpdate | null) => void;
+  /** Where to persist records. Defaults to localStorage (`writeResumeRecord`); the worker
+   *  engine injects an IndexedDB sink so the record never leaves the worker thread. */
+  persist?: (rec: ResumeRecord) => void;
   /** Injectable for tests; defaults to the globals. */
   timers?: {
     setTimeout: (fn: () => void, ms: number) => unknown;
@@ -294,13 +297,25 @@ export function attachResume<State, Move>(
   args: AttachResumeArgs<State, Move>,
 ): () => void {
   const { mp, channel, tunnel, identity } = args;
+  const persist = args.persist ?? writeResumeRecord;
 
   // Persist on confirm, preserving any game-set onConfirmed.
   const prevConfirmed = tunnel.onConfirmed;
   tunnel.onConfirmed = (u) => {
     prevConfirmed?.(u);
     const rec = buildRecord(tunnel, args.adapter, identity);
-    if (rec) writeResumeRecord(rec);
+    if (rec) persist(rec);
+  };
+
+  // Persist on PROPOSE too, preserving any game-set onProposed. A commit-reveal seat's fresh secret
+  // lives only in the pending proposal until the ACK; persisting here (captureSecret reads the
+  // pending/display state) means a reload in the propose→ACK window doesn't lose it and strand the
+  // seat at draw_reveal with no matching pre-image.
+  const prevProposed = tunnel.onProposed;
+  tunnel.onProposed = () => {
+    prevProposed?.();
+    const rec = buildRecord(tunnel, args.adapter, identity);
+    if (rec) persist(rec);
   };
 
   // Route the peer's resync through the channel's existing onPeer; preserve any prior handler.

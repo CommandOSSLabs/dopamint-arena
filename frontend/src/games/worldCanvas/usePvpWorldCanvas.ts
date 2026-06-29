@@ -31,6 +31,10 @@ import {
 } from "sui-tunnel-ts/protocol/worldCanvasPvp";
 import { makeWorldCanvasPvpResumeAdapter } from "./pvpResumeAdapter";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameMatch } from "@/engine/react/useGameMatch";
+import type { MatchSnapshot } from "@/engine/engineApi";
 
 /** A seat's queued paint == the co-signed batch move (a run of cells). */
 export type PaintIntent = PvpPaintMove;
@@ -49,7 +53,7 @@ function readIntent(
   return m ?? undefined;
 }
 
-const usePvpMatch = createPvpMatchHook<
+const useLegacyMatch = createPvpMatchHook<
   PvpCanvasState,
   PvpPaintMove,
   PaintIntent,
@@ -65,6 +69,34 @@ const usePvpMatch = createPvpMatchHook<
   intentToMove,
   readIntent,
 });
+
+/** Worker path (`?engine=worker`): same PvpMatch surface, backed by the worker engine; the
+ *  paint-buffer wrapper below is unchanged. */
+function useWorkerMatch(
+  windowId: string,
+): PvpMatch<PvpCanvasState, PaintIntent, PvpCell[]> {
+  const snap = useGameMatch(windowId, "world-canvas") as MatchSnapshot<
+    PvpCell[],
+    PvpCanvasState["winner"]
+  >;
+  return {
+    status: snap.status,
+    role: snap.role,
+    stake: snap.stake,
+    auto: snap.auto,
+    view: snap.view,
+    winner: snap.winner,
+    error: snap.error,
+    findMatch: () => engineClient.findMatch(windowId, "world-canvas"),
+    setIntent: (i) => engineClient.submitInput(windowId, i),
+    toggleAuto: () => engineClient.setAuto(windowId, !snap.auto),
+    reset: () => engineClient.reset(windowId),
+  };
+}
+
+/** `?engine=worker` selects the worker path; default keeps the main-thread path. Bound once
+ *  at module load so the hook identity is stable per session (rules-of-hooks). */
+const usePvpMatch = engineEnabled() ? useWorkerMatch : useLegacyMatch;
 
 export type { PvpStatus };
 
