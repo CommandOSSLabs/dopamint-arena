@@ -9,6 +9,7 @@ import {
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { settleViaBackend } from "@/backend/settle";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
@@ -190,9 +191,9 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  // Default OFF: PvP is human-vs-human, so you make your own moves; tick Auto to let the bot
-  // play for you.
-  const [auto, setAutoState] = useState(false);
+  // Auto is ON for your first match this session (watch a bot play), then sticky to your last
+  // toggle — tick it off and new games stay human-vs-human. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto(variant));
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
     create?: string;
@@ -206,7 +207,7 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(defaultAuto(variant));
   const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
@@ -508,11 +509,11 @@ export function usePvpTicTacToe(
         setGames([]);
         setScore({ x: 0, o: 0, draws: 0 });
         autoKickedRef.current = false;
-        // Default-off on a fresh queue; auto-requeue passes keepAuto so the Auto loop survives
-        // across per-game matches.
+        // Fresh queue resets Auto to the session default (ON the first time, else your last
+        // toggle); auto-requeue passes keepAuto so the Auto loop survives across per-game matches.
         if (!opts?.keepAuto) {
-          autoRef.current = false;
-          setAutoState(false);
+          autoRef.current = defaultAuto(variant);
+          setAutoState(autoRef.current);
         }
         bufferedSettleRef.current = null;
         bufferedHelloRef.current = null;
@@ -830,6 +831,7 @@ export function usePvpTicTacToe(
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
+      rememberAuto(variant, on);
       const t = tunnelRef.current;
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       const st = t.state;
@@ -862,8 +864,9 @@ export function usePvpTicTacToe(
   );
 
   // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
-  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto is ON
+  // by default on the first match, so this fires the opening bot move; it also covers ticking Auto
+  // pre-play.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -876,33 +879,36 @@ export function usePvpTicTacToe(
   // must never be restored — it would hijack the next match), close the transport, and clear
   // match state. keepAuto preserves the Auto toggle so an auto loop survives a per-game requeue;
   // a full leave clears it.
-  const teardownMatch = useCallback((keepAuto: boolean) => {
-    detachResumeRef.current?.();
-    detachResumeRef.current = null;
-    const tid = tunnelRef.current?.tunnelId;
-    if (tid) clearResumeRecord(tid);
-    mpRef.current?.close();
-    mpRef.current = null;
-    channelRef.current = null;
-    tunnelRef.current = null;
-    setState(null);
-    setRole(null);
-    setDigests({});
-    setGames([]);
-    setScore({ x: 0, o: 0, draws: 0 });
-    settledRef.current = false;
-    stoppingRef.current = false;
-    autoKickedRef.current = false;
-    if (!keepAuto) {
-      autoRef.current = false;
-      setAutoState(false);
-    }
-    openedResolveRef.current = null;
-    settleResolveRef.current = null;
-    bufferedSettleRef.current = null;
-    helloResolveRef.current = null;
-    bufferedHelloRef.current = null;
-  }, []);
+  const teardownMatch = useCallback(
+    (keepAuto: boolean) => {
+      detachResumeRef.current?.();
+      detachResumeRef.current = null;
+      const tid = tunnelRef.current?.tunnelId;
+      if (tid) clearResumeRecord(tid);
+      mpRef.current?.close();
+      mpRef.current = null;
+      channelRef.current = null;
+      tunnelRef.current = null;
+      setState(null);
+      setRole(null);
+      setDigests({});
+      setGames([]);
+      setScore({ x: 0, o: 0, draws: 0 });
+      settledRef.current = false;
+      stoppingRef.current = false;
+      autoKickedRef.current = false;
+      if (!keepAuto) {
+        autoRef.current = defaultAuto(variant);
+        setAutoState(autoRef.current);
+      }
+      openedResolveRef.current = null;
+      settleResolveRef.current = null;
+      bufferedSettleRef.current = null;
+      helloResolveRef.current = null;
+      bufferedHelloRef.current = null;
+    },
+    [variant],
+  );
 
   const leave = useCallback(() => {
     teardownMatch(false);

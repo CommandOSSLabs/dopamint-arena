@@ -25,6 +25,7 @@ import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   MpClient,
   resolveMpWsUrl,
@@ -109,8 +110,9 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   role: Role | null;
   /** Per-seat stake (MIST); surfaced in the outcome banner as the on-chain payout. */
   stake: number;
-  /** Auto mode for YOUR seat: off (default) = you play; on = a bot plays it for you. The opponent
-   *  toggles their own seat independently — both off = human-vs-human, both on = bot-vs-bot. */
+  /** Auto mode for YOUR seat: on = a bot plays it for you; off = you play. On for your FIRST match
+   *  this session, then sticky to your last toggle (see autoPreference). The opponent toggles their
+   *  own seat independently — both off = human-vs-human, both on = bot-vs-bot. */
   auto: boolean;
   view: View | null;
   winner: State["winner"];
@@ -188,7 +190,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   private status: PvpStatus = "idle";
   private role: Role | null = null;
-  private auto = false;
+  private auto: boolean; // set from defaultAuto(game) in the constructor (ON first match, then sticky)
   private view: View | null = null;
   private winner: State["winner"] = null as State["winner"];
   private error: string | null = null;
@@ -203,11 +205,12 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   constructor(private readonly spec: PvpMatchSpec<State, Move, Intent, View>) {
     this.intent = spec.idleIntent;
+    this.auto = defaultAuto(spec.game);
     this.snap = {
       status: "idle",
       role: null,
       stake: Number(spec.stake),
-      auto: false,
+      auto: this.auto,
       view: null,
       winner: null as State["winner"],
       error: null,
@@ -323,7 +326,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.dt = null;
     this.role = null;
     this.intent = this.spec.idleIntent;
-    this.auto = false;
+    this.auto = defaultAuto(this.spec.game);
     this.winner = null as State["winner"];
     this.status = "idle";
     this.view = null;
@@ -632,6 +635,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   toggleAuto = () => {
     this.auto = !this.auto;
+    rememberAuto(this.spec.game, this.auto);
     this.intent = this.spec.idleIntent;
     this.emit();
   };
