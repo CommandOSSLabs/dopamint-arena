@@ -237,6 +237,15 @@ export type MultiGameCaroMove = CaroMove;
 const MULTI_DOMAIN = protocols.protocolDomain("caro.series.v2");
 
 /** Plays `maxGames` Caro games over one tunnel, composing `CaroProtocol`. */
+/**
+ * Alternate the opening side each game so neither seat keeps the first-move edge
+ * across a staked series (game 0 → A, game 1 → B, …). The inner protocol always
+ * opens with A; the series wrapper overrides it by game index.
+ */
+function seriesOpener(gameIndex: number): Party {
+  return gameIndex % 2 === 0 ? "A" : "B";
+}
+
 export class MultiGameCaroProtocol implements Protocol<
   MultiGameCaroState,
   MultiGameCaroMove
@@ -260,7 +269,7 @@ export class MultiGameCaroProtocol implements Protocol<
 
   initialState(ctx: ProtocolContext): MultiGameCaroState {
     return {
-      inner: this.inner.initialState(ctx),
+      inner: { ...this.inner.initialState(ctx), turn: seriesOpener(0) },
       gamesPlayed: 0,
       maxGames: this.maxGames,
     };
@@ -279,13 +288,14 @@ export class MultiGameCaroProtocol implements Protocol<
     }
     // Reset to a fresh board carrying balances forward; the per-game stake shift
     // already happened inside applyMove on the deciding move.
+    const nextGame = state.gamesPlayed + 1;
     const carried = this.inner.initialState({
       tunnelId: "",
       initialBalances: { a: state.inner.balanceA, b: state.inner.balanceB },
     });
     return {
-      inner: carried,
-      gamesPlayed: state.gamesPlayed + 1,
+      inner: { ...carried, turn: seriesOpener(nextGame) },
+      gamesPlayed: nextGame,
       maxGames: state.maxGames,
     };
   }

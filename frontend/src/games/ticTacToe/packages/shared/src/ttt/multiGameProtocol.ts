@@ -82,6 +82,15 @@ export interface MultiGameTicTacToeState {
 export type MultiGameTicTacToeMove = TicTacToeMove;
 
 /**
+ * Alternate the opening side each game so neither seat keeps the first-move edge
+ * across a series (game 0 → A, game 1 → B, …). The inner protocol always opens with
+ * A; the series wrapper overrides it by game index.
+ */
+function seriesOpener(gameIndex: number): Party {
+  return gameIndex % 2 === 0 ? "A" : "B";
+}
+
+/**
  * Plays `maxGames` Tic-Tac-Toe games over one tunnel, composing the SDK's
  * single-game `TicTacToeProtocol`. Domain tag is distinct from the inner protocol
  * so the two encodings can never collide on the wire.
@@ -112,7 +121,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
 
   initialState(ctx: ProtocolContext): MultiGameTicTacToeState {
     return {
-      inner: this.inner.initialState(ctx),
+      inner: { ...this.inner.initialState(ctx), turn: seriesOpener(0) },
       gamesPlayed: 0,
       maxGames: this.maxGames,
     };
@@ -142,13 +151,14 @@ export class MultiGameTicTacToeProtocol implements Protocol<
     // We rebuild the inner game via the inner protocol's initialState so the stake
     // is re-capped to what each side can now afford — identical to how a single
     // tunnel would have re-opened, but without any on-chain round-trip.
+    const nextGame = state.gamesPlayed + 1;
     const carried = this.inner.initialState({
       tunnelId: "",
       initialBalances: { a: state.inner.balanceA, b: state.inner.balanceB },
     });
     return {
-      inner: carried,
-      gamesPlayed: state.gamesPlayed + 1,
+      inner: { ...carried, turn: seriesOpener(nextGame) },
+      gamesPlayed: nextGame,
       maxGames: state.maxGames,
     };
   }
