@@ -13,6 +13,7 @@
 //! opened) is reclaimed after `RESERVATION_TTL_MS`.
 
 pub mod bus_transport;
+pub mod colocated;
 pub mod ws;
 
 use std::collections::HashMap;

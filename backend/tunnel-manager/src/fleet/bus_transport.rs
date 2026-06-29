@@ -8,10 +8,10 @@
 //! reuses the SAME [`crate::mp::ws::relay_to_other`] the human WS path uses, so move-counting and
 //! seat routing stay in exact parity — the relay still never signs.
 //!
-//! Increment 2 lands the seam + its match test. The config-gated supervisor that spawns bots and
-//! joins matchmaking/arena lands in Increment 3; until then these types are constructed only by the
-//! test, hence the module-level dead-code allow.
-#![allow(dead_code)] // constructed by the in-process bot supervisor in Increment 3
+//! The co-located [`crate::fleet::colocated`] supervisor constructs these to play arena matches.
+//! `conn_ref`/`await_match` round out the connection's mirror of the WS `RelayConnection` for the
+//! queue/`MatchRecord` association the boss completes; they're test-exercised but not yet on the
+//! arena runtime path, hence their item-level dead-code allows.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,7 +58,9 @@ impl BusRelayConnection {
         })
     }
 
-    /// This connection's `ConnRef` — the seat identity to put in a `MatchRecord`.
+    /// This connection's `ConnRef` — the seat identity to put in a `MatchRecord`. The arena
+    /// scaffold doesn't wire the record yet (no human conn captured); the boss's association uses it.
+    #[allow(dead_code)]
     pub fn conn_ref(&self) -> ConnRef {
         ConnRef {
             instance_id: self.state.bus.instance_id().to_owned(),
@@ -67,7 +69,9 @@ impl BusRelayConnection {
     }
 
     /// Wait for matchmaking to pair us, returning the seat assignment. Mirrors
-    /// `RelayConnection::await_match` over the WS.
+    /// `RelayConnection::await_match` over the WS — the queue-flow entry (the arena flow gets its
+    /// match via the `BotPool` `Opened` push instead), kept for when that path is wired.
+    #[allow(dead_code)]
     pub async fn await_match(&self) -> Result<MatchInfo> {
         loop {
             match self.recv_server_msg().await {

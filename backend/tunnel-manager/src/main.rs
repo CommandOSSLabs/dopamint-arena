@@ -137,6 +137,13 @@ async fn main() -> anyhow::Result<()> {
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
+    // Co-located fleet (ADR-0024): in-process bots served over the relay bus. Inert unless
+    // FLEET_COLOCATED_COUNT > 0, so the deployed relay starts nothing by default.
+    crate::fleet::colocated::spawn(
+        state.clone(),
+        config.colocated_fleet_count,
+        &config.colocated_fleet_games,
+    );
     // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
     // live feed reflects real settlements; without this the stats SSE never emits any.
     sui::spawn_event_indexer(state.clone());

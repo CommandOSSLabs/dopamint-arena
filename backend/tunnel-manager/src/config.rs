@@ -38,6 +38,11 @@ pub struct Config {
     pub settle_max_concurrency: usize,
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
+    /// Co-located fleet (ADR-0024): in-process bots per game, registered into the `BotPool` and
+    /// served over the relay bus instead of a `/v1/fleet` WebSocket. `0` (default) keeps the relay
+    /// inert; only an explicit `FLEET_COLOCATED_COUNT > 0` (+ `FLEET_COLOCATED_GAMES`) spawns them.
+    pub colocated_fleet_count: u32,
+    pub colocated_fleet_games: Vec<String>,
 }
 
 impl Config {
@@ -69,6 +74,20 @@ impl Config {
                 .unwrap_or(32),
             ollama_url: opt("OLLAMA_URL"),
             ollama_model: opt("OLLAMA_MODEL"),
+            colocated_fleet_count: std::env::var("FLEET_COLOCATED_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            colocated_fleet_games: std::env::var("FLEET_COLOCATED_GAMES")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|g| !g.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -141,6 +160,25 @@ mod tests {
         fn drop(&mut self) {
             std::env::remove_var(self.0);
         }
+    }
+
+    // The co-located fleet is opt-in: with no env set it must parse as disabled (count 0, no
+    // games) so a default deploy stays inert; when set, count + comma-split games come through.
+    #[test]
+    fn from_env_colocated_fleet_defaults_off_and_parses_when_set() {
+        std::env::remove_var("FLEET_COLOCATED_COUNT");
+        std::env::remove_var("FLEET_COLOCATED_GAMES");
+        let off = Config::from_env().unwrap();
+        assert_eq!(off.colocated_fleet_count, 0, "default must be disabled");
+        assert!(off.colocated_fleet_games.is_empty());
+
+        let _count = EnvGuard("FLEET_COLOCATED_COUNT");
+        let _games = EnvGuard("FLEET_COLOCATED_GAMES");
+        std::env::set_var("FLEET_COLOCATED_COUNT", "3");
+        std::env::set_var("FLEET_COLOCATED_GAMES", "blackjack, caro");
+        let on = Config::from_env().unwrap();
+        assert_eq!(on.colocated_fleet_count, 3);
+        assert_eq!(on.colocated_fleet_games, vec!["blackjack", "caro"]);
     }
 
     #[test]
