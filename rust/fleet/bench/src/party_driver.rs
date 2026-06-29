@@ -44,8 +44,9 @@ pub fn build_sui_sponsored_bench_context(
         backend_url: opts.backend_url.clone(),
         package_id: opts.package_id.clone(),
         tunnel_coin_type: opts.tunnel_coin_type.clone(),
-        funder_priv_key: opts.funder_priv_key.clone(),
-        stake_source: opts.stake_source.clone(),
+        open_mode: opts.open_mode,
+        settle_mode: opts.settle_mode,
+        funding_profile: opts.funding_profile.clone(),
         open_batching: opts.open_batching.clone(),
     })
     .map_err(|err| format!("sponsored Sui anchor config: {err:?}"))?;
@@ -268,7 +269,7 @@ fn open_anchor<P: Protocol>(
                 opened.created_at_ms,
             )
         }
-        AnchorMode::Sui => {
+        AnchorMode::SuiSponsored => {
             let anchor = clone_sui_sponsored_anchor_handle_for_match(sui_context);
             let protocol =
                 ProtocolId::parse(protocol.name()).expect("bench protocol id is canonical");
@@ -348,7 +349,7 @@ where
             assert_eq!(settled_a.final_balances, bals);
             assert_eq!(settled_b.final_balances, bals);
         }
-        AnchorMode::Sui => {
+        AnchorMode::SuiSponsored => {
             let BenchAnchor::Sui(anchor) = anchor else {
                 panic!("sponsored Sui anchor mode produced non-sponsored Sui anchor")
             };
@@ -802,10 +803,14 @@ mod tests {
             backend_url: "http://backend.invalid".into(),
             package_id: "0x2".into(),
             tunnel_coin_type: "0x2::sui::SUI".into(),
-            funder_priv_key:
-                "suiprivkey1qqrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswxzszc4".into(),
-            stake_source: sui_tunnel_anchor::SuiStakeSource::CoinObject {
-                coin_id: "0x7".into(),
+            open_mode: sui_tunnel_anchor::SuiOpenMode::SponsoredCreateAndFund,
+            settle_mode: sui_tunnel_anchor::SuiSettleMode::BackendSettle,
+            funding_profile: sui_tunnel_anchor::SuiFundingProfile::SingleFunder {
+                priv_key: "suiprivkey1qqrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswxzszc4"
+                    .into(),
+                stake_source: sui_tunnel_anchor::SuiStakeSource::CoinObject {
+                    coin_id: "0x7".into(),
+                },
             },
             open_batching: Default::default(),
         })

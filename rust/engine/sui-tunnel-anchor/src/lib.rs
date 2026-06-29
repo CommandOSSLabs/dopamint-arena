@@ -57,14 +57,47 @@ pub enum SuiStakeSource {
     AddressBalance,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuiOpenMode {
+    SponsoredCreateAndFund,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuiSettleMode {
+    BackendSettle,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SuiFundingProfile {
+    SingleFunder {
+        priv_key: String,
+        stake_source: SuiStakeSource,
+    },
+}
+
+impl SuiFundingProfile {
+    fn single_funder_priv_key(&self) -> &str {
+        match self {
+            SuiFundingProfile::SingleFunder { priv_key, .. } => priv_key,
+        }
+    }
+
+    fn stake_source(&self) -> &SuiStakeSource {
+        match self {
+            SuiFundingProfile::SingleFunder { stake_source, .. } => stake_source,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SuiSponsoredAnchorConfig {
     pub graphql_url: String,
     pub backend_url: String,
     pub package_id: String,
     pub tunnel_coin_type: String,
-    pub funder_priv_key: String,
-    pub stake_source: SuiStakeSource,
+    pub open_mode: SuiOpenMode,
+    pub settle_mode: SuiSettleMode,
+    pub funding_profile: SuiFundingProfile,
     pub open_batching: SuiOpenBatchingConfig,
 }
 
@@ -549,8 +582,9 @@ impl SuiSponsoredAnchor {
         chain: Arc<dyn SuiChainClient>,
         backend: Arc<dyn SuiBackendClient>,
     ) -> Result<Self, TunnelAnchorError> {
-        let funder = decode_sui_ed25519_bech32_private_key(&config.funder_priv_key)
-            .map_err(TunnelAnchorError::Rejected)?;
+        let funder =
+            decode_sui_ed25519_bech32_private_key(config.funding_profile.single_funder_priv_key())
+                .map_err(TunnelAnchorError::Rejected)?;
         let funder_address = funder.public_key().derive_address();
         let inner = Arc::new(Mutex::new(AnchorState::default()));
         let shared = SuiSponsoredAnchorShared {
@@ -959,7 +993,7 @@ impl SuiSponsoredAnchor {
         &self,
         request: &TunnelOpenRequest,
     ) -> Result<TransactionKind, TunnelAnchorError> {
-        match &self.config.stake_source {
+        match self.config.funding_profile.stake_source() {
             SuiStakeSource::CoinObject { coin_id } => {
                 let stake_coin_id = parse_address(coin_id)?;
                 let stake_ref = self
@@ -977,7 +1011,7 @@ impl SuiSponsoredAnchor {
         &self,
         requests: &[TunnelOpenRequest],
     ) -> Result<TransactionKind, TunnelAnchorError> {
-        match &self.config.stake_source {
+        match self.config.funding_profile.stake_source() {
             SuiStakeSource::CoinObject { coin_id } => {
                 let stake_coin_id = parse_address(coin_id)?;
                 let stake_ref = self
@@ -995,7 +1029,7 @@ impl SuiSponsoredAnchor {
         &self,
         request: &TunnelOpenRequest,
     ) -> Result<TransactionKind, TunnelAnchorError> {
-        match &self.config.stake_source {
+        match self.config.funding_profile.stake_source() {
             SuiStakeSource::AddressBalance => self.build_open_kind_from_address_balance(request),
             SuiStakeSource::CoinObject { .. } => Err(TunnelAnchorError::Rejected(
                 "coin-object stake source requires a resolved stake coin object".into(),
@@ -1150,7 +1184,7 @@ impl SuiSponsoredAnchor {
         &self,
         requests: &[TunnelOpenRequest],
     ) -> Result<TransactionKind, TunnelAnchorError> {
-        match &self.config.stake_source {
+        match self.config.funding_profile.stake_source() {
             SuiStakeSource::AddressBalance => {
                 self.build_batched_open_kind_from_address_balance(requests)
             }
@@ -2017,9 +2051,13 @@ mod tests {
             backend_url: "http://backend.invalid".into(),
             package_id: "0x2".into(),
             tunnel_coin_type: "0x2::sui::SUI".into(),
-            funder_priv_key: test_bech32_key(),
-            stake_source: SuiStakeSource::CoinObject {
-                coin_id: "0x7".into(),
+            open_mode: SuiOpenMode::SponsoredCreateAndFund,
+            settle_mode: SuiSettleMode::BackendSettle,
+            funding_profile: SuiFundingProfile::SingleFunder {
+                priv_key: test_bech32_key(),
+                stake_source: SuiStakeSource::CoinObject {
+                    coin_id: "0x7".into(),
+                },
             },
             open_batching: SuiOpenBatchingConfig::default(),
         }
@@ -2027,7 +2065,10 @@ mod tests {
 
     fn address_balance_config() -> SuiSponsoredAnchorConfig {
         SuiSponsoredAnchorConfig {
-            stake_source: SuiStakeSource::AddressBalance,
+            funding_profile: SuiFundingProfile::SingleFunder {
+                priv_key: test_bech32_key(),
+                stake_source: SuiStakeSource::AddressBalance,
+            },
             ..config()
         }
     }

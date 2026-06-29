@@ -23,13 +23,15 @@ fn main() {
 
     let sui_context = match opts.anchor_mode {
         AnchorMode::Memory => None,
-        AnchorMode::Sui => match build_sui_sponsored_bench_context(opts.sui_anchor.as_ref()) {
-            Ok(context) => Some(context),
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(2);
+        AnchorMode::SuiSponsored => {
+            match build_sui_sponsored_bench_context(opts.sui_anchor.as_ref()) {
+                Ok(context) => Some(context),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
             }
-        },
+        }
     };
 
     let (simple, preinitialized, res) = match opts.bench_mode {

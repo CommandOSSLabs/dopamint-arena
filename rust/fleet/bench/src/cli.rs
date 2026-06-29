@@ -3,7 +3,9 @@
 //! explanatory errors rather than silently ignoring them.
 
 use clap::{CommandFactory, Parser};
-use sui_tunnel_anchor::{SuiOpenBatchingConfig, SuiStakeSource};
+use sui_tunnel_anchor::{
+    SuiFundingProfile, SuiOpenBatchingConfig, SuiOpenMode, SuiSettleMode, SuiStakeSource,
+};
 use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -23,7 +25,7 @@ pub enum FrameCodecKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AnchorMode {
     Memory,
-    Sui,
+    SuiSponsored,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,7 +64,7 @@ pub struct BenchOpts {
     pub anchor_mode: AnchorMode,
     /// Transcript recorder implementation (`None` by default).
     pub transcript_recorder: TranscriptRecorderMode,
-    /// sponsored Sui anchor configuration, present only when `anchor_mode == Sui`.
+    /// Sponsored Sui anchor configuration, present only when `anchor_mode == SuiSponsored`.
     pub sui_anchor: Option<SuiSponsoredAnchorOpts>,
 }
 
@@ -72,8 +74,9 @@ pub struct SuiSponsoredAnchorOpts {
     pub backend_url: String,
     pub package_id: String,
     pub tunnel_coin_type: String,
-    pub funder_priv_key: String,
-    pub stake_source: SuiStakeSource,
+    pub open_mode: SuiOpenMode,
+    pub settle_mode: SuiSettleMode,
+    pub funding_profile: SuiFundingProfile,
     pub open_batching: SuiOpenBatchingConfig,
 }
 
@@ -109,8 +112,24 @@ json: TS-parity wire for bot-vs-user and regression baselines\n  \
 bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
 postcard: compact default candidate for bot-vs-bot\n\n\
 Anchor values:\n  \
-memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n\
-sui: Sui Tunnel anchor for sponsored open and settle transactions\n\n\
+memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n  \
+sui-sponsored: Sui Tunnel anchor for sponsored open and backend settlement\n  \
+sui: backwards-compatible alias for sui-sponsored\n\n\
+Sui sponsored anchor flags:\n  \
+--sui-graphql-url: Sui GraphQL endpoint used to execute/read sponsored open transactions\n  \
+--sui-backend-url: Dopamint tunnel-manager URL used for sponsor and settlement HTTP calls\n  \
+--sui-package-id: published Sui Tunnel package id containing tunnel::create_and_fund<T>\n  \
+--sui-tunnel-coin-type: Move coin type for Tunnel<T>; defaults to 0x2::sui::SUI\n  \
+--sui-open-mode sponsored-create-and-fund: build tunnel::create_and_fund<T> PTBs for opens\n  \
+--sui-settle-mode backend-settle: submit the TS-compatible settlement body to /v1/tunnels/{id}/settle\n  \
+--sui-funding-profile single-funder: one bech32 Sui private key funds both seats\n  \
+--sui-funder-priv-key: bech32 Sui private key required by single-funder\n  \
+--sui-stake-source coin-object: split both stakes from --sui-funder-stake-coin-id\n  \
+--sui-stake-source address-balance: withdraw the total stake from the sender balance\n  \
+--sui-open-batch-size: max sponsored open requests per PTB batch; default 255, maximum 255\n  \
+--sui-open-batch-flush-ms: open batch flush cadence in milliseconds; default 250\n  \
+--sui-open-batch-max-wait-ms: maximum time an open request waits before flush; default 1000\n  \
+--sui-disable-open-batching: execute each sponsored open request without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
 memory: retain committed transitions in memory during each match; useful for measuring recorder overhead"
@@ -143,7 +162,7 @@ struct Raw {
     #[arg(long, default_value = "varied", value_name = "varied|golden")]
     scenario: String,
     /// Tunnel anchor implementation.
-    #[arg(long, default_value = "memory", value_name = "memory|sui")]
+    #[arg(long, default_value = "memory", value_name = "memory|sui-sponsored")]
     anchor: String,
     /// Transcript recorder implementation: none or memory.
     #[arg(
@@ -164,13 +183,13 @@ struct Raw {
     /// Protocol ID to execute.
     #[arg(long = "protocol-id", default_value = BLACKJACK_BET_V1, value_name = "ID")]
     protocol_id: String,
-    /// Sui GraphQL endpoint used by --anchor sui.
+    /// Sui GraphQL endpoint used by --anchor sui-sponsored.
     #[arg(long = "sui-graphql-url", value_name = "URL")]
     sui_graphql_url: Option<String>,
-    /// Dopamint tunnel-manager backend base URL used by --anchor sui.
+    /// Dopamint tunnel-manager backend base URL used by --anchor sui-sponsored.
     #[arg(long = "sui-backend-url", value_name = "URL")]
     sui_backend_url: Option<String>,
-    /// Published Sui Tunnel package id used by --anchor sui.
+    /// Published Sui Tunnel package id used by --anchor sui-sponsored.
     #[arg(long = "sui-package-id", value_name = "OBJECT_ID")]
     sui_package_id: Option<String>,
     /// Move coin type for the Sui Tunnel<T> object.
@@ -180,10 +199,31 @@ struct Raw {
         value_name = "TYPE"
     )]
     sui_tunnel_coin_type: String,
-    /// Sui bech32 private key for the funder wallet used by --anchor sui.
+    /// Sui bech32 private key for the single-funder profile.
     #[arg(long = "sui-funder-priv-key", value_name = "BECH32")]
     sui_funder_priv_key: Option<String>,
-    /// Stake funding source used by --anchor sui.
+    /// Sui open flow used by --anchor sui-sponsored.
+    #[arg(
+        long = "sui-open-mode",
+        default_value = "sponsored-create-and-fund",
+        value_name = "sponsored-create-and-fund"
+    )]
+    sui_open_mode: String,
+    /// Sui settle flow used by --anchor sui-sponsored.
+    #[arg(
+        long = "sui-settle-mode",
+        default_value = "backend-settle",
+        value_name = "backend-settle"
+    )]
+    sui_settle_mode: String,
+    /// Funding profile used by --anchor sui-sponsored.
+    #[arg(
+        long = "sui-funding-profile",
+        default_value = "single-funder",
+        value_name = "single-funder"
+    )]
+    sui_funding_profile: String,
+    /// Stake funding source used by the single-funder profile.
     #[arg(
         long = "sui-stake-source",
         default_value = "coin-object",
@@ -193,24 +233,24 @@ struct Raw {
     /// Funder-owned stake coin object used when --sui-stake-source=coin-object.
     #[arg(long = "sui-funder-stake-coin-id", value_name = "OBJECT_ID")]
     sui_funder_stake_coin_id: Option<String>,
-    /// Maximum Sui sponsored open requests per future PTB batch.
+    /// Maximum Sui sponsored open requests per PTB batch.
     #[arg(long = "sui-open-batch-size", default_value_t = 255, value_name = "N")]
     sui_open_batch_size: usize,
-    /// Future Sui open PTB flush interval in milliseconds.
+    /// Sui open PTB batch flush interval in milliseconds.
     #[arg(
         long = "sui-open-batch-flush-ms",
         default_value_t = 250,
         value_name = "MS"
     )]
     sui_open_batch_flush_ms: u64,
-    /// Maximum future Sui open request wait time in milliseconds.
+    /// Maximum Sui open request wait time before a batch flush.
     #[arg(
         long = "sui-open-batch-max-wait-ms",
         default_value_t = 1_000,
         value_name = "MS"
     )]
     sui_open_batch_max_wait_ms: u64,
-    /// Disable future Sui sponsored open PTB batching.
+    /// Disable Sui sponsored open PTB batching.
     #[arg(long = "sui-disable-open-batching")]
     sui_disable_open_batching: bool,
 }
@@ -304,8 +344,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
 
     let anchor_mode = match raw.anchor.as_str() {
         "memory" => AnchorMode::Memory,
-        "sui" => AnchorMode::Sui,
-        other => return Err(format!("--anchor must be memory|sui, got {other}")),
+        "sui" | "sui-sponsored" => AnchorMode::SuiSponsored,
+        other => {
+            return Err(format!(
+                "--anchor must be memory|sui-sponsored, got {other}"
+            ))
+        }
     };
 
     let transcript_recorder = match raw.transcript_recorder.as_str() {
@@ -318,9 +362,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         }
     };
 
-    let sui_anchor = if anchor_mode == AnchorMode::Sui {
+    let sui_anchor = if anchor_mode == AnchorMode::SuiSponsored {
         if transcript_recorder != TranscriptRecorderMode::Memory {
-            return Err("--anchor sui requires --transcript-recorder memory".to_string());
+            return Err(format!(
+                "--anchor {} requires --transcript-recorder memory",
+                raw.anchor
+            ));
         }
         let mut missing = Vec::new();
         if raw.sui_graphql_url.is_none() {
@@ -332,27 +379,68 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         if raw.sui_package_id.is_none() {
             missing.push("--sui-package-id");
         }
-        if raw.sui_funder_priv_key.is_none() {
-            missing.push("--sui-funder-priv-key");
-        }
-        let stake_source = match raw.sui_stake_source.as_str() {
-            "coin-object" => {
-                let Some(coin_id) = raw.sui_funder_stake_coin_id.clone() else {
-                    missing.push("--sui-funder-stake-coin-id");
-                    return Err(format!("--anchor sui requires {}", missing.join(", ")));
-                };
-                SuiStakeSource::CoinObject { coin_id }
-            }
-            "address-balance" => SuiStakeSource::AddressBalance,
+        let open_mode = match raw.sui_open_mode.as_str() {
+            "sponsored-create-and-fund" => SuiOpenMode::SponsoredCreateAndFund,
             other => {
                 return Err(format!(
-                    "--sui-stake-source must be coin-object|address-balance, got {other}"
+                    "--sui-open-mode must be sponsored-create-and-fund, got {other}"
+                ))
+            }
+        };
+        let settle_mode = match raw.sui_settle_mode.as_str() {
+            "backend-settle" => SuiSettleMode::BackendSettle,
+            other => {
+                return Err(format!(
+                    "--sui-settle-mode must be backend-settle, got {other}"
+                ))
+            }
+        };
+        let funding_profile = match raw.sui_funding_profile.as_str() {
+            "single-funder" => {
+                if raw.sui_funder_priv_key.is_none() {
+                    missing.push("--sui-funder-priv-key");
+                }
+                let stake_source = match raw.sui_stake_source.as_str() {
+                    "coin-object" => match raw.sui_funder_stake_coin_id.clone() {
+                        Some(coin_id) => Some(SuiStakeSource::CoinObject { coin_id }),
+                        None => {
+                            missing.push("--sui-funder-stake-coin-id");
+                            None
+                        }
+                    },
+                    "address-balance" => Some(SuiStakeSource::AddressBalance),
+                    other => {
+                        return Err(format!(
+                            "--sui-stake-source must be coin-object|address-balance, got {other}"
+                        ))
+                    }
+                };
+                if missing.is_empty() {
+                    Some(SuiFundingProfile::SingleFunder {
+                        priv_key: raw
+                            .sui_funder_priv_key
+                            .expect("single-funder private key was validated"),
+                        stake_source: stake_source
+                            .expect("single-funder stake source was validated"),
+                    })
+                } else {
+                    None
+                }
+            }
+            other => {
+                return Err(format!(
+                    "--sui-funding-profile must be single-funder, got {other}"
                 ))
             }
         };
         if !missing.is_empty() {
-            return Err(format!("--anchor sui requires {}", missing.join(", ")));
+            return Err(format!(
+                "--anchor {} requires {}",
+                raw.anchor,
+                missing.join(", ")
+            ));
         }
+        let funding_profile = funding_profile.expect("sponsored Sui funding profile was validated");
         if raw.sui_open_batch_size == 0 {
             return Err("--sui-open-batch-size must be greater than 0".to_string());
         }
@@ -373,8 +461,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             backend_url: raw.sui_backend_url.unwrap(),
             package_id: raw.sui_package_id.unwrap(),
             tunnel_coin_type: raw.sui_tunnel_coin_type,
-            funder_priv_key: raw.sui_funder_priv_key.unwrap(),
-            stake_source,
+            open_mode,
+            settle_mode,
+            funding_profile,
             open_batching: SuiOpenBatchingConfig {
                 enabled: !raw.sui_disable_open_batching,
                 max_batch_size: raw.sui_open_batch_size,
@@ -536,6 +625,101 @@ mod tests {
     }
 
     #[test]
+    fn anchor_sui_sponsored_is_the_preferred_sui_anchor_name() {
+        let o = parse_v(&[
+            "--anchor",
+            "sui-sponsored",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "https://sui.example/graphql",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-funder-stake-coin-id",
+            "0xcoin",
+        ])
+        .unwrap();
+
+        assert_eq!(o.anchor_mode, AnchorMode::SuiSponsored);
+        let sui = o.sui_anchor.expect("sui config");
+        assert_eq!(sui.open_mode, SuiOpenMode::SponsoredCreateAndFund);
+        assert_eq!(sui.settle_mode, SuiSettleMode::BackendSettle);
+        assert_eq!(
+            sui.funding_profile,
+            SuiFundingProfile::SingleFunder {
+                priv_key:
+                    "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+                        .into(),
+                stake_source: SuiStakeSource::CoinObject {
+                    coin_id: "0xcoin".into()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn anchor_sui_alias_lowers_to_sui_sponsored_for_backwards_compatibility() {
+        let o = parse_v(&[
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "https://sui.example/graphql",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0xcoin",
+        ])
+        .unwrap();
+
+        assert_eq!(o.anchor_mode, AnchorMode::SuiSponsored);
+    }
+
+    #[test]
+    fn anchor_sui_rejects_unknown_composition_modes() {
+        let base = [
+            "--anchor",
+            "sui-sponsored",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "https://sui.example/graphql",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0xcoin",
+        ];
+
+        let mut bad_open = base.to_vec();
+        bad_open.extend(["--sui-open-mode", "direct-create-and-fund"]);
+        let err = parse_v(&bad_open).unwrap_err();
+        assert!(err.contains("sui-open-mode"), "{err}");
+
+        let mut bad_settle = base.to_vec();
+        bad_settle.extend(["--sui-settle-mode", "direct-ptb"]);
+        let err = parse_v(&bad_settle).unwrap_err();
+        assert!(err.contains("sui-settle-mode"), "{err}");
+
+        let mut bad_funding = base.to_vec();
+        bad_funding.extend(["--sui-funding-profile", "per-seat"]);
+        let err = parse_v(&bad_funding).unwrap_err();
+        assert!(err.contains("sui-funding-profile"), "{err}");
+    }
+
+    #[test]
     fn anchor_sui_requires_transcript_recorder_and_config() {
         let err = parse_v(&["--anchor", "sui"]).unwrap_err();
         assert!(err.contains("transcript-recorder"), "{err}");
@@ -567,7 +751,15 @@ mod tests {
         .unwrap();
 
         let sui = o.sui_anchor.expect("sui config");
-        assert_eq!(sui.stake_source, SuiStakeSource::AddressBalance);
+        assert_eq!(
+            sui.funding_profile,
+            SuiFundingProfile::SingleFunder {
+                priv_key:
+                    "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+                        .into(),
+                stake_source: SuiStakeSource::AddressBalance,
+            }
+        );
     }
 
     #[test]
@@ -613,20 +805,23 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(o.anchor_mode, AnchorMode::Sui);
+        assert_eq!(o.anchor_mode, AnchorMode::SuiSponsored);
         let sui = o.sui_anchor.expect("sui config");
         assert_eq!(sui.graphql_url, "https://sui.example/graphql");
         assert_eq!(sui.backend_url, "https://backend.example");
         assert_eq!(sui.package_id, "0xabc");
         assert_eq!(sui.tunnel_coin_type, "0x2::sui::SUI");
+        assert_eq!(sui.open_mode, SuiOpenMode::SponsoredCreateAndFund);
+        assert_eq!(sui.settle_mode, SuiSettleMode::BackendSettle);
         assert_eq!(
-            sui.funder_priv_key,
-            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
-        );
-        assert_eq!(
-            sui.stake_source,
-            SuiStakeSource::CoinObject {
-                coin_id: "0xcoin".into()
+            sui.funding_profile,
+            SuiFundingProfile::SingleFunder {
+                priv_key:
+                    "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+                        .into(),
+                stake_source: SuiStakeSource::CoinObject {
+                    coin_id: "0xcoin".into()
+                }
             }
         );
     }
@@ -813,5 +1008,28 @@ mod tests {
         );
         assert!(help.contains("memory: retain committed transitions in memory during each match"));
         assert!(help.contains("none|memory"));
+    }
+
+    #[test]
+    fn help_documents_sui_sponsored_composition_flags() {
+        let help = help_text();
+
+        assert!(help.contains("--anchor <memory|sui-sponsored>"));
+        assert!(help.contains("  sui-sponsored: Sui Tunnel anchor"));
+        assert!(help.contains("  sui: backwards-compatible alias for sui-sponsored"));
+        assert!(help.contains("--sui-open-mode <sponsored-create-and-fund>"));
+        assert!(help.contains("sponsored-create-and-fund: build tunnel::create_and_fund<T>"));
+        assert!(help.contains("--sui-settle-mode <backend-settle>"));
+        assert!(help.contains("backend-settle: submit the TS-compatible settlement body"));
+        assert!(help.contains("--sui-funding-profile <single-funder>"));
+        assert!(help.contains("single-funder: one bech32 Sui private key funds both seats"));
+        assert!(help.contains("--sui-stake-source <coin-object|address-balance>"));
+        assert!(help.contains("coin-object: split both stakes from --sui-funder-stake-coin-id"));
+        assert!(help.contains("address-balance: withdraw the total stake from the sender balance"));
+        assert!(help.contains("--sui-open-batch-size <N>"));
+        assert!(help.contains("default 255, maximum 255"));
+        assert!(help.contains("--sui-open-batch-flush-ms <MS>"));
+        assert!(help.contains("--sui-open-batch-max-wait-ms <MS>"));
+        assert!(help.contains("--sui-disable-open-batching"));
     }
 }
