@@ -138,4 +138,5 @@ jobs:
             fi
             sleep 10
           done
-          curl -fsS "https://${FRONTEND_DOMAIN}" | grep -q "<html"
+          # FRONTEND_DOMAIN is stored as a full URL (e.g. https://dev.millionstps.io)
+          curl -fsS "${FRONTEND_DOMAIN}" | grep -q "<html"
