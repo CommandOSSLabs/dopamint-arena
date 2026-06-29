@@ -322,7 +322,10 @@ export function useCaroBotGame(
     // is preserved in the tunnel history.
     setScore({ x: 0, o: 0, draws: 0 });
 
-    const proto = new MultiGameCaroProtocol(maxGamesRef.current, N);
+    // Derive mode before constructing the protocol so stakePerSeat can be passed in.
+    const mtpsOn = isMtpsConfigured;
+    const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : SUI_PER_SEAT;
+    const proto = new MultiGameCaroProtocol(maxGamesRef.current, N, stakePerSeat);
 
     void (async () => {
       try {
@@ -331,9 +334,7 @@ export function useCaroBotGame(
 
         // MTPS mode (ADR-0010): stake faucet-minted MTPS and sponsor bot X's open/close
         // gas (no SUI). SUI fallback (env unset): bot X funds the stakes from its own gas coin.
-        const mtpsOn = isMtpsConfigured;
         const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
-        const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : SUI_PER_SEAT;
         const xSignExec = mtpsOn ? botSponsoredSignExec(bots.x) : null;
 
         // 1) open + fund (both stakes) + activate in ONE tx (bot X signs). In MTPS mode both

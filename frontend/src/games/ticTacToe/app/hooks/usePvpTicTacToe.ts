@@ -71,7 +71,10 @@ const MP_URL =
       ? location.origin
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
-const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
+// Per-seat deposit and per-game stake, mode-scaled. Both variants use the same magnitude so an
+// abandoner forfeits exactly one deposit. MTPS mode: 1 MTPS (9 decimals); SUI fallback: 1 MIST.
+const MTPS_PER_SEAT = 1_000_000_000n;
+const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
 // MTPS mode (ADR-0010): bankroll deposited per seat (1 MTPS, 9 decimals).
 const MTPS_BANKROLL = 1_000_000_000n;
@@ -171,14 +174,19 @@ export function usePvpTicTacToe(
   const sponsored = useSponsoredSignExec();
   const sponsoredRef = useRef(sponsored);
   sponsoredRef.current = sponsored;
+  // Stake magnitude matches the per-seat deposit: one loss = one deposit shift.
+  const scaledStake = isMtpsConfigured ? MTPS_PER_SEAT : SUI_PER_SEAT;
   const proto = useMemo(
     () =>
       (variant === "caro"
-        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize)
+        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize, scaledStake)
         : new MultiGameTicTacToeProtocol(
             MAX_GAMES,
-            STAKE,
+            scaledStake,
           )) as unknown as protocols.Protocol<AnyState, CellMove>,
+    // scaledStake is module-level-derived (isMtpsConfigured is a build-time constant), so it
+    // never changes at runtime — safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [variant, boardSize],
   );
 
@@ -634,9 +642,9 @@ export function usePvpTicTacToe(
             buildCreateAndShareTx(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
-              // penalty = per-match stake (blackjack model): an abandoner forfeits it at force-close (F1).
-              // caro's protocol forces a 0 settlement, so keep it penalty-free to stay money-neutral.
-              variant === "caro" ? 0n : STAKE,
+              // Abandonment penalty = one per-seat deposit (mode-scaled). An abandoner forfeits
+              // this at force-close (F1); Caro now stakes too, so both variants use the same value.
+              scaledStake,
               coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );
           const res = mtpsOn
