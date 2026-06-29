@@ -89,6 +89,10 @@ export class DistributedTunnel<State, Move> {
 
   /** Fired after each confirmed co-signed update (telemetry / watchtower checkpoint). */
   onConfirmed?: (u: CoSignedUpdate) => void;
+  /** Fired after this seat seats+sends a proposal (before the ACK). Lets a resume layer persist the
+   *  in-flight pending move and any local-only secret in pending.next, which would otherwise be lost
+   *  if the process restarts before the proposal is confirmed. */
+  onProposed?: () => void;
 
   constructor(
     protocol: Protocol<State, Move>,
@@ -98,6 +102,13 @@ export class DistributedTunnel<State, Move> {
   ) {
     if (!cfg.self.sign) {
       throw new Error("DistributedTunnel: self endpoint must carry a signer");
+    }
+    // Fail closed: a protocol whose moves carry a secret pre-image MUST supply a stripping codec.
+    // Otherwise the identity codec would relay the pre-image to the opponent (a fairness break).
+    if (protocol.movesCarrySecrets && !cfg.moveCodec) {
+      throw new Error(
+        `DistributedTunnel: protocol '${protocol.name}' has secret-bearing moves and requires an explicit moveCodec`
+      );
     }
     this.tunnelId = cfg.tunnelId;
     this.protocol = protocol;
@@ -171,6 +182,10 @@ export class DistributedTunnel<State, Move> {
   propose(move: Move, timestamp: bigint): void {
     this.seatPending(move, timestamp);
     this.transport.send(encodeFrame(this.pendingMoveFrame(), this.codec));
+    // Fire AFTER seating so a persistence hook can capture the in-flight proposal (its move + any
+    // local-only secret in pending.next) before the ACK. Without this, a secret that lives only in
+    // pending.next until confirmation is lost if the process restarts in the propose→ACK window.
+    this.onProposed?.();
   }
 
   /** Prepare + sign this seat's pending proposal WITHOUT sending it. Deterministic: the same

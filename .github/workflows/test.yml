@@ -2,7 +2,7 @@ name: Infra and Move PR Tests
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev-raid]
 
 permissions:
   contents: read

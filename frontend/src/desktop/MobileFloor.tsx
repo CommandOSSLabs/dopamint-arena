@@ -1,12 +1,12 @@
 import { Plus } from "lucide-react";
 
-import { GameIcon } from "../games/GameIcon";
 import { get } from "../games/registry";
 import type { Workspace } from "../games/types";
 import type { GridItem } from "@/components/ui/grid-layout";
 import { Button } from "@/components/ui/button";
 import { GameWindow } from "./GameWindow";
 import { GameContent } from "./GameContent";
+import { GameTpsBadge } from "./GameTpsBadge";
 
 const WORKSPACE_LABEL: Record<Workspace, string> = {
   games: "Games",
@@ -75,7 +75,7 @@ export function MobileFloor({
               <li key={item.id} className="h-[78vh] min-h-[480px]">
                 <GameWindow
                   title={mod.name}
-                  icon={<GameIcon game={mod} className="size-5" />}
+                  icon={<GameTpsBadge gameId={gameOf(item.id)} />}
                   domId={item.id}
                   onClose={() => onClose(item.id)}
                 >

@@ -1,7 +1,48 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useMemo } from "react";
+import type { ReactNode } from "react";
 
 import { get } from "../games/registry";
 import { GameCabinet } from "@/shell/cabinet/GameCabinet";
+import {
+  TelemetryContext,
+  useTelemetry,
+  type TelemetryWriter,
+} from "@/telemetry/TelemetryProvider";
+
+/**
+ * Wraps a game in a telemetry context whose `bumpCounters` ALSO tallies the game's real
+ * co-signed updates under its `gameId` (every game reads `report` from this context). That
+ * per-game tally is what lets the window's TPS chip show a real local rate when the backend's
+ * authoritative `perGame` feed is absent. Everything else (snapshot, backend, other writer
+ * methods) passes straight through; `report` keeps a stable identity so game effects that
+ * depend on it don't churn on each telemetry tick.
+ */
+function GameTelemetryScope({
+  gameId,
+  children,
+}: {
+  gameId: string;
+  children: ReactNode;
+}) {
+  const base = useTelemetry();
+  const { report: baseReport, recordGameUpdate } = base;
+  const report = useMemo<TelemetryWriter>(
+    () => ({
+      ...baseReport,
+      bumpCounters: (delta) => {
+        baseReport.bumpCounters(delta);
+        recordGameUpdate(gameId, delta.updates ?? 0);
+      },
+    }),
+    [baseReport, recordGameUpdate, gameId],
+  );
+  const value = useMemo(() => ({ ...base, report }), [base, report]);
+  return (
+    <TelemetryContext.Provider value={value}>
+      {children}
+    </TelemetryContext.Provider>
+  );
+}
 
 /**
  * A game's `Window` wrapped in the shared arcade cabinet, memoized so a floor
@@ -26,8 +67,10 @@ export const GameContent = memo(function GameContent({
   if (!mod) return null;
   const Content = mod.Window;
   return (
-    <GameCabinet>
-      <Content windowId={windowId} onClose={close} />
-    </GameCabinet>
+    <GameTelemetryScope gameId={gameId}>
+      <GameCabinet>
+        <Content windowId={windowId} onClose={close} />
+      </GameCabinet>
+    </GameTelemetryScope>
   );
 });
