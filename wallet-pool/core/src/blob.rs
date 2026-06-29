@@ -6,6 +6,8 @@
 
 use crate::envelope::SealedEnvelope;
 use crate::error::{Error, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -85,33 +87,77 @@ pub struct PoolBlob {
 }
 
 /// Plaintext payload stored inside the sealed envelope.
+///
+/// Matches the TypeScript wire format: field names are camelCase and each
+/// secret is a standard base64-encoded string.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SealedMembers {
-    pub master_secret: [u8; 32],
+    pub master_secret: String,
     pub members: Vec<MemberSecret>,
 }
 
 /// One member secret inside [`SealedMembers`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MemberSecret {
     pub ordinal: u32,
-    pub secret: [u8; 32],
+    pub secret: String,
+}
+
+impl SealedMembers {
+    /// Encode a 32-byte master secret into the wire-compatible base64 string.
+    pub fn with_master_secret(master_secret: [u8; 32], members: Vec<MemberSecret>) -> Self {
+        Self {
+            master_secret: STANDARD.encode(master_secret),
+            members,
+        }
+    }
+
+    /// Decode the base64 master secret back into raw bytes.
+    pub fn decoded_master_secret(&self) -> Result<[u8; 32]> {
+        decode_32_bytes(&self.master_secret)
+    }
+}
+
+impl MemberSecret {
+    /// Encode a 32-byte member secret into the wire-compatible base64 string.
+    pub fn new(ordinal: u32, secret: [u8; 32]) -> Self {
+        Self {
+            ordinal,
+            secret: STANDARD.encode(secret),
+        }
+    }
+
+    /// Decode the base64 member secret back into raw bytes.
+    pub fn decoded_secret(&self) -> Result<[u8; 32]> {
+        decode_32_bytes(&self.secret)
+    }
+}
+
+fn decode_32_bytes(value: &str) -> Result<[u8; 32]> {
+    let decoded = STANDARD
+        .decode(value)
+        .map_err(|e| Error::InvalidBlob(format!("invalid base64: {e}")))?;
+    decoded
+        .try_into()
+        .map_err(|_| Error::InvalidBlob("expected 32-byte secret".into()))
 }
 
 /// Serialize a [`PoolBlob`] to pretty-printed JSON bytes.
-pub fn serialize_blob(blob: &PoolBlob) -> Vec<u8> {
-    serde_json::to_vec_pretty(blob).expect("PoolBlob serializes to JSON")
+pub fn serialize_blob(blob: &PoolBlob) -> Result<Vec<u8>> {
+    serde_json::to_vec_pretty(blob)
+        .map_err(|e| Error::InvalidBlob(format!("serialize failed: {e}")))
 }
 
 /// Parse and validate a [`PoolBlob`] from JSON bytes.
 pub fn parse_blob(bytes: &[u8]) -> Result<PoolBlob> {
-    let blob: PoolBlob =
-        serde_json::from_slice(bytes).map_err(|e| Error::InvalidBlob(format!("parse failed: {e}")))?;
+    let blob: PoolBlob = serde_json::from_slice(bytes)
+        .map_err(|e| Error::InvalidBlob(format!("parse failed: {e}")))?;
     if blob.version != BLOB_VERSION {
         return Err(Error::InvalidBlob(format!(
             "unsupported blob version {} (expected {})",
-            blob.version,
-            BLOB_VERSION
+            blob.version, BLOB_VERSION
         )));
     }
     Ok(blob)
@@ -171,7 +217,7 @@ mod tests {
             }],
         };
 
-        let bytes = serialize_blob(&blob);
+        let bytes = serialize_blob(&blob).unwrap();
         let json = String::from_utf8(bytes.clone()).unwrap();
         assert!(json.contains("\"walletPoolId\": \"wp_test\""));
         assert!(json.contains("\"useCount\": 5"));
@@ -180,6 +226,54 @@ mod tests {
 
         let parsed = parse_blob(&bytes).unwrap();
         assert_eq!(parsed, blob);
+    }
+
+    #[test]
+    fn sealed_members_ts_wire_format() {
+        let master = [0u8; 32];
+        let member_secret = [1u8; 32];
+        let members =
+            SealedMembers::with_master_secret(master, vec![MemberSecret::new(0, member_secret)]);
+
+        let json = serde_json::to_string(&members).unwrap();
+        assert!(
+            json.contains("\"masterSecret\":"),
+            "expected camelCase masterSecret: {json}"
+        );
+        assert!(
+            json.contains("\"secret\":"),
+            "expected camelCase secret: {json}"
+        );
+        assert!(
+            !json.contains("master_secret"),
+            "snake_case leaked into JSON: {json}"
+        );
+
+        let parsed: SealedMembers = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.decoded_master_secret().unwrap(), master);
+        assert_eq!(parsed.members.len(), 1);
+        assert_eq!(parsed.members[0].ordinal, 0);
+        assert_eq!(parsed.members[0].decoded_secret().unwrap(), member_secret);
+
+        // Verify the raw JSON shape uses base64 strings, not byte arrays.
+        let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let master_b64 = raw["masterSecret"].as_str().unwrap();
+        assert_eq!(STANDARD.decode(master_b64).unwrap(), master.as_slice());
+    }
+
+    #[test]
+    fn sealed_members_rejects_bad_base64_or_length() {
+        let members = SealedMembers {
+            master_secret: "not-base64!!!".into(),
+            members: vec![],
+        };
+        assert!(members.decoded_master_secret().is_err());
+
+        let members = SealedMembers {
+            master_secret: STANDARD.encode([0u8; 16]),
+            members: vec![],
+        };
+        assert!(members.decoded_master_secret().is_err());
     }
 
     #[test]

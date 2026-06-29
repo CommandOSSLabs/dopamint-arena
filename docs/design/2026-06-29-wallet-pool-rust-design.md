@@ -104,21 +104,27 @@ pub struct PoolBlob {
 
 `WalletEntry` carries role, address, ordinal, label, enabled, use stats, and funded amounts — no secrets.
 
-`SealedMembers` (plaintext inside the ciphertext):
+`SealedMembers` (plaintext inside the ciphertext). The field values are
+standard base64-encoded strings and the JSON keys are camelCase to match the
+TypeScript wire format:
 
 ```rust
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SealedMembers {
-    pub master_secret: [u8; 32],
+    pub master_secret: String, // base64-encoded 32-byte secret
     pub members: Vec<MemberSecret>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemberSecret {
     pub ordinal: u32,
-    pub secret: [u8; 32],
+    pub secret: String, // base64-encoded 32-byte secret
 }
 ```
 
-- `serialize_blob(&PoolBlob) -> Vec<u8>` — JSON, pretty-printed to match TS.
+- `serialize_blob(&PoolBlob) -> Result<Vec<u8>>` — JSON, pretty-printed to match TS.
 - `parse_blob(&[u8]) -> Result<PoolBlob, BlobError>`.
 - `aad_for(&PoolBlob) -> Vec<u8>` — `wallet-pool:{version}:{wallet_pool_id}:{network}`.
 
