@@ -15,10 +15,6 @@ export interface InfraConfig {
   dbMinCapacity?: number;
   dbMaxCapacity?: number;
   cacheNodeType: string;
-  benchmarkInstanceType: string;
-  benchmarkMinSize: number;
-  benchmarkMaxSize: number;
-  benchmarkImageVersion: string;
   // If omitted, the backend image tag is resolved from the latest deployed ECS task
   // definition at runtime. This lets `pulumi up` run locally without committing a
   // specific tag, while CI still pins an exact SHA via config on backend deploys.
@@ -47,14 +43,10 @@ export function getConfig(): InfraConfig {
     dbMinCapacity: config.getNumber("db-min-capacity"),
     dbMaxCapacity: config.getNumber("db-max-capacity"),
     cacheNodeType: config.require("cache-node-type"),
-    benchmarkInstanceType: config.require("benchmark-instance-type"),
-    benchmarkMinSize: config.requireNumber("benchmark-min-size"),
-    benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
-    benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
     backendImageTag: config.get("backend-image-tag") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
     ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
-    ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.8b",
+    ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.5b",
     ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",
   };
 }

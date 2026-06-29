@@ -1,12 +1,18 @@
 # Architecture Decision Records
 
-Short records of non-trivial or contested decisions, written _before_ the code
+Short records of **architecture-level** decisions, written _before_ the code
 that depends on them. An ADR captures the decision and the reasoning so the
 _why_ survives after the people involved have moved on.
 
 ## Convention
 
-- One file per decision: `NNNN-kebab-case-title.md` (zero-padded, monotonic).
+- **Architectural only.** An ADR records a decision that shapes system
+  structure, crosses a component or team boundary, or is costly to reverse
+  (control-plane topology, settlement auth, randomness strategy, funding model).
+  It is **not** for implementation details, library/component choices, or a game
+  adopting an already-recorded pattern — those belong in a design doc or the PR.
+- One file per decision: `NNNN-kebab-case-title.md` (zero-padded, monotonic and
+  **unique** — never reuse a number). Numbers match the references in the code.
 - Copy `0000-template.md` to start.
 - Status moves `Proposed → Accepted → (Superseded by NNNN)`. Never delete a
   superseded ADR — mark it and link forward, so the history stays readable.
@@ -15,16 +21,17 @@ _why_ survives after the people involved have moved on.
 ## Index
 
 - [0001](0001-arena-baseline-architecture.md) — Baseline architecture: Rust
-  control-plane backend, per-game `Protocol`. _(§1 self-play hot path superseded by 0006.)_
-- [0002](0002-grid-layout-engine.md) — Owned grid-layout engine over a
-  drag-and-drop library (React 19 + shadcn-style ownership).
+  control-plane backend, per-game `Protocol`. _(§1 self-play hot path retired by
+  0020 — users compete against our bots; genuine two-party play is the only
+  model.)_
+- [0002](0002-backend-client-api-contract.md) — Backend ↔ client REST/SSE
+  contract: sessions, heartbeat, settle, live stats. _(Settle-auth portion
+  superseded by 0007.)_
 - [0003](0003-battleship-on-sui-tunnel.md) — Battleship on the tunnel:
   commit-reveal fairness with public-only protocol state.
-- [0005](0005-transaction-log-panels.md) — Transaction-log panels: client-local
-  move feed + global settlement projection (verifiable proof surface) + settle-at-close
-  cadence; generic payments out of scope.
-- [0006](0006-genuine-two-party-only-drop-self-play.md) — Genuine two-party play is
-  the only model; self-play dropped. Supersedes 0001 §1 and the removed 0004.
+- [0005](0005-redis-backed-ha-control-plane.md) — HA control plane on Redis only
+  (cache + pubsub clusters, no Postgres); delivery partitioned by instance;
+  address-balance gas for concurrent settle.
 - [0007](0007-settle-authorized-by-settlement-not-token.md) — Settlement is
   self-authenticating; `/settle` verifies the co-signed bytes against the tunnel's
   on-chain party pubkeys and drops the session bearer token. Supersedes the
@@ -32,13 +39,15 @@ _why_ survives after the people involved have moved on.
 - [0008](0008-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
   tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
   rules, and optional ZK dispute adapter.
-- [0009](0009-data-plane-local-control-plane-redis.md) — Partition by ownership:
-  single-owned per-move state (relay, counters, routing cache) in-process; shared
-  state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
-  Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
-- [0010](0010-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
-  event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
-  settlement is the floor. Affinity/re-homing deferred to ADR-0011.
+- [0009](0009-sponsor-create-and-fund-gas.md) — Backend sponsors gas (only) for
+  the user's open/fund tx via SIP-58 address balance; the user's stake stays
+  user-owned. Enables 0-SUI zkLogin onboarding.
+- [0010](0010-mtps-stake-token.md) — Free faucet-minted MTPS token for stakes
+  (not SUI), auto-minted before stake; gas still sponsored in SUI. (Token renamed
+  DOPAMINT → MTPS.)
+- [0011](0011-local-first-pairing.md) — Local-first pairing: bounded-hold
+  matchmaking (same-instance preferred, ≤750 ms hold before cross-instance
+  fallback) plus a reconnect affinity cookie for co-location.
 - [0012](0012-arena-attract-cabinet-seam.md) — Arena attract mode: one shared
   cabinet shell (`GameCabinet` + `CabinetController`) owns hover → pause →
   take-over; auto-play is a config (the kit is the brain); take-over is cosmetic
@@ -49,3 +58,38 @@ _why_ survives after the people involved have moved on.
   `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
   `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
   (anti settler-drain). Behind `VITE_MTPS_ADDRESS_BALANCE`; no Move redeploy.
+- [0014](0014-enoki-sponsor-with-settler-fallback.md) — Enoki sponsored
+  transactions as the primary gas source with the settler wallet as fallback:
+  validate-first, `provider`-tagged response, stateless two-call Enoki execute,
+  settler path unchanged. Refines 0009.
+- [0015](0015-data-plane-local-control-plane-redis.md) — Partition by ownership:
+  single-owned per-move state (relay, counters, routing cache) in-process; shared
+  state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
+  Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
+- [0016](0016-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
+  event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
+  settlement is the floor. Affinity/re-homing deferred to ADR-0011.
+- [0017](0017-deterministic-seed-vs-commit-reveal.md) — Derive randomness from a
+  deterministic `tunnelId` seed for public symmetric fields (blackjack, bomb-it,
+  chicken-cross); reserve commit-reveal for hidden-state games.
+- [0018](0018-multi-game-self-play-per-game-seed.md) — Multi-game wrappers with a
+  synthetic per-game seed (`` `${tunnelId}:g${gamesPlayed}` ``) for bomb-it &
+  chicken-cross, mirroring battleship's many-games-per-tunnel shape.
+- [0019](0019-batched-tunnel-open.md) — Batch connect-time self-play tunnel opens
+  into one PTB instead of one sponsored open+fund per window.
+- [0020](0020-bot-fleet-topology-shared-core.md) — Two bot fleets over one
+  sans-IO core: a user-serving fleet (async/tokio, real PvP counterparty) and a
+  local self-competing bench fleet (sync/rayon), differing only in seam
+  implementations and runtime. Supersedes ADR-0001's self-play hot path.
+- [0021](0021-sans-io-synchronous-protocol-core.md) — Adopt sans-IO: the protocol
+  core is synchronous and pure (no futures in the transition); async is confined
+  to the IO seams (FrameTransport, MoveStrategy, future remote-KMS Signer).
+  Required by 0020.
+- [0022](0022-canonical-protocol-id-naming.md) — Canonical protocol IDs use
+  snake_case segments separated by dots and an explicit `.vN` suffix; `.series`
+  replaces new `.multi` wrapper IDs, with legacy aliases recorded in the port
+  inventory.
+
+> Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
+> predates this directory (still referenced from code/specs), and 0006 was
+> dropped. The numbers are retired, not reused.

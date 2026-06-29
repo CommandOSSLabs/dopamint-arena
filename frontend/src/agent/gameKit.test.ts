@@ -8,8 +8,8 @@ describe("GAME_KITS registry", () => {
     assert.ok(GAME_KITS.blackjack);
     assert.ok(GAME_KITS.battleship);
     assert.ok(GAME_KITS["quantum-poker"]);
-    // extras (including regular-payments) are also present via the same registry
-    assert.ok(GAME_KITS["regular-payments"]);
+    // extras (including micro-payments) are also present via the same registry
+    assert.ok(GAME_KITS["micro-payments"]);
   });
 
   it("exposes the human-hook protocol domains", () => {
@@ -17,7 +17,7 @@ describe("GAME_KITS registry", () => {
       GAME_KITS.tictactoe.protocol.name,
       "tic_tac_toe.multi.v1",
     );
-    assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.bet.v1");
+    assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.v2");
     assert.strictEqual(GAME_KITS.battleship.protocol.name, "battleship.v1");
     assert.strictEqual(
       GAME_KITS["quantum-poker"].protocol.name,

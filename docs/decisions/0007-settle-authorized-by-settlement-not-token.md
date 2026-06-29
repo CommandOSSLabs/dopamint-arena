@@ -6,8 +6,8 @@
   [ADR-0002](0002-backend-client-api-contract.md) (the session-bearer-gated
   `POST /v1/sessions/{id}/settle`). The session/heartbeat/stats contract of
   ADR-0002 otherwise stands.
-- **Refs**: [ADR-0005 §6](0005-transaction-log-panels.md) (settle pushes the
-  proof-linked global-log row), [ADR-0006](0006-genuine-two-party-only-drop-self-play.md)
+- **Refs**: [ADR-0005 §6](0005-redis-backed-ha-control-plane.md) (settle pushes the
+  proof-linked global-log row), [ADR-0001 §1](0001-arena-baseline-architecture.md)
   (genuine two-party play; relay forwards opaque frames; throughput counted at the relay).
 
 ## Context

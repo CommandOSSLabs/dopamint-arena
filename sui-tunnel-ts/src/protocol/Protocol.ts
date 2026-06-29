@@ -46,6 +46,14 @@ export interface Protocol<State, Move> {
   /** Stable identifier, also used as the state-encoding domain tag. */
   readonly name: string;
 
+  /**
+   * True if any move carries a local-only secret (e.g. a commit pre-image) that MUST be stripped
+   * before relay. When set, a {@link DistributedTunnel} REFUSES to run without an explicit
+   * `moveCodec` (rather than silently falling back to the identity codec and leaking the secret to
+   * the opponent). Commit-reveal protocols (blackjack, quantum poker) set this.
+   */
+  readonly movesCarrySecrets?: boolean;
+
   /** Deterministic initial state for a freshly opened tunnel. */
   initialState(ctx: ProtocolContext): State;
 

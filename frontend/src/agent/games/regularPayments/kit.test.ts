@@ -28,7 +28,7 @@ describe("regularPayments kit", () => {
 
   it("uses the payments.v1 protocol domain and correct id", () => {
     const kit = createRegularPaymentsKit(MICRO);
-    assert.strictEqual(kit.id, "regular-payments");
+    assert.strictEqual(kit.id, "micro-payments");
     assert.strictEqual(kit.protocol.name, "payments.v1");
   });
 
@@ -45,7 +45,7 @@ describe("regularPayments kit", () => {
     assert.strictEqual(moveB, null);
   });
 
-  it("shop bot (B) never proposes (unidirectional regular-payments flow)", () => {
+  it("shop bot (B) never proposes (unidirectional micro-payments flow)", () => {
     const kit = createRegularPaymentsKit(MICRO);
     const state = kit.protocol.initialState(ctx);
     const botB = kit.createBot("B", { rngForSeat: () => mulberry32(7) });

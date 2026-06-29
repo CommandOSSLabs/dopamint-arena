@@ -112,6 +112,7 @@ function CardRow({
 
 function PlayerSeat({
   party,
+  hero,
   name,
   stack,
   bet,
@@ -120,6 +121,7 @@ function PlayerSeat({
   winner,
 }: {
   party: Party;
+  hero: Party;
   name: string;
   stack: bigint;
   bet: bigint;
@@ -127,10 +129,11 @@ function PlayerSeat({
   active: boolean;
   winner: boolean;
 }) {
+  const role = party === hero ? "hero" : "opp";
   return (
-    <div className={`qp-player qp-player--${party === "A" ? "hero" : "opp"}`}>
+    <div className={`qp-player qp-player--${role}`}>
       <section
-        className={`qp-seat qp-seat--${party === "A" ? "hero" : "opp"} sketch-stroke sketch-panel${
+        className={`qp-seat qp-seat--${role} sketch-stroke sketch-panel${
           active ? " sketch-stroke--accent" : ""
         }`}
       >
@@ -167,12 +170,15 @@ function PlayerSeat({
 
 export function QuantumPokerTable({
   state,
+  hero = "A",
   holesA,
   holesB,
   nameA,
   nameB,
 }: {
   state: PokerState;
+  /** The viewer's seat — rendered at the bottom; the other party sits on top. */
+  hero?: Party;
   holesA: number[];
   holesB: number[];
   nameA: string;
@@ -192,18 +198,22 @@ export function QuantumPokerTable({
   const pot = settled ? 0n : state.totalBetA + state.totalBetB;
   const winner = state.lastResult?.winner;
 
+  const opp: Party = hero === "A" ? "B" : "A";
+  const seatProps = (p: Party) => ({
+    party: p,
+    hero,
+    name: p === "A" ? nameA : nameB,
+    stack: p === "A" ? stackA : stackB,
+    bet: p === "A" ? betA : betB,
+    holes: p === "A" ? holesA : holesB,
+    active: state.toAct === p,
+    winner: winner === p,
+  });
+
   return (
     <section className="qp-felt">
-      {/* Opponent seat (party B, top) */}
-      <PlayerSeat
-        party="B"
-        name={nameB}
-        stack={stackB}
-        bet={betB}
-        holes={holesB}
-        active={state.toAct === "B"}
-        winner={winner === "B"}
-      />
+      {/* Opponent seat (top — the non-hero party) */}
+      <PlayerSeat {...seatProps(opp)} />
 
       {/* Community board: pot above, five cards centered, phase below */}
       <div className="qp-board">
@@ -218,16 +228,8 @@ export function QuantumPokerTable({
         <CardRow cards={state.board} size={5} />
       </div>
 
-      {/* Hero seat (party A, bottom) */}
-      <PlayerSeat
-        party="A"
-        name={nameA}
-        stack={stackA}
-        bet={betA}
-        holes={holesA}
-        active={state.toAct === "A"}
-        winner={winner === "A"}
-      />
+      {/* Hero seat (bottom — the viewer) */}
+      <PlayerSeat {...seatProps(hero)} />
     </section>
   );
 }

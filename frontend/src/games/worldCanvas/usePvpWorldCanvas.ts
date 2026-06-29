@@ -28,7 +28,7 @@ import {
   type PvpCell,
   type PvpCellMove,
   type PvpPaintMove,
-} from "./pvpProtocol";
+} from "sui-tunnel-ts/protocol/worldCanvasPvp";
 import { makeWorldCanvasPvpResumeAdapter } from "./pvpResumeAdapter";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 
@@ -264,7 +264,7 @@ export function usePvpWorldCanvas(windowId: string): PvpWorldCanvas {
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(id),
-          type: "open tunnel",
+          type: "Start",
           status: "Success",
           amount: "",
         });
@@ -273,7 +273,7 @@ export function usePvpWorldCanvas(windowId: string): PvpWorldCanvas {
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(id),
-          type: "Opened",
+          type: "Start",
           status: "Success",
           amount: "",
         });
@@ -293,7 +293,7 @@ export function usePvpWorldCanvas(windowId: string): PvpWorldCanvas {
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(id),
-          type: "settled",
+          type: "End",
           status: "Success",
           amount: "closed",
         });
@@ -302,7 +302,7 @@ export function usePvpWorldCanvas(windowId: string): PvpWorldCanvas {
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(id),
-          type: "Settled",
+          type: "End",
           status: "Success",
           amount: "closed",
         });

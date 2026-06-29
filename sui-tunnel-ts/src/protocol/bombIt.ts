@@ -325,8 +325,92 @@ function manhattan(
 }
 
 /**
- * Survival-first self-play policy: dodge live blasts, rarely plant bombs, and only bomb when
- * an opponent is clearly in line or a crate fully blocks pursuit — with a verified escape.
+ * First action along the SHORTEST path from `self` to the nearest cell NOT in `avoid`; null when
+ * `self` is already outside `avoid` or no such cell is reachable. Deterministic (fixed BFS order),
+ * so a fleeing bot walks straight out of a blast instead of oscillating inside the `+` and dying.
+ */
+function fleeStep(
+  grid: Uint8Array,
+  bombs: BombItBomb[],
+  self: { row: number; col: number },
+  other: BombItPlayer,
+  avoid: Set<number>
+): BombItAction | null {
+  if (!avoid.has(idx(self.row, self.col))) return null;
+  const dirs: BombItAction[] = ["north", "south", "east", "west"];
+  const seen = new Set<number>([idx(self.row, self.col)]);
+  let frontier: Array<[number, number, BombItAction]> = [];
+  for (const d of dirs) {
+    const [nr, nc] = dest(self.row, self.col, d);
+    const ni = idx(nr, nc);
+    if (seen.has(ni) || !canMoveTo(grid, bombs, other, nr, nc)) continue;
+    seen.add(ni);
+    if (!avoid.has(ni)) return d;
+    frontier.push([nr, nc, d]);
+  }
+  for (let step = 0; step < FUSE_TICKS && frontier.length > 0; step++) {
+    const next: Array<[number, number, BombItAction]> = [];
+    for (const [r, c, first] of frontier) {
+      for (const d of dirs) {
+        const [nr, nc] = dest(r, c, d);
+        const ni = idx(nr, nc);
+        if (seen.has(ni) || !canMoveTo(grid, bombs, other, nr, nc)) continue;
+        seen.add(ni);
+        if (!avoid.has(ni)) return first;
+        next.push([nr, nc, first]);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+/**
+ * Can this seat reach a non-lethal cell before a bomb dropped on its CURRENT cell detonates?
+ * Models the alternating cadence: the bot acts once per two fuse ticks, so a fresh bomb gives it
+ * floor(FUSE_TICKS/2) of its own turns — one reserved as slack for the opponent burning a tick or
+ * blocking a cell. BFS depth counts BOT-moves, treating the would-be bomb's blast and all current
+ * danger as lethal. Gating every bomb on this (plus a deterministic flee) is what ends the bot's
+ * self-immolation — the old check assumed a move every tick, then a random flee failed to follow it.
+ */
+function canEscapeOwnBomb(
+  grid: Uint8Array,
+  bombs: BombItBomb[],
+  self: { row: number; col: number },
+  other: BombItPlayer,
+  by: Party,
+  danger: Set<number>
+): boolean {
+  const own = new Set(
+    blastCellsFor(grid, { row: self.row, col: self.col, fuse: 0, owner: by })
+  );
+  const lethal = (ci: number) => own.has(ci) || danger.has(ci);
+  const budget = Math.max(1, Math.floor(FUSE_TICKS / 2) - 1);
+  const dirs: BombItAction[] = ["north", "south", "east", "west"];
+  const seen = new Set<number>([idx(self.row, self.col)]);
+  let frontier: Array<[number, number]> = [[self.row, self.col]];
+  for (let step = 0; step < budget && frontier.length > 0; step++) {
+    const next: Array<[number, number]> = [];
+    for (const [r, c] of frontier) {
+      for (const d of dirs) {
+        const [nr, nc] = dest(r, c, d);
+        const ni = idx(nr, nc);
+        if (seen.has(ni) || !canMoveTo(grid, bombs, other, nr, nc)) continue;
+        seen.add(ni);
+        if (!lethal(ni)) return true;
+        next.push([nr, nc]);
+      }
+    }
+    frontier = next;
+  }
+  return false;
+}
+
+/**
+ * Cagey-survivor self-play policy: survival dominates aggression. In (or hugging) a blast, the bot
+ * walks the SHORTEST path out — deterministic, because a random flee oscillates inside the `+` and
+ * dies. It bombs only rarely, and only when it can verifiably clear its OWN bomb in time under the
+ * alternating-tick cadence ({@link canEscapeOwnBomb}) — which is what stops it immolating itself.
  */
 function hunterAction(
   s: BombItState,
@@ -354,44 +438,28 @@ function hunterAction(
     return !near.has(idx(nr, nc));
   });
   const pick = (xs: BombItAction[]) => xs[Math.floor(rng() * xs.length)];
+  const here = idx(p.row, p.col);
 
-  // 1) Survive: flee blasts; prefer cells not hugging the blast radius.
-  if (danger.has(idx(p.row, p.col))) {
+  // 1) Survive: in a blast, take the shortest step OUT (deterministic). Random fallbacks only when
+  //    no escape path is found at all.
+  if (danger.has(here)) {
+    const step = fleeStep(s.grid, s.bombs, p, other, danger);
+    if (step) return step;
     if (safer.length) return pick(safer);
     if (safe.length) return pick(safe);
     if (moves.length) return pick(moves);
     return "stay";
   }
-  if (near.has(idx(p.row, p.col)) && safer.length) return pick(safer);
+  // Hugging a blast edge: peel off to a fully-safe cell when one exists — but only via a
+  // non-danger move. Routing THROUGH the blast to reach a "safer" cell is how the bot used to
+  // step back into its own bomb and die; `safer`/`safe` never include a danger cell.
+  if (near.has(here) && safer.length) return pick(safer);
 
   const liveOwn = s.bombs.filter((b) => b.owner === by).length;
   const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
   const canBomb = liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb;
-  const hasEscape = () => {
-    const future = new Set(
-      blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by })
-    );
-    const lethal = (i: number) => future.has(i) || danger.has(i);
-    const budget = Math.max(2, Math.floor(FUSE_TICKS / 2));
-    const seen = new Set<number>([idx(p.row, p.col)]);
-    let frontier: Array<[number, number]> = [[p.row, p.col]];
-    for (let step = 0; step < budget && frontier.length > 0; step++) {
-      const next: Array<[number, number]> = [];
-      for (const [r, c] of frontier) {
-        for (const d of dirs) {
-          const [nr, nc] = dest(r, c, d);
-          const ni = idx(nr, nc);
-          if (seen.has(ni)) continue;
-          if (!canMoveTo(s.grid, s.bombs, other, nr, nc)) continue;
-          seen.add(ni);
-          if (!lethal(ni)) return true;
-          next.push([nr, nc]);
-        }
-      }
-      frontier = next;
-    }
-    return false;
-  };
+  const escapes = () =>
+    canEscapeOwnBomb(s.grid, s.bombs, p, other, by, danger);
   const crateInDir = (d: BombItAction) => {
     const [nr, nc] = dest(p.row, p.col, d);
     return (
@@ -410,23 +478,24 @@ function hunterAction(
   });
   const towardSafe = toward.filter((d) => safe.includes(d));
 
-  // 2) Rare attack bomb — only on a clear line within blast reach.
+  // 2) Rare attack — opponent in blast line AND a verified, cadence-aware escape from our own bomb.
   const inLine =
     other.alive &&
     (p.row === other.row || p.col === other.col) &&
     dist <= BLAST_RADIUS;
-  if (canBomb && inLine && hasEscape() && rng() < 0.28) return "bomb";
+  if (canBomb && inLine && escapes() && rng() < 0.1) return "bomb";
 
-  // 3) Pursue when safe.
-  if (towardSafe.length) return pick(towardSafe);
+  // 3) Approach only sometimes — a cagey survivor keeps its distance more than it hunts, so duels
+  //    breathe instead of collapsing into a bomb trade every time.
+  if (towardSafe.length && rng() < 0.55) return pick(towardSafe);
 
-  // 4) Crate blocks all pursuit paths → bomb it open (still rare).
+  // 4) A crate walls off every pursuit path → open it (rare, escape-checked).
   if (
     canBomb &&
     towardSafe.length === 0 &&
     toward.some(crateInDir) &&
-    hasEscape() &&
-    rng() < 0.35
+    escapes() &&
+    rng() < 0.14
   ) {
     return "bomb";
   }

@@ -44,9 +44,19 @@ interface TelemetryContextValue {
    *  subscription drift). Null while connecting/offline. */
   backend: StatsSnapshot | null;
   status: BackendStatus;
+  /** Record `n` real co-signed updates produced by `gameId` (off-chain actions). Tagged by the
+   *  scoped report each game window installs; lets the per-game window chip derive a REAL local
+   *  rate when the backend's authoritative `perGame` feed is absent. Never feeds the aggregate. */
+  recordGameUpdate: (gameId: string, n: number) => void;
+  /** Cumulative updates recorded for `gameId`, for the chip's own rate sampling. */
+  getGameTotal: (gameId: string) => number;
+  /** Cumulative updates across every game, for the aggregate off-chain local-rate display. */
+  getGamesTotal: () => number;
 }
 
-const TelemetryContext = createContext<TelemetryContextValue | null>(null);
+export const TelemetryContext = createContext<TelemetryContextValue | null>(
+  null,
+);
 
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Feeds start empty (honest "no activity yet") and fill from real play / backend events;
@@ -96,11 +106,28 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     c.errors += delta.errors ?? 0;
     // No local rate is derived here: the backend is the single authoritative TPS clock
     // (ADR-0002). Self-play reports raw counts via the heartbeat; the backend owns the rate
-    // (see docs/adding-a-tunnel-game.md § Reporting TPS). These counters feed only totals and
+    // (see docs/guide/adding-a-tunnel-game.md § Reporting TPS). These counters feed only totals and
     // the offline fallback below.
   }, []);
 
   const setActive = useCallback((n: number) => setBotsRunning(n), []);
+
+  // Per-game cumulative update counter (real off-chain actions), tagged by the scoped report a
+  // game window installs. Only used to derive a local per-game rate for the window TPS chip when
+  // the backend's authoritative `perGame` feed is absent — it never touches the global counters.
+  const perGameTotal = useRef<Record<string, number>>({});
+  const recordGameUpdate = useCallback((gameId: string, n: number) => {
+    if (n)
+      perGameTotal.current[gameId] = (perGameTotal.current[gameId] ?? 0) + n;
+  }, []);
+  const getGameTotal = useCallback(
+    (gameId: string) => perGameTotal.current[gameId] ?? 0,
+    [],
+  );
+  const getGamesTotal = useCallback(
+    () => Object.values(perGameTotal.current).reduce((sum, n) => sum + n, 0),
+    [],
+  );
 
   // TPS sparkline ← the backend's authoritative rate. The server pushes a pre-summed `tps`
   // ~1/s, so append each fresh snapshot. We never compute a rate from local counters while
@@ -159,8 +186,24 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [pushTxn, pushLocalTxn, bumpCounters, setActive],
   );
   const value = useMemo<TelemetryContextValue>(
-    () => ({ snapshot, report, backend, status }),
-    [snapshot, report, backend, status],
+    () => ({
+      snapshot,
+      report,
+      backend,
+      status,
+      recordGameUpdate,
+      getGameTotal,
+      getGamesTotal,
+    }),
+    [
+      snapshot,
+      report,
+      backend,
+      status,
+      recordGameUpdate,
+      getGameTotal,
+      getGamesTotal,
+    ],
   );
 
   return (

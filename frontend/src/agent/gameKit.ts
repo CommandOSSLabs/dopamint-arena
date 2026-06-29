@@ -13,9 +13,10 @@ import { createBombItKit } from "./games/bombIt/kit";
 import { createChickenCrossKit } from "./games/chickenCross/kit";
 import { createWorldCanvasKit } from "./games/worldCanvas/kit";
 import { createRegularPaymentsKit } from "./games/regularPayments/kit";
+import { createApiCreditsKit } from "./games/apiCredits/kit";
 import { defaultStateHash, type StateHash } from "./stateHash";
 import { QUANTUM_POKER_STAKE } from "@/games/quantumPoker/constants";
-import { MICRO_UNIT } from "@/games/regularPayments/constants";
+import { MICRO_UNIT } from "@/games/microrPayments/constants";
 
 export type GameId =
   | "tictactoe"
@@ -25,7 +26,8 @@ export type GameId =
   | "bomb-it"
   | "chicken-cross"
   | "world-canvas"
-  | "regular-payments";
+  | "micro-payments"
+  | "api-credits";
 export type { StateHash };
 export { defaultStateHash };
 
@@ -63,8 +65,10 @@ export const GAME_KITS: GameKitRegistry = {
   blackjack: createBlackjackKit(100n),
   battleship: createBattleshipKit(10n),
   "quantum-poker": createQuantumPokerKit(QUANTUM_POKER_STAKE),
-  "regular-payments": createRegularPaymentsKit(MICRO_UNIT),
+  "micro-payments": createRegularPaymentsKit(MICRO_UNIT),
   "bomb-it": createBombItKit(100n),
   "chicken-cross": createChickenCrossKit(100n),
   "world-canvas": createWorldCanvasKit(100n),
+  // Tunnel-based payment workload (client burns credits per call until settled).
+  "api-credits": createApiCreditsKit(10n, 100n),
 };

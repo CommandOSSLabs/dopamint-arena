@@ -22,7 +22,7 @@ import {
   isMtpsAddressBalance,
   isMtpsConfigured,
 } from "@/onchain/mtps";
-import { handValue } from "@/games/blackjack/app/lib/bjCards";
+import { handValue as bjCardsHandValue } from "@/games/blackjack/app/lib/bjCards";
 import {
   MpClient,
   resolveMpWsUrl,
@@ -43,18 +43,18 @@ import {
   clearResumeRecord,
 } from "@/pvp/resume";
 import {
-  BlackjackBetProtocol,
-  maxBet as tableMaxBet,
-  BET_OPTIONS,
-  MIN_BET,
+  BlackjackProtocol,
+  actorFor,
   getPlayerParty,
   getDealerParty,
-  type BetBlackjackState,
-  type BetBlackjackMove,
-} from "@/games/blackjack/app/lib/bjBetProtocol";
-
-type BlackjackState = BetBlackjackState;
-type BlackjackMove = BetBlackjackMove;
+  blackjackHandValue as handValue,
+  MIN_BET,
+  maxBet as tableMaxBet,
+  type BlackjackState,
+  type BlackjackMove,
+} from "sui-tunnel-ts/protocol/blackjack";
+import { blackjackMoveCodec } from "sui-tunnel-ts/protocol/blackjackCodec";
+import { BET_OPTIONS, bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
@@ -75,24 +75,11 @@ const DEFAULT_STAKE = 1000n;
  *  big enough for many rounds (min-bet 1, options up to 100); each fits a single faucet pull. */
 const FUND_OPTIONS = [500, 1000, 2500] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
-const DEALER_MS = 600; // dealer reveal pause before auto-drawing
 const NEXT_MS = 900; // pause before auto-dealing the next round
 const DEFAULT_BET = Number(MIN_BET); // auto's starting bet until the player picks one
 
-// Auto re-bet: reuse the player's last chosen bet, clamped to what both sides can still cover.
-// Returns null if the table can no longer fund the minimum bet (the round is terminal).
-function autoBetMove(
-  lastBet: number,
-  s: BetBlackjackState,
-): BetBlackjackMove | null {
-  if (s.phase !== "round_over") return null;
-  const cap = Number(tableMaxBet(s));
-  if (cap < Number(MIN_BET)) return null;
-  return {
-    action: "bet",
-    amount: Math.max(Number(MIN_BET), Math.min(lastBet, cap)),
-  };
-}
+/** Pacing for auto-driven commit/reveal plumbing moves (ms). */
+const PLUMBING_MS = 120;
 
 export type PvpPhase =
   | "idle"
@@ -126,7 +113,7 @@ export interface PvpView {
   myBalance: bigint; // my persistent balance
   oppBalance: bigint; // opponent's persistent balance
   round: number;
-  gamePhase: "player" | "dealer" | "round_over" | null;
+  gamePhase: "draw_commit" | "draw_reveal" | "player" | "round_over" | null;
   myTurn: boolean; // I'm the player and it's the player's turn (Hit/Stand)
   inRoundOver: boolean; // round resolved — can Next / Stop
   terminal: boolean; // round cap or a side can't fund — forces an auto-settle
@@ -158,7 +145,7 @@ export function usePvpBlackjack(): PvpView {
   const walletAddress = account?.address ?? "";
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const sponsored = useSponsoredSignExec();
-  const proto = useMemo(() => new BlackjackBetProtocol(), []);
+  const proto = useMemo(() => new BlackjackProtocol(), []);
 
   const [phase, setPhase] = useState<PvpPhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -392,8 +379,8 @@ export function usePvpBlackjack(): PvpView {
           const rr: RoundResult = {
             round: Number(st.round),
             outcome,
-            playerSum: handValue(st.playerHand),
-            dealerSum: handValue(st.dealerHand),
+            playerSum: bjCardsHandValue(st.playerHand),
+            dealerSum: bjCardsHandValue(st.dealerHand),
           };
           setRounds((prev) => [...prev, rr].slice(-30));
           lastLoggedRound = Number(st.round);
@@ -404,53 +391,59 @@ export function usePvpBlackjack(): PvpView {
           void finishSettle(t, channel, info.matchId);
           return;
         }
-        if (st.phase === "player" && info.role === getPlayerParty(st.round)) {
-          if (autoRef.current) {
-            const mv = proto.randomMove(st, info.role, Math.random);
-            if (mv)
-              setTimeout(
-                () => {
-                  try {
-                    t.propose(mv, BigInt(Date.now()));
-                  } catch {
-                    /* not my turn / in flight */
-                  }
-                },
-                autoRef.current ? 50 : BOT_MOVE_MS,
-              );
-          }
-        } else if (
-          st.phase === "dealer" &&
-          info.role === getDealerParty(st.round)
+        const owed = actorFor(st, getPlayerParty); // PvP: default rotation
+        if (!owed) return;
+        // Plumbing (commit/reveal) is ALWAYS auto-driven by this seat when it owes it.
+        if (
+          (st.phase === "draw_commit" || st.phase === "draw_reveal") &&
+          owed === info.role
         ) {
-          // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
-          setTimeout(
-            () => {
-              try {
-                t.propose({ action: "stand" }, BigInt(Date.now()));
-              } catch {
-                /* in flight */
-              }
-            },
-            autoRef.current ? 50 : DEALER_MS,
-          );
-        } else if (
-          st.phase === "round_over" &&
-          info.role === getPlayerParty(st.round + 1n) &&
-          autoRef.current
-        ) {
-          // Only the player bets (the bet deals the next round); auto reuses the last bet.
-          const mv = autoBetMove(lastBetRef.current, st);
+          const mv = proto.randomMove(st, info.role, Math.random); // mints commit secret / reveals
           if (mv)
             setTimeout(
               () => {
                 try {
                   t.propose(mv, BigInt(Date.now()));
                 } catch {
-                  /* raced / in flight */
+                  /* in flight */
                 }
               },
-              autoRef.current ? 100 : NEXT_MS,
+              autoRef.current ? 50 : PLUMBING_MS,
+            );
+          return;
+        }
+        // Bet: only the next player bets; auto reuses the remembered bet.
+        if (
+          st.phase === "round_over" &&
+          owed === info.role &&
+          autoRef.current
+        ) {
+          const mv = bjBetMove(lastBetRef.current ?? Number(MIN_BET), st);
+          setTimeout(
+            () => {
+              try {
+                t.propose(mv, BigInt(Date.now()));
+              } catch {
+                /* raced / in flight */
+              }
+            },
+            autoRef.current ? 100 : NEXT_MS,
+          );
+          return;
+        }
+        // Player hit/stand: auto mode lets the bot play this seat.
+        if (st.phase === "player" && owed === info.role && autoRef.current) {
+          const mv = proto.randomMove(st, info.role, Math.random);
+          if (mv)
+            setTimeout(
+              () => {
+                try {
+                  t.propose(mv, BigInt(Date.now()));
+                } catch {
+                  /* not my turn / in flight */
+                }
+              },
+              autoRef.current ? 50 : BOT_MOVE_MS,
             );
         }
       };
@@ -464,7 +457,17 @@ export function usePvpBlackjack(): PvpView {
         mp,
         channel,
         tunnel: t,
-        adapter: makeBlackjackResumeAdapter(() => onAdvance()),
+        adapter: makeBlackjackResumeAdapter({
+          getSecret: () => ({
+            localSecretA: t.state.localSecretA,
+            localSecretB: t.state.localSecretB,
+          }),
+          setSecret: (sec) => {
+            t.state.localSecretA = sec.localSecretA;
+            t.state.localSecretB = sec.localSecretB;
+          },
+          onReconciled: () => onAdvance(),
+        }),
         identity: {
           matchId: info.matchId,
           tunnelId: t.tunnelId,
@@ -523,7 +526,15 @@ export function usePvpBlackjack(): PvpView {
         const restored = resumeActiveTunnels<BlackjackState, BlackjackMove>(
           mp,
           "blackjack",
-          { proto, adapter: makeBlackjackResumeAdapter(() => {}) },
+          {
+            proto,
+            moveCodec: blackjackMoveCodec,
+            adapter: makeBlackjackResumeAdapter({
+              getSecret: () => ({ localSecretA: null, localSecretB: null }),
+              setSecret: () => {},
+              onReconciled: () => {},
+            }),
+          },
           { selfWallet: walletAddress },
         );
         if (restored.length > 0) {
@@ -749,6 +760,7 @@ export function usePvpBlackjack(): PvpView {
               false,
             ),
             selfParty: m.role, // A = player, B = dealer
+            moveCodec: blackjackMoveCodec,
           },
           channel.transport,
           { a: stakeA, b: stakeB },
@@ -791,7 +803,7 @@ export function usePvpBlackjack(): PvpView {
     )
       return;
     try {
-      t.propose({ action }, BigInt(Date.now()));
+      t.propose({ kind: action }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -812,7 +824,7 @@ export function usePvpBlackjack(): PvpView {
         return;
       lastBetRef.current = amount; // remember it so auto reuses this stake next round
       try {
-        t.propose({ action: "bet", amount }, BigInt(Date.now()));
+        t.propose(bjBetMove(amount, t.state), BigInt(Date.now()));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -839,10 +851,19 @@ export function usePvpBlackjack(): PvpView {
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       // Resume auto from the current state.
       const st = t.state;
-      if (
-        st.phase === "player" &&
-        roleRef.current === getPlayerParty(st.round)
-      ) {
+      const owed = actorFor(st, getPlayerParty);
+      if (!owed || owed !== roleRef.current) return;
+      if (st.phase === "draw_commit" || st.phase === "draw_reveal") {
+        const mv = proto.randomMove(st, roleRef.current, Math.random);
+        if (mv)
+          setTimeout(() => {
+            try {
+              t.propose(mv, BigInt(Date.now()));
+            } catch {
+              /* ignore */
+            }
+          }, 50);
+      } else if (st.phase === "player") {
         const mv = proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
           setTimeout(
@@ -855,22 +876,18 @@ export function usePvpBlackjack(): PvpView {
             },
             autoRef.current ? 50 : BOT_MOVE_MS,
           );
-      } else if (
-        st.phase === "round_over" &&
-        roleRef.current === getPlayerParty(st.round + 1n)
-      ) {
-        const mv = autoBetMove(lastBetRef.current, st);
-        if (mv)
-          setTimeout(
-            () => {
-              try {
-                t.propose(mv, BigInt(Date.now()));
-              } catch {
-                /* ignore */
-              }
-            },
-            autoRef.current ? 100 : NEXT_MS,
-          );
+      } else if (st.phase === "round_over") {
+        const mv = bjBetMove(lastBetRef.current ?? Number(MIN_BET), st);
+        setTimeout(
+          () => {
+            try {
+              t.propose(mv, BigInt(Date.now()));
+            } catch {
+              /* ignore */
+            }
+          },
+          autoRef.current ? 100 : NEXT_MS,
+        );
       }
     },
     [proto],
@@ -1032,11 +1049,11 @@ export function usePvpBlackjack(): PvpView {
     isDealer,
     playerHand,
     dealerHand,
-    playerSum: handValue(playerHand),
+    playerSum: bjCardsHandValue(playerHand),
     dealerSum:
       s && s.phase !== "player"
-        ? handValue(s.dealerHand)
-        : handValue(dealerHand),
+        ? bjCardsHandValue(s.dealerHand)
+        : bjCardsHandValue(dealerHand),
     balancePlayer: s
       ? getPlayerParty(s.round || 1n) === "A"
         ? s.balanceA

@@ -1,5 +1,6 @@
 import {
   Gamepad2,
+  LayoutDashboard,
   LayoutGrid,
   MessagesSquare,
   PanelBottom,
@@ -44,12 +45,15 @@ const WORKSPACE_TABS: {
   { section: "games", label: "Game", icon: Gamepad2 },
   { section: "payment", label: "Payment", icon: Wallet },
   { section: "chat", label: "Chat", icon: MessagesSquare },
+  // The aggregate "All" floor — every workspace's live windows at once, for one-shot
+  // screenshots. It has no floor tools of its own (the right-side cluster hides below).
+  { section: "all", label: "All", icon: LayoutDashboard },
 ];
 
 const tab =
-  "inline-flex items-center gap-1.5 rounded-md border border-transparent px-3 py-1.5 text-xs font-medium transition-colors";
-const tabInactive = "text-foreground/60 hover:text-foreground";
-const tabActive = "border-border bg-secondary text-foreground shadow-sm";
+  "inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent px-3 py-2.5 text-sm font-semibold text-foreground/60 transition-colors hover:bg-secondary hover:text-foreground";
+const tabActive =
+  "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground";
 
 /** A row action in the layout-tools menu. */
 function ToolItem({
@@ -106,7 +110,7 @@ export function WorkspaceTabs({
   };
   return (
     <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/60 px-2 py-1.5 backdrop-blur">
-      <nav className="flex items-center gap-1">
+      <nav className="grid flex-1 grid-cols-4 gap-1">
         {WORKSPACE_TABS.map((t) => {
           const Icon = t.icon;
           return (
@@ -114,73 +118,74 @@ export function WorkspaceTabs({
               key={t.section}
               to="/"
               search={t.section === "games" ? {} : { section: t.section }}
-              className={cn(
-                tab,
-                active === t.section ? tabActive : tabInactive,
-              )}
+              className={cn(tab, active === t.section && tabActive)}
             >
-              <Icon className="size-3.5" />
+              <Icon className="size-4" />
               {t.label}
             </Link>
           );
         })}
       </nav>
 
-      <div className="flex items-center gap-1.5">
-        <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <PopoverTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="secondary"
-                  aria-label="Layout tools"
-                  className="size-8 border border-border"
-                >
-                  <LayoutGrid className="size-4" />
-                </Button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent>Layout tools</TooltipContent>
-          </Tooltip>
-          <PopoverContent align="end" side="bottom" className="w-48 p-1">
-            <ToolItem
-              icon={LayoutGrid}
-              label="Auto-arrange"
-              onClick={tool(onArrange)}
-            />
-            <ToolItem icon={Plus} label="Add all" onClick={tool(onAddAll)} />
-            <ToolItem
-              icon={dockSide === "bottom" ? PanelRight : PanelBottom}
-              label={dockSide === "bottom" ? "Dock to right" : "Dock to bottom"}
-              onClick={tool(onToggleDock)}
-            />
-            <ToolItem
-              icon={RotateCcw}
-              label="Reset layout"
-              onClick={tool(onResetLayout)}
-            />
-            <div className="my-1 border-t border-border" />
-            <ToolItem
-              icon={Trash2}
-              label="Remove all"
-              danger
-              onClick={tool(onRemoveAll)}
-            />
-          </PopoverContent>
-        </Popover>
+      {active !== "all" && (
+        <div className="flex items-center gap-2">
+          <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    aria-label="Layout tools"
+                    className="size-10 border border-border"
+                  >
+                    <LayoutGrid className="size-5" />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Layout tools</TooltipContent>
+            </Tooltip>
+            <PopoverContent align="end" side="bottom" className="w-48 p-1">
+              <ToolItem
+                icon={LayoutGrid}
+                label="Auto-arrange"
+                onClick={tool(onArrange)}
+              />
+              <ToolItem icon={Plus} label="Add all" onClick={tool(onAddAll)} />
+              <ToolItem
+                icon={dockSide === "bottom" ? PanelRight : PanelBottom}
+                label={
+                  dockSide === "bottom" ? "Dock to right" : "Dock to bottom"
+                }
+                onClick={tool(onToggleDock)}
+              />
+              <ToolItem
+                icon={RotateCcw}
+                label="Reset layout"
+                onClick={tool(onResetLayout)}
+              />
+              <div className="my-1 border-t border-border" />
+              <ToolItem
+                icon={Trash2}
+                label="Remove all"
+                danger
+                onClick={tool(onRemoveAll)}
+              />
+            </PopoverContent>
+          </Popover>
 
-        <Button
-          size="sm"
-          onClick={onAdd}
-          aria-label="Add an app"
-          data-testid="add-app"
-          className="h-8 gap-1"
-        >
-          <Plus className="size-4" />
-          Add
-        </Button>
-      </div>
+          <Button
+            size="sm"
+            onClick={onAdd}
+            aria-label="Add an app"
+            data-testid="add-app"
+            className="h-10 gap-1.5 px-4 text-sm font-semibold"
+          >
+            <Plus className="size-5" />
+            Add
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

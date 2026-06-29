@@ -10,14 +10,11 @@ config:
   dopamint:db-min-capacity: "0.5"
   dopamint:db-max-capacity: "4"
   dopamint:db-serverless: "true"
-  dopamint:cache-node-type: cache.r6g.4xlarge
-  dopamint:benchmark-instance-type: c7i.48xlarge
-  dopamint:benchmark-min-size: "2"
-  dopamint:benchmark-max-size: "2"
+  dopamint:cache-node-type: cache.t4g.medium
   dopamint:settler-key:
     secure: AAABAJh+ACo2yp6b8S9CVYe/VuZyCoRpJyWjME2aJxsKOITpdDIPVug3sqII0+sGj6dA6tzjElGaCMModIVyrvvH0OOd6HNQqDB7+g==
   dopamint:backend-image-tag: 4bde1e4
   # Ollama sidecar for the chat-v2 feature. Disabled with `pulumi config set dopamint:ollama-enabled false`.
   dopamint:ollama-enabled: "true"
-  dopamint:ollama-model: qwen2.5:1.8b
+  dopamint:ollama-model: qwen2.5:1.5b
   dopamint:ollama-image-tag: "0.6.2"

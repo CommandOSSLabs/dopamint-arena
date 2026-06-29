@@ -31,6 +31,20 @@ export function blake2b256(data: Uint8Array): Uint8Array {
   return blake2b(data, { dkLen: 32 });
 }
 
+/**
+ * `n` cryptographically-secure random bytes from the platform CSPRNG
+ * (`globalThis.crypto.getRandomValues`, present in browsers and Node >= 19). Use this — NEVER a
+ * `Math.random`-backed `() => number` — for commit-reveal secrets and salts that an adversary
+ * must not be able to predict or brute-force. Throws if no secure RNG is available.
+ */
+export function randomBytes(n: number): Uint8Array {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (!c?.getRandomValues) {
+    throw new Error("no secure RNG (globalThis.crypto.getRandomValues) available");
+  }
+  return c.getRandomValues(new Uint8Array(n));
+}
+
 export interface KeyPair {
   /** 32-byte ed25519 secret seed. */
   secretKey: Uint8Array;

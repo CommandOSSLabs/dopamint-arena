@@ -32,7 +32,16 @@ export function RegisterEnokiWallets() {
       apiKey: ENOKI_API_KEY,
       providers: {
         // Google is the only provider we expose; add facebook/twitch here to widen it.
-        google: { clientId: GOOGLE_CLIENT_ID },
+        google: {
+          clientId: GOOGLE_CLIENT_ID,
+          // Pin the OAuth redirect to the origin root. Enoki otherwise defaults to
+          // window.location.href (minus only the #hash), so signing in from a URL with
+          // a query — e.g. /?section=chat — sends redirect_uri=…/?section=chat, which
+          // is not (and cannot be) an authorized Google redirect URI and 400s. The
+          // origin root is stable across pages and adapts per environment (dev/prod/
+          // localhost); register this exact value in the Google OAuth client + Enoki Portal.
+          redirectUrl: `${window.location.origin}/`,
+        },
       },
       client,
       network,

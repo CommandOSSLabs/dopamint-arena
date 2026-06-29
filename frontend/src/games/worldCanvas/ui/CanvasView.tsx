@@ -1,20 +1,20 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import { useWorldCanvasOnchain } from "../useWorldCanvasOnchain";
 import { WorldCanvas } from "./WorldCanvas";
 import {
   FloatingToolbar,
-  ArenaControl,
   AutoToggle,
-  LiveReadout,
   MostPainted,
   type ToolId,
 } from "./FloatingToolbar";
-import { WC, FONT_DISPLAY, ERASER_COLOR } from "./tokens";
-
-/** Below this container width the centered toolbar and the top-right arena cluster can't
- *  float side-by-side without overlapping, so they reflow into a stacked top bar instead:
- *  the Auto pill stays top-right, the toolbar + live readout each get their own row. */
-const STACK_WIDTH = 1120;
+import { WC, ERASER_COLOR } from "./tokens";
 
 /** Below this width the full 9-swatch palette no longer fits one row, so it collapses to a
  *  single current-color swatch + popover (keeping the toolbar to one tidy row). */
@@ -32,26 +32,46 @@ const CANVAS_BACKGROUND = "#ffffff";
  * Every painted cell is one co-signed off-chain move on the ONE strictly-2-party tunnel;
  * free/draw, so the only score is who painted the most.
  */
-export function CanvasView() {
-  const engine = useWorldCanvasOnchain();
+export function CanvasView({
+  onHome,
+  movesPerGame,
+}: {
+  onHome: () => void;
+  movesPerGame: number;
+}) {
   const [tool, setTool] = useState<ToolId>("draw");
   const [color, setColor] = useState(13); // Sui blue
   const [brushSize, setBrushSize] = useState(1);
+  // Feed the toolbar's color to the engine so the BOTS paint in your selected color too
+  // (you set the palette; they follow while they draw). `movesPerGame` is the lobby-chosen
+  // per-game settle cap (the canvas wipes + the tunnel settles at this many paints).
+  const engine = useWorldCanvasOnchain({ botColor: color, movesPerGame });
+
+  // Shared arcade-cabinet seam (Desktop wraps every window in <GameCabinet>). The shell owns
+  // hover → pause → "Play vs Bot" overlay; here we map the verbs onto the canvas engine.
+  // Offerable only while the bots auto-paint (engine.auto); take-over hands seat A to the human
+  // (Auto off → you paint vs the seat-B bot on the same tunnel). Verbs are stable (engine
+  // callbacks + onHome are useCallback'd), so the controller rebuilds only when `auto` flips.
+  const goManual = useCallback(() => engine.setAuto(false), [engine.setAuto]);
+  useSoloCabinet({
+    offerable: engine.auto,
+    pause: engine.pauseAgents,
+    resume: engine.resumeAgents,
+    goManual,
+    goHome: onHome,
+  });
 
   // The canvas lives inside a freely-resizable window, so responsiveness keys off the
   // CONTAINER (not the viewport): a ResizeObserver flips the layout flags only when the
   // width crosses a breakpoint, so it never re-renders per resize pixel.
   const rootRef = useRef<HTMLDivElement>(null);
-  const [stacked, setStacked] = useState(false);
   const [collapse, setCollapse] = useState(false);
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? el.clientWidth;
-      const nextStacked = width < STACK_WIDTH;
       const nextCollapse = width < COLLAPSE_WIDTH;
-      setStacked((prev) => (prev === nextStacked ? prev : nextStacked));
       setCollapse((prev) => (prev === nextCollapse ? prev : nextCollapse));
     });
     observer.observe(el);
@@ -74,7 +94,7 @@ export function CanvasView() {
       onColor={setColor}
       brushSize={brushSize}
       onBrushSize={setBrushSize}
-      stacked={stacked}
+      stacked
       collapse={collapse}
     />
   );
@@ -87,12 +107,12 @@ export function CanvasView() {
         position: "relative",
         overflow: "hidden",
         background: WC.bg,
-        fontFamily: FONT_DISPLAY,
       }}
     >
       <WorldCanvas
         paints={engine.paints}
         revision={engine.revision}
+        generation={engine.game}
         selectedColor={effectiveColor}
         brushSize={brushSize}
         panOnly={panOnly}
@@ -105,74 +125,47 @@ export function CanvasView() {
         erasing={tool === "erase"}
       />
 
-      {/* Stacked (narrower than the wide floating layout fits): the Auto toggle stays a
-          compact pill top-right (clearing the back button top-left), while the toolbar and
-          the live readout each take their OWN row below — nothing overlaps. Wide: the
-          toolbar floats top-center and the arena cluster floats top-right. */}
-      {stacked ? (
-        <>
-          <div style={autoTogglePinStyle}>
-            <AutoToggle auto={engine.auto} onToggleAuto={engine.toggleAuto} />
-          </div>
-          <div style={compactTopBarStyle}>
-            {toolbar}
-            <div style={compactReadoutSlotStyle}>
-              <LiveReadout
-                auto={engine.auto}
-                tps={tps}
-                onViewNext={engine.viewNextAgent}
-                centered
-              />
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          {toolbar}
-          <ArenaControl
-            auto={engine.auto}
-            tps={tps}
-            onToggleAuto={engine.toggleAuto}
-            onViewNext={engine.viewNextAgent}
-          />
-        </>
-      )}
+      {/* Toolbar top-left (right of the window-owned "← Menu"); the Auto toggle is a small
+          pill pinned to the top-RIGHT corner — same height as the toolbar, not a wide box.
+          The live TPS · View readout lives in the Most-painted card (bottom-right). */}
+      <div style={topBarStyle}>{toolbar}</div>
+      <div style={autoCornerStyle}>
+        <AutoToggle auto={engine.auto} onToggleAuto={engine.toggleAuto} />
+      </div>
 
-      <MostPainted painters={engine.painters} />
+      <MostPainted
+        painters={engine.painters}
+        tps={tps}
+        auto={engine.auto}
+        onViewPainter={engine.focusOnAgent}
+      />
     </div>
   );
 }
 
-/** Narrow-width Auto pill anchor: top-right, on the same row as the (window-owned) back
- *  button at top-left — opposite corners, so they never collide. */
-const autoTogglePinStyle: CSSProperties = {
+/** The top-left control cluster — a click-through column anchored right of the window-owned
+ *  "← Menu" (top-left). The toolbar is its only child now (the Auto toggle moved to the
+ *  top-right corner), so it just sizes to the toolbar. Click-through; the island sets its own
+ *  pointer-events so painting/panning under it still works. */
+const topBarStyle: CSSProperties = {
   position: "absolute",
   top: 14,
-  right: 14,
-  zIndex: 61,
-  pointerEvents: "auto",
-};
-
-/** The narrow-width top bar: a click-through column anchored below the back-button / Auto
- *  row that stacks the toolbar over the live readout, centered, so each owns its own row
- *  and stays fully on-screen. Its panels re-enable pointer events; gaps pass to the wall. */
-const compactTopBarStyle: CSSProperties = {
-  position: "absolute",
-  top: 60,
-  left: 8,
-  right: 8,
+  left: 112,
   zIndex: 60,
   display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 8,
+  width: "fit-content",
+  maxWidth: "calc(100% - 126px)", // never overflow the window (126 = 112 left + 14 right gutter)
   pointerEvents: "none",
 };
 
-/** Re-enable pointer events on the readout row inside the click-through top bar. */
-const compactReadoutSlotStyle: CSSProperties = {
-  maxWidth: "100%",
-  pointerEvents: "auto",
+/** The Auto toggle, pinned to the top-RIGHT corner as a small pill (same height as the
+ *  toolbar) — not stretched under it. Click-through wrapper; the button catches its own events. */
+const autoCornerStyle: CSSProperties = {
+  position: "absolute",
+  top: 14,
+  right: 14,
+  zIndex: 60,
+  pointerEvents: "none",
 };
 
 /** Derive a live throughput number from the monotonic co-signed paint count via a

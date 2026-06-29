@@ -10,6 +10,9 @@ pub struct AppState {
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
     pub settler: crate::sui::SuiSettler,
+    /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
+    /// `settler` as the fallback. `None` = settler-only.
+    pub enoki: Option<crate::enoki::EnokiClient>,
     pub walrus: crate::walrus::WalrusClient,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
     pub ollama: crate::ollama::OllamaClient,
@@ -56,10 +59,11 @@ impl AppState {
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
             settler: crate::sui::SuiSettler::noop(),
+            enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
-                "qwen2.5:1.8b".into(),
+                "qwen2.5:1.5b".into(),
             )
             .expect("test ollama client"),
             stats_tx,

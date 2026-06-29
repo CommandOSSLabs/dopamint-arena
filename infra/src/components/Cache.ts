@@ -23,8 +23,8 @@ export function createCache(
     {
       description: "Pub/Sub Valkey for TPS stream",
       engine: "valkey",
-      engineVersion: "7.2",
-      parameterGroupName: "default.valkey7",
+      engineVersion: "9.0",
+      parameterGroupName: "default.valkey9",
       nodeType: args.nodeType,
       numCacheClusters: 2,
       automaticFailoverEnabled: true,
@@ -40,8 +40,8 @@ export function createCache(
     {
       description: "Cache Valkey for sessions and counters",
       engine: "valkey",
-      engineVersion: "7.2",
-      parameterGroupName: "default.valkey7",
+      engineVersion: "9.0",
+      parameterGroupName: "default.valkey9",
       nodeType: args.nodeType,
       numCacheClusters: 2,
       automaticFailoverEnabled: true,

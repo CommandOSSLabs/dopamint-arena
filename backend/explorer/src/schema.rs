@@ -1,5 +1,5 @@
 diesel::table! {
-    settlement (tx_digest) {
+    settlement (tx_digest, tunnel_id) {
         tx_digest -> Text,
         kind -> Text,
         tunnel_id -> Text,

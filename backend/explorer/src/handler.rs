@@ -8,9 +8,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use diesel::pg::Pg;
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Nullable, Text};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use fred::prelude::*;
 use sui_indexer_alt_framework::pipeline::Processor;
 use sui_indexer_alt_framework::postgres::handler::Handler;
@@ -166,6 +167,38 @@ impl Processor for SettlementPipeline {
     }
 }
 
+/// Batch-upsert lifecycle rows. Extracted from `commit` so the DB integration test exercises the
+/// exact production statement (same ON CONFLICT target the indexer runs). Generic over the
+/// connection so both the framework's `Connection` and a plain `AsyncPgConnection` (tests) drive it.
+pub async fn upsert_settlement_batch<C>(
+    values: &[StoredSettlement],
+    conn: &mut C,
+) -> diesel::QueryResult<usize>
+where
+    C: AsyncConnection<Backend = Pg>,
+{
+    diesel::insert_into(settlement::table)
+        .values(values)
+        .on_conflict((settlement::tx_digest, settlement::tunnel_id))
+        .do_update()
+        .set((
+            settlement::party_a_addr.eq(diesel::dsl::sql::<Nullable<Text>>(
+                "COALESCE(settlement.party_a_addr, EXCLUDED.party_a_addr)",
+            )),
+            settlement::party_b_addr.eq(diesel::dsl::sql::<Nullable<Text>>(
+                "COALESCE(settlement.party_b_addr, EXCLUDED.party_b_addr)",
+            )),
+            settlement::proof_url.eq(diesel::dsl::sql::<Nullable<Text>>(
+                "COALESCE(settlement.proof_url, EXCLUDED.proof_url)",
+            )),
+            settlement::walrus_blob_id.eq(diesel::dsl::sql::<Nullable<Text>>(
+                "COALESCE(settlement.walrus_blob_id, EXCLUDED.walrus_blob_id)",
+            )),
+        ))
+        .execute(conn)
+        .await
+}
+
 #[async_trait]
 impl Handler for SettlementPipeline {
     async fn commit<'a>(
@@ -176,26 +209,7 @@ impl Handler for SettlementPipeline {
         // (addresses + proof fields) are COALESCE-preserved so re-decoding never clobbers
         // values filled in by a later open-row commit or the /settle path. Balances/nonce/
         // root are deterministic from BCS, so unmentioned columns safely retain their value.
-        let inserted = diesel::insert_into(settlement::table)
-            .values(values)
-            .on_conflict(settlement::tx_digest)
-            .do_update()
-            .set((
-                settlement::party_a_addr.eq(diesel::dsl::sql::<Nullable<Text>>(
-                    "COALESCE(settlement.party_a_addr, EXCLUDED.party_a_addr)",
-                )),
-                settlement::party_b_addr.eq(diesel::dsl::sql::<Nullable<Text>>(
-                    "COALESCE(settlement.party_b_addr, EXCLUDED.party_b_addr)",
-                )),
-                settlement::proof_url.eq(diesel::dsl::sql::<Nullable<Text>>(
-                    "COALESCE(settlement.proof_url, EXCLUDED.proof_url)",
-                )),
-                settlement::walrus_blob_id.eq(diesel::dsl::sql::<Nullable<Text>>(
-                    "COALESCE(settlement.walrus_blob_id, EXCLUDED.walrus_blob_id)",
-                )),
-            ))
-            .execute(conn)
-            .await?;
+        let inserted = upsert_settlement_batch(values, conn).await?;
 
         // 2. Address enrichment (order-independent). A settled row (close tx) carries balances but
         // NO party addresses; those live on the opened row (TunnelCreated) — a different tx_digest

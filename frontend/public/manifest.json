@@ -1,21 +1,26 @@
 {
-  "name": "Blackjack",
-  "short_name": "Blackjack",
-  "description": "A luxury Blackjack game built on Vite",
+  "name": "MillionsTPS",
+  "short_name": "MillionsTPS",
+  "description": "Wallet-gated desktop of self-playing tunnel games on Sui",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#032f14",
-  "theme_color": "#074c24",
+  "background_color": "#0C0F1D",
+  "theme_color": "#0C0F1D",
   "icons": [
     {
-      "src": "/blackjack-logo-gold.svg",
-      "sizes": "192x192",
+      "src": "/favicons/favicon.svg",
+      "sizes": "any",
       "type": "image/svg+xml"
     },
     {
-      "src": "/blackjack-logo-gold.svg",
+      "src": "/favicons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicons/favicon-512.png",
       "sizes": "512x512",
-      "type": "image/svg+xml"
+      "type": "image/png"
     }
   ]
 }

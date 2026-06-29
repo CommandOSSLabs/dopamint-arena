@@ -17,12 +17,10 @@ function clearPulumiConfig() {
 const baseConfig: Record<string, string> = {
   "dopamint:environment": "test",
   "dopamint:domain": "test.example",
+  "dopamint:backend-domain": "api.test.example",
   "dopamint:db-instance-class": "db.t3.medium",
   "dopamint:db-serverless": "false",
   "dopamint:cache-node-type": "cache.t3.micro",
-  "dopamint:benchmark-instance-type": "t3.micro",
-  "dopamint:benchmark-min-size": "0",
-  "dopamint:benchmark-max-size": "1",
 };
 
 describe("config", () => {
@@ -40,12 +38,10 @@ describe("config", () => {
 
     assert.strictEqual(cfg.environment, "test");
     assert.strictEqual(cfg.domain, "test.example");
+    assert.strictEqual(cfg.backendDomain, "api.test.example");
     assert.strictEqual(cfg.dbInstanceClass, "db.t3.medium");
     assert.strictEqual(cfg.dbServerless, false);
     assert.strictEqual(cfg.cacheNodeType, "cache.t3.micro");
-    assert.strictEqual(cfg.benchmarkInstanceType, "t3.micro");
-    assert.strictEqual(cfg.benchmarkMinSize, 0);
-    assert.strictEqual(cfg.benchmarkMaxSize, 1);
     assert.strictEqual(cfg.backendImageTag, "test-sha");
   });
 
@@ -55,14 +51,6 @@ describe("config", () => {
     const cfg = getConfig();
 
     assert.strictEqual(cfg.backendImageTag, undefined);
-  });
-
-  it("applies the benchmark image version default", () => {
-    setPulumiConfig(baseConfig);
-
-    const cfg = getConfig();
-
-    assert.strictEqual(cfg.benchmarkImageVersion, "1.0.1");
   });
 
   // The settler key is sourced from secret config (never hardcoded), so it can be

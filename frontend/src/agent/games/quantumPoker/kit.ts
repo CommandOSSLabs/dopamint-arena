@@ -12,10 +12,7 @@ import {
 } from "sui-tunnel-ts/protocol/quantumPokerPersona";
 import { defaultStateHash } from "@/agent/stateHash";
 import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
-import {
-  POKER_ANTE,
-  QUANTUM_POKER_HAND_CAP,
-} from "@/games/quantumPoker/constants";
+import { QUANTUM_POKER_HAND_CAP } from "@/games/quantumPoker/constants";
 
 const DEFAULT_QUANTUM_POKER_BOT_PROFILE: QuantumPokerBotProfile = {
   name: "Vale",
@@ -85,7 +82,7 @@ export function createQuantumPokerKit(
   handCap: bigint = QUANTUM_POKER_HAND_CAP,
   config: QuantumPokerBotConfig = {},
 ): GameKit<PokerState, PokerMove> {
-  const protocol = new QuantumPokerProtocol(handCap, POKER_ANTE);
+  const protocol = new QuantumPokerProtocol(handCap);
 
   return {
     id: "quantum-poker",

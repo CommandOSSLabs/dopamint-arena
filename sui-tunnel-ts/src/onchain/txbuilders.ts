@@ -403,15 +403,35 @@ export function buildWithdrawTimeout(
   tx.transferObjects([coin], tx.pure.address(p.recipient));
 }
 
-/** Attach a single external-referee address (only while CREATED). */
+/**
+ * Attach a single external-referee address (only while CREATED). BOTH parties must co-sign the
+ * referee assignment, so a referee can no longer be installed unilaterally (which previously let
+ * one party self-assign and drain the tunnel). Build `sigA`/`sigB` by signing the message from
+ * `wire.serializeRefereeAssignment(tunnelId, referee)` with each party's tunnel key, e.g.:
+ *
+ *   const msg = serializeRefereeAssignment(tunnelId, referee);
+ *   const sigA = sign(msg, partyASecretKey);   // core/crypto `sign`
+ *   const sigB = sign(msg, partyBSecretKey);
+ *   buildSetReferee(tx, { tunnelId, referee, sigA, sigB });
+ */
 export function buildSetReferee(
   tx: Transaction,
-  p: { tunnelId: string; referee: string } & WithCoinType
+  p: {
+    tunnelId: string;
+    referee: string;
+    sigA: Uint8Array;
+    sigB: Uint8Array;
+  } & WithCoinType
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_set_referee"),
     typeArguments: [p.coinType ?? SUI_COIN_TYPE],
-    arguments: [tx.object(p.tunnelId), tx.pure.address(p.referee)],
+    arguments: [
+      tx.object(p.tunnelId),
+      tx.pure.address(p.referee),
+      tx.pure.vector("u8", Array.from(p.sigA)),
+      tx.pure.vector("u8", Array.from(p.sigB)),
+    ],
   });
 }
 

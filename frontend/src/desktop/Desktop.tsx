@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -9,7 +9,6 @@ import { ChevronDown, Eye, Plus, X } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 
 import "../games"; // register all game modules (side-effect import)
-import { GameIcon } from "../games/GameIcon";
 import { get, listByWorkspace } from "../games/registry";
 import type { GameModule, Workspace } from "../games/types";
 import { Button } from "@/components/ui/button";
@@ -45,12 +44,6 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { disposeWindow } from "@/lib/windowSessions";
-import {
-  forgetWindow,
-  lastActiveGame,
-  markWindowActive,
-  resolveWindowId,
-} from "@/lib/activeWindows";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
@@ -61,8 +54,11 @@ import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
-import { GameCabinet } from "@/shell/cabinet/GameCabinet";
-import { MobileArena } from "./MobileArena";
+import { GameContent } from "./GameContent";
+import { GameTpsBadge } from "./GameTpsBadge";
+import { OverviewFloor, type OverviewGroup } from "./OverviewFloor";
+import { MobileFloor } from "./MobileFloor";
+import { MobileAddSheet } from "./MobileAddSheet";
 import { AddAppDialog } from "./AddAppDialog";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import type { MobileSection } from "./AppShell";
@@ -202,7 +198,7 @@ function Dock({ side }: { side: DockSide }) {
   if (side === "right") {
     return (
       <div className="flex h-full flex-col gap-2 overflow-y-auto p-2">
-        <SystemDashboard snapshot={snapshot} />
+        <SystemDashboard />
         <TpsChart snapshot={snapshot} />
         <LiveTransactionsFeed snapshot={snapshot} className="min-h-72 flex-1" />
         <LocalTransactionsFeed
@@ -217,7 +213,7 @@ function Dock({ side }: { side: DockSide }) {
     <ResizablePanelGroup orientation="horizontal" className="h-full p-2">
       <ResizablePanel defaultSize="32%" minSize="15%" className="min-w-0">
         <div className="flex h-full flex-col gap-2 overflow-y-auto">
-          <SystemDashboard snapshot={snapshot} />
+          <SystemDashboard />
           <TpsChart snapshot={snapshot} />
         </div>
       </ResizablePanel>
@@ -314,34 +310,6 @@ function MacDock({
   );
 }
 
-/**
- * The game's content subtree (cabinet shell + the game's own Window), isolated in a
- * memo so a floor re-render — dragging another window, a telemetry tick — does NOT
- * re-render every game. Props are stable per window (a game id, a window id, and the
- * stable `close`), so React.memo bails unless THIS window actually changes. Defined at
- * module level so its component identity is stable; defining it inside ArenaView would
- * remount the subtree every render and drop the game's in-React state.
- */
-const GameContent = memo(function GameContent({
-  gameId,
-  windowId,
-  onClose,
-}: {
-  gameId: string;
-  windowId: string;
-  onClose: (id: string) => void;
-}) {
-  const mod = get(gameId);
-  const close = useCallback(() => onClose(windowId), [onClose, windowId]);
-  if (!mod) return null;
-  const Content = mod.Window;
-  return (
-    <GameCabinet>
-      <Content windowId={windowId} onClose={close} />
-    </GameCabinet>
-  );
-});
-
 /** Phone "Live" section: stats + activity merged into one scroll (desktop keeps these
  *  in the persistent bottom dock). Owns its telemetry subscription so a snapshot tick
  *  re-renders only this panel, never the arena floor. */
@@ -349,7 +317,7 @@ function MobileLive() {
   const { snapshot } = useTelemetry();
   return (
     <div className="flex flex-col gap-2 p-2">
-      <SystemDashboard snapshot={snapshot} />
+      <SystemDashboard />
       <TpsChart snapshot={snapshot} />
       <LiveTransactionsFeed snapshot={snapshot} className="min-h-96" />
       <LocalTransactionsFeed snapshot={snapshot} className="min-h-96" />
@@ -441,29 +409,10 @@ export function ArenaView() {
     "mtps.desktop.dockSide.v1",
     "bottom",
   );
+  // The phone (< lg) renders the same per-workspace floor as the desktop — every
+  // window, vertically scrolled — so the breakpoint just reskins one floor instead of
+  // tearing background sessions down for a one-game picker.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
-  // Detect a desktop→mobile reflow so the phone resumes the game you were just playing
-  // (a session-backed game continues across the breakpoint); a tab tap, by contrast,
-  // keeps `isDesktop` false and lands on the picker.
-  const wasDesktop = useRef(isDesktop);
-  const resumeOnMobile = wasDesktop.current && !isDesktop;
-  useEffect(() => {
-    wasDesktop.current = isDesktop;
-  }, [isDesktop]);
-  // On mobile, only the resumed game is on screen — but every other floor window's
-  // session (bots, sockets, timers) keeps running off-screen. Tear them all down except
-  // the active one so the phone isn't paying for a dozen background games. They re-seed
-  // fresh when you reflow back to the desktop floor.
-  useEffect(() => {
-    if (isDesktop) return;
-    const keep = resolveWindowId(lastActiveGame() ?? "");
-    const ids = [
-      ...Object.values(layouts).flatMap((ws) => ws.map((w) => w.id)),
-      ...Object.values(hiddens).flatMap((ws) => Object.keys(ws)),
-      ...Object.values(floatings).flatMap((ws) => Object.keys(ws)),
-    ];
-    for (const id of ids) if (id !== keep) disposeWindow(id);
-  }, [isDesktop, layouts, hiddens, floatings]);
   // Dock collapse — a no-drag alternative to the resize handle.
   const bottomRef = useRef<PanelImperativeHandle>(null);
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
@@ -496,13 +445,60 @@ export function ArenaView() {
   const close = useCallback(
     (id: string) => {
       disposeWindow(id); // tear down the game's live session (sockets, timers)
-      forgetWindow(id); // stop the phone resuming this now-dead instance
       setLayout((cur) => tile(cur.filter((w) => w.id !== id)));
       setHidden((h) => dropKey(h, id));
       setFloating((f) => dropKey(f, id));
     },
     [setLayout, setHidden, setFloating],
   );
+
+  // Close-by-id scoped to a given workspace (not just the active floor). The overview
+  // floor mounts windows from every workspace at once, so its tiles must close into the
+  // right floor's stores. Mirrors `close`, keyed by `ws` instead of `floorWs`.
+  const closeInWorkspace = useCallback(
+    (ws: Workspace, id: string) => {
+      disposeWindow(id);
+      setLayouts((prev) => ({
+        ...prev,
+        [ws]: tile(prev[ws].filter((w) => w.id !== id)),
+      }));
+      setHiddens((prev) => ({ ...prev, [ws]: dropKey(prev[ws], id) }));
+      setFloatings((prev) => ({ ...prev, [ws]: dropKey(prev[ws], id) }));
+    },
+    [setLayouts, setHiddens, setFloatings],
+  );
+  // Stable per-workspace closers so the overview tiles' GameContent memo holds across
+  // ArenaView re-renders (a changing onClose would re-mount every game each render).
+  const closeGames = useCallback(
+    (id: string) => closeInWorkspace("games", id),
+    [closeInWorkspace],
+  );
+  const closePayment = useCallback(
+    (id: string) => closeInWorkspace("payment", id),
+    [closeInWorkspace],
+  );
+  const closeChat = useCallback(
+    (id: string) => closeInWorkspace("chat", id),
+    [closeInWorkspace],
+  );
+  // The overview's groups: every workspace's open windows (tiled + minimized + floating).
+  // A window lives in exactly one of the three stores, so concatenating their ids per
+  // workspace lists each instance once.
+  const idsFor = (ws: Workspace) => [
+    ...layouts[ws].map((w) => w.id),
+    ...Object.keys(hiddens[ws]),
+    ...Object.values(floatings[ws]).map((f) => f.item.id),
+  ];
+  const overviewGroups: OverviewGroup[] = [
+    { ws: "games", label: "Game", ids: idsFor("games"), onClose: closeGames },
+    {
+      ws: "payment",
+      label: "Payment",
+      ids: idsFor("payment"),
+      onClose: closePayment,
+    },
+    { ws: "chat", label: "Chat", ids: idsFor("chat"), onClose: closeChat },
+  ];
 
   // Minimize → fly into the dock, hide off the floor (keeping geometry), re-tile.
   const hide = (id: string) => {
@@ -624,7 +620,6 @@ export function ArenaView() {
 
   // --- Floating (maximized) windows -------------------------------------
   const focusFloat = (id: string) => {
-    markWindowActive(id);
     floatZ.current += 1;
     const z = floatZ.current;
     setFloating((f) => (f[id] ? { ...f, [id]: { ...f[id], z } } : f));
@@ -832,7 +827,7 @@ export function ArenaView() {
   // The floor's tools now live in the workspace tab bar (top), so the floor stays clear.
   const workspaceTabs = (
     <WorkspaceTabs
-      active={floorWs}
+      active={section}
       dockSide={dockSide}
       onAdd={() => setAddOpen(true)}
       onArrange={arrange}
@@ -881,7 +876,6 @@ export function ArenaView() {
         onLayoutChange={(next) =>
           setLayout(next.filter((w) => !hidden[w.id] && !floating[w.id]))
         }
-        onActivate={markWindowActive}
         breakpoints={BREAKPOINTS}
         rowHeight={72}
         styleOverride={styleFor}
@@ -892,7 +886,7 @@ export function ArenaView() {
           const win = (
             <GameWindow
               title={mod.name}
-              icon={<GameIcon game={mod} className="size-5" />}
+              icon={<GameTpsBadge gameId={gameOf(item.id)} />}
               domId={item.id}
               dragHandleProps={
                 fl ? floatDragProps(item.id) : handle.dragHandleProps
@@ -956,6 +950,16 @@ export function ArenaView() {
     </div>
   );
 
+  // The "All" floor swaps in for the per-workspace floor but keeps the same dock/panel
+  // chrome around it (it's just another floor, grouped). Rendered exclusively, so games
+  // mount once even though their real window ids are reused here.
+  const activeFloor =
+    section === "all" ? (
+      <OverviewFloor groups={overviewGroups} onOpenWorkspace={goToSection} />
+    ) : (
+      floorArea
+    );
+
   const collapseRotate =
     dockSide === "bottom"
       ? bottomCollapsed
@@ -1006,7 +1010,7 @@ export function ArenaView() {
                   minSize="20%"
                   className="min-h-0"
                 >
-                  {floorArea}
+                  {activeFloor}
                 </ResizablePanel>
                 <ResizableHandle>{collapseButton}</ResizableHandle>
                 <ResizablePanel
@@ -1030,7 +1034,7 @@ export function ArenaView() {
                   minSize="35%"
                   className="min-w-0"
                 >
-                  {floorArea}
+                  {activeFloor}
                 </ResizablePanel>
                 <ResizableHandle>{collapseButton}</ResizableHandle>
                 <ResizablePanel
@@ -1047,36 +1051,45 @@ export function ArenaView() {
             )}
           </div>
         </div>
-      ) : (
+      ) : section === "live" ? (
         <main className="h-full overflow-auto">
-          {/* Key by workspace so each tab is a fresh picker — switching never carries
-              the previous tab's open app over. `autoResume` continues the game across a
-              desktop→mobile reflow. */}
-          {section === "payment" ? (
-            <MobileArena
-              key="payment"
-              workspace="payment"
-              autoResume={resumeOnMobile}
-            />
-          ) : section === "chat" ? (
-            <MobileArena
-              key="chat"
-              workspace="chat"
-              autoResume={resumeOnMobile}
-            />
-          ) : section === "live" ? (
-            <MobileLive />
-          ) : (
-            <MobileArena
-              key="games"
-              workspace="games"
-              autoResume={resumeOnMobile}
-            />
-          )}
+          <MobileLive />
+        </main>
+      ) : section === "all" ? (
+        <main className="h-full min-h-0">
+          <OverviewFloor
+            groups={overviewGroups}
+            onOpenWorkspace={goToSection}
+          />
+        </main>
+      ) : (
+        // The phone floor: the on-screen workspace's windows scrolled vertically, each
+        // auto-playing — the same per-workspace store as the desktop floor. Keyed by
+        // `floorWs` so switching tabs mounts that floor's own windows fresh.
+        <main className="h-full min-h-0">
+          <MobileFloor
+            key={floorWs}
+            items={layout}
+            workspace={floorWs}
+            onClose={close}
+            onAdd={() => setAddOpen(true)}
+          />
         </main>
       )}
 
-      <AddAppDialog open={addOpen} onOpenChange={setAddOpen} onOpen={openApp} />
+      {isDesktop ? (
+        <AddAppDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          onOpen={openApp}
+        />
+      ) : (
+        <MobileAddSheet
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          onOpen={openApp}
+        />
+      )}
 
       <Dialog open={resetOpen} onOpenChange={setResetOpen}>
         <DialogContent className="max-w-sm">

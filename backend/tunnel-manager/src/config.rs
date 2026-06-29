@@ -14,8 +14,19 @@
 pub struct Config {
     pub bind_addr: String,
     pub coin_type: String,
+    /// Sui network for Enoki sponsorship (`testnet`/`mainnet`/`devnet`), default `testnet`. Must
+    /// match the network `ENOKI_API_KEY` is provisioned for. NOTE: the settler fallback's chain
+    /// digest is hard-coded testnet (`sui.rs`), so leave this `testnet` until that is config-driven.
+    pub sui_network: String,
+    /// Enoki PRIVATE api key (`enoki_private_…`). When set, Enoki is the primary gas sponsor and the
+    /// settler is the fallback; unset disables Enoki entirely (settler-only). Distinct from the
+    /// frontend's PUBLIC `VITE_ENOKI_API_KEY` (zkLogin wallet).
+    pub enoki_api_key: Option<String>,
     pub sui_rpc_url: Option<String>,
     pub package_id: Option<String>,
+    /// Slim example-app packages — when set, their ops become gas-sponsorable.
+    pub agent_allowance_package_id: Option<String>,
+    pub streaming_payment_package_id: Option<String>,
     pub settler_key: Option<String>, // base64 ed25519 secret of the gas/settler account
     /// The MTPS `AdminCap` object id (ADR-0015), owned by the settler/deploy address. Required by
     /// the faucet endpoints: `admin_mint` takes it as a `&mut` owned input. Unset = faucet disabled
@@ -54,8 +65,12 @@ impl Config {
             bind_addr: std::env::var("TUNNEL_MANAGER_ADDR")
                 .unwrap_or_else(|_| "0.0.0.0:8080".into()),
             coin_type: std::env::var("TUNNEL_COIN_TYPE").unwrap_or_else(|_| "0x2::sui::SUI".into()),
+            sui_network: std::env::var("SUI_NETWORK").unwrap_or_else(|_| "testnet".into()),
+            enoki_api_key: opt("ENOKI_API_KEY"),
             sui_rpc_url: opt("SUI_RPC_URL"),
             package_id: opt("TUNNEL_PACKAGE_ID"),
+            agent_allowance_package_id: opt("AGENT_ALLOWANCE_PACKAGE_ID"),
+            streaming_payment_package_id: opt("STREAMING_PAYMENT_PACKAGE_ID"),
             settler_key: opt("SUI_SETTLER_KEY"),
             mtps_admin_cap_id: opt("MTPS_ADMIN_CAP_ID"),
             faucet_user_amount: std::env::var("FAUCET_USER_AMOUNT")
@@ -127,6 +142,17 @@ mod tests {
         assert!(c.sui_rpc_url.is_none());
     }
 
+    // Enoki is optional-with-fallback: a deploy without ENOKI_API_KEY boots settler-only, and
+    // SUI_NETWORK defaults to testnet so the chain matches the hard-coded settler digest.
+    #[test]
+    fn from_env_defaults_network_and_leaves_enoki_unset() {
+        std::env::remove_var("SUI_NETWORK");
+        std::env::remove_var("ENOKI_API_KEY");
+        let c = Config::from_env().unwrap();
+        assert_eq!(c.sui_network, "testnet");
+        assert!(c.enoki_api_key.is_none());
+    }
+
     #[test]
     fn from_env_reads_redis_and_instance() {
         std::env::set_var("REDIS_CACHE_URL", "rediss://cache:6379");
@@ -181,9 +207,9 @@ mod tests {
         let _url = EnvGuard("OLLAMA_URL");
         let _model = EnvGuard("OLLAMA_MODEL");
         std::env::set_var("OLLAMA_URL", "http://ollama:11434");
-        std::env::set_var("OLLAMA_MODEL", "qwen2.5:1.8b");
+        std::env::set_var("OLLAMA_MODEL", "qwen2.5:1.5b");
         let c = Config::from_env().unwrap();
         assert_eq!(c.ollama_url.as_deref(), Some("http://ollama:11434"));
-        assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.8b"));
+        assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.5b"));
     }
 }

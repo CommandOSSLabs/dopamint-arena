@@ -7,6 +7,11 @@ import {
   PanelHeader,
   PanelTitle,
 } from "@/components/ui/panel";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
+import { useSampledRate } from "@/telemetry/useSampledRate";
+import { fmtTps } from "@/lib/formatTps";
+import { LiveBadge, OfflineBadge } from "./atoms";
 import type { TelemetrySnapshot } from "./types";
 
 const BARS = 36; // one bar per second → ~36s of history across the chart
@@ -34,14 +39,23 @@ export function TpsChart({
   snapshot: TelemetrySnapshot;
   className?: string;
 }) {
+  const { status, backend, getGamesTotal } = useTelemetry();
+  const isLive = status === "live" && backend !== null;
   const tps = Math.round(snapshot.rate.updatesPerSec);
-  // Latest normalized value for the animation loop, which mounts once (deps []).
+  // Real off-chain local total — the aggregate of every game's measured update rate (same
+  // source the per-window chips sum to). Null until there is genuine self-play, so the panel
+  // shows a real number in the offline demo without ever falling back to the placeholder.
+  const localTps = useSampledRate(getGamesTotal);
+  // Latest normalized value for the animation loop. The effect re-runs when `isLive` flips so
+  // the canvas (only mounted while live) gets its rAF wired up the moment it appears.
   const valueRef = useRef(0);
   valueRef.current = normalize(tps);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
+    // Only animate while live — when offline the canvas isn't mounted (skeleton shown instead).
+    if (!isLive) return;
     const cv = canvasRef.current;
     const ctx = cv?.getContext("2d");
     if (!cv || !ctx) return;
@@ -118,31 +132,56 @@ export function TpsChart({
       io.disconnect();
       themeWatch.disconnect();
     };
-  }, []);
+  }, [isLive]);
 
   return (
     <Panel className={className}>
       <PanelHeader>
         <PanelTitle>Transactions / sec</PanelTitle>
-        <PanelAction>
-          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-success">
-            <span className="size-1.5 animate-pulse rounded-full bg-success" />
-            LIVE
-          </span>
-        </PanelAction>
+        <PanelAction>{isLive ? <LiveBadge /> : <OfflineBadge />}</PanelAction>
       </PanelHeader>
       <PanelContent className="flex flex-col gap-1 overflow-hidden p-3">
-        <div className="flex items-baseline gap-2">
-          <span className="wal-doto text-4xl text-primary">
-            {tps.toLocaleString("en-US")}
-          </span>
-          <span className="wal-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            tx/sec · live
-          </span>
-        </div>
-        <div className="mt-1 h-24 w-full">
-          <canvas ref={canvasRef} className="block h-full w-full" />
-        </div>
+        {isLive ? (
+          <>
+            <div className="flex items-baseline gap-2">
+              <span className="wal-doto text-4xl text-primary">
+                {tps.toLocaleString("en-US")}
+              </span>
+              <span className="wal-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                tx/sec · live
+              </span>
+            </div>
+            {localTps != null && (
+              <span className="wal-mono text-[10px] text-muted-foreground">
+                your TPS · {fmtTps(localTps)} tx/s
+              </span>
+            )}
+            <div className="mt-1 h-24 w-full">
+              <canvas ref={canvasRef} className="block h-full w-full" />
+            </div>
+          </>
+        ) : localTps != null ? (
+          // No backend, but real self-play is producing updates: show the measured local
+          // total instead of a skeleton (never the placeholder — localTps is null when idle).
+          <>
+            <div className="flex items-baseline gap-2">
+              <span className="wal-doto text-4xl text-primary">
+                {Math.round(localTps).toLocaleString("en-US")}
+              </span>
+              <span className="wal-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                tx/sec · your TPS
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              Your self-play. Connect the stats backend for the network rate.
+            </p>
+          </>
+        ) : (
+          <>
+            <Skeleton className="h-9 w-28" />
+            <Skeleton className="mt-1 h-24 w-full" />
+          </>
+        )}
       </PanelContent>
     </Panel>
   );

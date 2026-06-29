@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
  *  search param (drives the desktop workspace tabs and the phone bottom tabs).
  *  `live` is the merged stats+activity telemetry, shown only on the phone — on
  *  desktop telemetry is the persistent bottom dock. */
-export type MobileSection = "games" | "payment" | "chat" | "live";
+export type MobileSection = "games" | "payment" | "chat" | "live" | "all";
 
 // Phone bottom tabs. Arena/Payment/Chat/Live select an arena section (a search param
 // on `/`); Explorer is a sibling route. Both live in this shell so navigating to the
@@ -59,7 +59,7 @@ export function AppShell() {
       <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-b border-border bg-background/70 px-3 py-2.5 backdrop-blur-xl">
         <div className="flex items-center gap-2.5">
           <span className="wal-display text-sm sm:text-base">
-            Dopamint<span className="wal-gradient-text">Arena</span>
+            Millions<span className="wal-gradient-text">TPS</span>
           </span>
           <nav className="hidden items-center gap-1 lg:flex">
             <Link to="/" className={cn(navTab, onArena && navTabActive)}>
