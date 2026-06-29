@@ -45,17 +45,62 @@ interface SponsorResponse {
  * so the open/fund callers don't change. The PTB must fund its stake from a user coin (not the
  * gas coin) — with sponsor gas there is no gas coin to split.
  */
+// Process-wide serialization of the sponsor flow. The settler sponsors every tx with its SINGLE
+// SIP-58 gas object, so two sponsored txs in flight at once both pin that object's version and the
+// network rejects the slower one as a stale-object/equivocation. The legacy main-thread solo path
+// never hit this because all its opens coalesce into ONE sponsored tx per render tick; the worker
+// path issues each window's open independently (spread over seconds), so they overlap. Funnelling
+// every sponsor→sign→execute through one queue means request N+1's `/v1/sponsor` only runs after N
+// committed — so it always sees the gas object's fresh version. This touches only the rare
+// per-tunnel open/settle txs; off-chain hop play never sponsors, so move throughput is unaffected.
+let sponsorQueue: Promise<unknown> = Promise.resolve();
+let sponsorInFlight = 0;
+function serializeSponsoredFlow<T>(run: () => Promise<T>): Promise<T> {
+  sponsorInFlight += 1;
+  if (sponsorInFlight > 1) {
+    // Debug-level: concurrent sponsored txs ARE contending the settler's single gas object here; the
+    // queue is what serializes them so the slower one doesn't equivocate.
+    console.debug(`[sponsor-serialize] queued behind ${sponsorInFlight - 1}`);
+  }
+  // `.then(run, run)` runs regardless of the prior slot's outcome; the tail swallows errors so one
+  // failed sponsor doesn't reject the chain and wedge every later open.
+  const result = sponsorQueue.then(run, run);
+  sponsorQueue = result
+    .then(() => new Promise((r) => setTimeout(r, 1500)))
+    .catch(() => {})
+    .then(
+      () => {
+        sponsorInFlight -= 1;
+      },
+      () => {
+        sponsorInFlight -= 1;
+      },
+    );
+  return result;
+}
+
+function runSponsoredFlow(opts: {
+  tx: Transaction;
+  sender: string;
+  client: SponsorSuiClient;
+  signSponsoredBytes: (txBytes: string) => Promise<string>;
+}): Promise<{ digest: string }> {
+  return serializeSponsoredFlow(() => runSponsoredFlowOnce(opts));
+}
+
 /**
  * Core gas-sponsor flow, shared by every signer kind: build the PTB KIND → `POST /v1/sponsor` (the
  * settler wraps it in its own SIP-58 gas + dry-runs) → the sender signs the settler-returned bytes
  * (via `signSponsoredBytes`) → submit with both signatures. Signer kinds differ ONLY in step 3.
+ * Always reached through {@link serializeSponsoredFlow} so the settler's single gas object is never
+ * pinned by two in-flight txs at once.
  *
  * CRITICAL: the sender must sign the EXACT bytes the settler returned — never a rebuild. A SIP-58
  * sponsored tx carries the settler's address-balance gas with an empty `gas_payment.objects`;
  * re-running `Transaction.build` would try to resolve gas coins for the (coin-less) sender and fail
  * with a cryptic RPC "Invalid params". So `signSponsoredBytes` receives the raw base64 bytes.
  */
-async function runSponsoredFlow(opts: {
+async function runSponsoredFlowOnce(opts: {
   tx: Transaction;
   sender: string;
   client: SponsorSuiClient;
