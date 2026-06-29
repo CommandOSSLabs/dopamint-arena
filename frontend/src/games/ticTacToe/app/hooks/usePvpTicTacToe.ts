@@ -71,8 +71,9 @@ const MP_URL =
       ? location.origin
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
-// Per-seat deposit and per-game stake, mode-scaled. Both variants use the same magnitude so an
-// abandoner forfeits exactly one deposit. MTPS mode: 1 MTPS (9 decimals); SUI fallback: 1 MIST.
+// Per-seat deposit and per-game stake, mode-scaled. In MTPS mode (production path) both are
+// 1 MTPS (9 decimals), so an abandoner forfeits exactly one deposit. In the SUI dev fallback
+// the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
 const MTPS_PER_SEAT = 1_000_000_000n;
 const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
@@ -642,8 +643,9 @@ export function usePvpTicTacToe(
             buildCreateAndShareTx(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
-              // Abandonment penalty = one per-seat deposit (mode-scaled). An abandoner forfeits
-              // this at force-close (F1); Caro now stakes too, so both variants use the same value.
+              // Abandonment penalty = scaledStake (mode-scaled). In MTPS mode this equals the
+              // per-seat deposit, so an abandoner forfeits exactly one deposit at force-close (F1).
+              // In the SUI dev fallback the stake (1 MIST) is nominal, not deposit-sized.
               scaledStake,
               coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );

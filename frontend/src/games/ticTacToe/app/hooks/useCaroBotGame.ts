@@ -325,7 +325,9 @@ export function useCaroBotGame(
     // Derive mode before constructing the protocol so stakePerSeat can be passed in.
     const mtpsOn = isMtpsConfigured;
     const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : SUI_PER_SEAT;
-    const proto = new MultiGameCaroProtocol(maxGamesRef.current, N, stakePerSeat);
+    // Self-play: no abandonment risk, so stake is money-neutral (0). Passing a real
+    // stake would drain the loser to 0 after one decisive game and collapse the series.
+    const proto = new MultiGameCaroProtocol(maxGamesRef.current, N);
 
     void (async () => {
       try {
