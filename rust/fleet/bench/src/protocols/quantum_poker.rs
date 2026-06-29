@@ -1,6 +1,6 @@
 use super::{play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
-use crate::party_driver::SuiBenchContext;
+use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
 
@@ -10,7 +10,7 @@ pub(crate) fn play(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);

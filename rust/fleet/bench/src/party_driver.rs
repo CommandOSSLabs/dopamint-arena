@@ -3,12 +3,12 @@
 //! (basic-strategy bots, then an anchored cooperative settlement). `bytes`
 //! counts MOVE/ACK frame bytes only — the determinism gate (143*N / 75982*N).
 
-use crate::cli::{AnchorMode, SuiAnchorOpts, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts, TranscriptRecorderMode};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::Instant;
-use sui_tunnel_anchor::{SuiTunnelAnchor, SuiTunnelAnchorConfig};
+use sui_tunnel_anchor::{SuiSponsoredAnchor, SuiSponsoredAnchorConfig};
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
 use tunnel_blackjack::{BjMove, Blackjack, BlackjackStrategy};
 use tunnel_core::protocol_id::ProtocolId;
@@ -22,41 +22,43 @@ use tunnel_harness::{
 type Seats<P, C> = PartyRuntime<P, LocalSigner, C>;
 
 #[derive(Clone)]
-pub struct SuiBenchContext {
-    anchor: Arc<SuiTunnelAnchor>,
+pub struct SuiSponsoredBenchContext {
+    anchor: Arc<SuiSponsoredAnchor>,
 }
 
-impl SuiBenchContext {
+impl SuiSponsoredBenchContext {
     #[cfg(test)]
-    fn from_anchor_for_test(anchor: SuiTunnelAnchor) -> Self {
+    fn from_anchor_for_test(anchor: SuiSponsoredAnchor) -> Self {
         Self {
             anchor: Arc::new(anchor),
         }
     }
 }
 
-pub fn build_sui_bench_context(opts: Option<&SuiAnchorOpts>) -> Result<SuiBenchContext, String> {
-    let opts = opts.ok_or_else(|| "missing Sui anchor config".to_string())?;
-    let anchor = SuiTunnelAnchor::new(SuiTunnelAnchorConfig {
+pub fn build_sui_sponsored_bench_context(
+    opts: Option<&SuiSponsoredAnchorOpts>,
+) -> Result<SuiSponsoredBenchContext, String> {
+    let opts = opts.ok_or_else(|| "missing sponsored Sui anchor config".to_string())?;
+    let anchor = SuiSponsoredAnchor::new(SuiSponsoredAnchorConfig {
         graphql_url: opts.graphql_url.clone(),
         backend_url: opts.backend_url.clone(),
         package_id: opts.package_id.clone(),
         tunnel_coin_type: opts.tunnel_coin_type.clone(),
         funder_priv_key: opts.funder_priv_key.clone(),
-        funder_stake_coin_id: opts.funder_stake_coin_id.clone(),
+        stake_source: opts.stake_source.clone(),
         open_batching: opts.open_batching.clone(),
     })
-    .map_err(|err| format!("sui anchor config: {err:?}"))?;
-    Ok(SuiBenchContext {
+    .map_err(|err| format!("sponsored Sui anchor config: {err:?}"))?;
+    Ok(SuiSponsoredBenchContext {
         anchor: Arc::new(anchor),
     })
 }
 
-fn clone_sui_anchor_handle_for_match(
-    sui_context: Option<&SuiBenchContext>,
-) -> Arc<SuiTunnelAnchor> {
+fn clone_sui_sponsored_anchor_handle_for_match(
+    sui_context: Option<&SuiSponsoredBenchContext>,
+) -> Arc<SuiSponsoredAnchor> {
     sui_context
-        .expect("Sui anchor mode requires run-level Sui bench context")
+        .expect("sponsored Sui anchor mode requires run-level Sui bench context")
         .anchor
         .clone()
 }
@@ -221,7 +223,7 @@ impl<M: Clone> BenchTranscriptRecorder<M> {
 
 enum BenchAnchor {
     Memory(InMemoryAnchor),
-    Sui(Arc<SuiTunnelAnchor>),
+    Sui(Arc<SuiSponsoredAnchor>),
 }
 
 struct AnchorSettlement<'a, P, C>
@@ -241,7 +243,7 @@ where
 
 fn open_anchor<P: Protocol>(
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     protocol: &P,
     kit: &SeatKit,
     tunnel_id: &str,
@@ -267,7 +269,7 @@ fn open_anchor<P: Protocol>(
             )
         }
         AnchorMode::Sui => {
-            let anchor = clone_sui_anchor_handle_for_match(sui_context);
+            let anchor = clone_sui_sponsored_anchor_handle_for_match(sui_context);
             let protocol =
                 ProtocolId::parse(protocol.name()).expect("bench protocol id is canonical");
             let opened = block_anchor(anchor.open(TunnelOpenRequest {
@@ -276,7 +278,7 @@ fn open_anchor<P: Protocol>(
                 party_b: kit.pk_b,
                 initial,
             }))
-            .expect("sui anchor open");
+            .expect("sponsored Sui anchor open");
             (
                 BenchAnchor::Sui(anchor),
                 opened.tunnel_id,
@@ -348,7 +350,7 @@ where
         }
         AnchorMode::Sui => {
             let BenchAnchor::Sui(anchor) = anchor else {
-                panic!("sui anchor mode produced non-sui anchor")
+                panic!("sponsored Sui anchor mode produced non-sponsored Sui anchor")
             };
             let bals = a.balances();
             let settlement = Settlement {
@@ -360,7 +362,7 @@ where
             };
             let (root, entries) = recorder
                 .root_and_entries(tunnel_id)
-                .expect("cli validates Sui anchor requires memory transcript recorder");
+                .expect("cli validates sponsored Sui anchor requires memory transcript recorder");
             let msg = serialize_settlement_with_root(&settlement, &root);
             let half_a = TunnelSettleRequest {
                 tunnel_id: tunnel_id.to_string(),
@@ -386,8 +388,8 @@ where
             };
             let (settled_a, settled_b) =
                 block_anchor(async { tokio::join!(anchor.settle(half_a), anchor.settle(half_b)) });
-            let settled_a = settled_a.expect("sui anchor settle A");
-            let settled_b = settled_b.expect("sui anchor settle B");
+            let settled_a = settled_a.expect("sponsored Sui anchor settle A");
+            let settled_b = settled_b.expect("sponsored Sui anchor settle B");
             assert_eq!(settled_a.final_balances, bals);
             assert_eq!(settled_b.final_balances, bals);
         }
@@ -406,7 +408,7 @@ pub(crate) fn play_protocol_match_with_strategies<P, C, StrategyA, StrategyB>(
     created_at: u64,
     max_moves: u64,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     configure: impl FnOnce(&mut Seats<P, C>, &mut Seats<P, C>),
 ) -> MatchResult
@@ -531,7 +533,7 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
     created_at: u64,
     max_moves: u64,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     play_protocol_match_with_strategies::<Blackjack, C, BlackjackStrategy, BlackjackStrategy>(
@@ -564,7 +566,7 @@ pub fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
     created_at: u64,
     max_moves: u64,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     play_protocol_match_with_strategies::<BlackjackV2, C, BlackjackV2Strategy, BlackjackV2Strategy>(
@@ -795,25 +797,27 @@ mod tests {
 
     #[test]
     fn shared_sui_anchor_context_reuses_anchor_handle() {
-        let anchor = SuiTunnelAnchor::new(SuiTunnelAnchorConfig {
+        let anchor = SuiSponsoredAnchor::new(SuiSponsoredAnchorConfig {
             graphql_url: "http://graphql.invalid".into(),
             backend_url: "http://backend.invalid".into(),
             package_id: "0x2".into(),
             tunnel_coin_type: "0x2::sui::SUI".into(),
             funder_priv_key:
                 "suiprivkey1qqrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswxzszc4".into(),
-            funder_stake_coin_id: "0x7".into(),
+            stake_source: sui_tunnel_anchor::SuiStakeSource::CoinObject {
+                coin_id: "0x7".into(),
+            },
             open_batching: Default::default(),
         })
-        .expect("test Sui anchor");
-        let context = SuiBenchContext::from_anchor_for_test(anchor);
+        .expect("test sponsored Sui anchor");
+        let context = SuiSponsoredBenchContext::from_anchor_for_test(anchor);
 
-        let first = clone_sui_anchor_handle_for_match(Some(&context));
-        let second = clone_sui_anchor_handle_for_match(Some(&context));
+        let first = clone_sui_sponsored_anchor_handle_for_match(Some(&context));
+        let second = clone_sui_sponsored_anchor_handle_for_match(Some(&context));
 
         assert!(
             std::sync::Arc::ptr_eq(&first, &second),
-            "matches must reuse the run-level Sui anchor"
+            "matches must reuse the run-level sponsored Sui anchor"
         );
     }
 }

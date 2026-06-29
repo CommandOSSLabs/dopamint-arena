@@ -1,5 +1,5 @@
 use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
-use crate::party_driver::SuiBenchContext;
+use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::{play_protocol_match_with_strategies, MatchResult, SeatKit};
 use tunnel_core::protocol_id::{
     API_CREDITS_V1, BATTLESHIP_SERIES_V1, BATTLESHIP_V1, BLACKJACK_BET_V1, BLACKJACK_DUEL_V1,
@@ -34,7 +34,7 @@ pub(crate) struct PlayMatchRequest<'a> {
     pub kit: &'a SeatKit,
     pub tunnel_id: &'a str,
     pub anchor_mode: AnchorMode,
-    pub sui_context: Option<&'a SuiBenchContext>,
+    pub sui_context: Option<&'a SuiSponsoredBenchContext>,
     pub transcript_recorder: TranscriptRecorderMode,
 }
 
@@ -45,7 +45,7 @@ pub(crate) fn play_with_strategies<P, StrategyA, StrategyB>(
     strategy_b: StrategyB,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     move_seed: u64,
     kit: &SeatKit,
@@ -118,7 +118,7 @@ fn play_with_codec<P, C, StrategyA, StrategyB>(
     balance_b: u64,
     max_moves: u64,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult
 where

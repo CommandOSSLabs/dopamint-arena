@@ -3,7 +3,7 @@
 //! explanatory errors rather than silently ignoring them.
 
 use clap::{CommandFactory, Parser};
-use sui_tunnel_anchor::SuiOpenBatchingConfig;
+use sui_tunnel_anchor::{SuiOpenBatchingConfig, SuiStakeSource};
 use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,18 +62,18 @@ pub struct BenchOpts {
     pub anchor_mode: AnchorMode,
     /// Transcript recorder implementation (`None` by default).
     pub transcript_recorder: TranscriptRecorderMode,
-    /// Sui anchor configuration, present only when `anchor_mode == Sui`.
-    pub sui_anchor: Option<SuiAnchorOpts>,
+    /// sponsored Sui anchor configuration, present only when `anchor_mode == Sui`.
+    pub sui_anchor: Option<SuiSponsoredAnchorOpts>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SuiAnchorOpts {
+pub struct SuiSponsoredAnchorOpts {
     pub graphql_url: String,
     pub backend_url: String,
     pub package_id: String,
     pub tunnel_coin_type: String,
     pub funder_priv_key: String,
-    pub funder_stake_coin_id: String,
+    pub stake_source: SuiStakeSource,
     pub open_batching: SuiOpenBatchingConfig,
 }
 
@@ -183,11 +183,18 @@ struct Raw {
     /// Sui bech32 private key for the funder wallet used by --anchor sui.
     #[arg(long = "sui-funder-priv-key", value_name = "BECH32")]
     sui_funder_priv_key: Option<String>,
-    /// Funder-owned stake coin object used by --anchor sui.
+    /// Stake funding source used by --anchor sui.
+    #[arg(
+        long = "sui-stake-source",
+        default_value = "coin-object",
+        value_name = "coin-object|address-balance"
+    )]
+    sui_stake_source: String,
+    /// Funder-owned stake coin object used when --sui-stake-source=coin-object.
     #[arg(long = "sui-funder-stake-coin-id", value_name = "OBJECT_ID")]
     sui_funder_stake_coin_id: Option<String>,
     /// Maximum Sui sponsored open requests per future PTB batch.
-    #[arg(long = "sui-open-batch-size", default_value_t = 50, value_name = "N")]
+    #[arg(long = "sui-open-batch-size", default_value_t = 255, value_name = "N")]
     sui_open_batch_size: usize,
     /// Future Sui open PTB flush interval in milliseconds.
     #[arg(
@@ -328,17 +335,29 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         if raw.sui_funder_priv_key.is_none() {
             missing.push("--sui-funder-priv-key");
         }
-        if raw.sui_funder_stake_coin_id.is_none() {
-            missing.push("--sui-funder-stake-coin-id");
-        }
+        let stake_source = match raw.sui_stake_source.as_str() {
+            "coin-object" => {
+                let Some(coin_id) = raw.sui_funder_stake_coin_id.clone() else {
+                    missing.push("--sui-funder-stake-coin-id");
+                    return Err(format!("--anchor sui requires {}", missing.join(", ")));
+                };
+                SuiStakeSource::CoinObject { coin_id }
+            }
+            "address-balance" => SuiStakeSource::AddressBalance,
+            other => {
+                return Err(format!(
+                    "--sui-stake-source must be coin-object|address-balance, got {other}"
+                ))
+            }
+        };
         if !missing.is_empty() {
             return Err(format!("--anchor sui requires {}", missing.join(", ")));
         }
         if raw.sui_open_batch_size == 0 {
             return Err("--sui-open-batch-size must be greater than 0".to_string());
         }
-        if raw.sui_open_batch_size > 50 {
-            return Err("--sui-open-batch-size must be <= 50".to_string());
+        if raw.sui_open_batch_size > 255 {
+            return Err("--sui-open-batch-size must be <= 255".to_string());
         }
         if raw.sui_open_batch_flush_ms == 0 {
             return Err("--sui-open-batch-flush-ms must be greater than 0".to_string());
@@ -349,13 +368,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
                     .to_string(),
             );
         }
-        Some(SuiAnchorOpts {
+        Some(SuiSponsoredAnchorOpts {
             graphql_url: raw.sui_graphql_url.unwrap(),
             backend_url: raw.sui_backend_url.unwrap(),
             package_id: raw.sui_package_id.unwrap(),
             tunnel_coin_type: raw.sui_tunnel_coin_type,
             funder_priv_key: raw.sui_funder_priv_key.unwrap(),
-            funder_stake_coin_id: raw.sui_funder_stake_coin_id.unwrap(),
+            stake_source,
             open_batching: SuiOpenBatchingConfig {
                 enabled: !raw.sui_disable_open_batching,
                 max_batch_size: raw.sui_open_batch_size,
@@ -528,6 +547,53 @@ mod tests {
     }
 
     #[test]
+    fn anchor_sui_address_balance_stake_source_does_not_require_stake_coin_id() {
+        let o = parse_v(&[
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "https://sui.example/graphql",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-stake-source",
+            "address-balance",
+        ])
+        .unwrap();
+
+        let sui = o.sui_anchor.expect("sui config");
+        assert_eq!(sui.stake_source, SuiStakeSource::AddressBalance);
+    }
+
+    #[test]
+    fn anchor_sui_coin_object_stake_source_requires_stake_coin_id() {
+        let err = parse_v(&[
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "https://sui.example/graphql",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-stake-source",
+            "coin-object",
+        ])
+        .unwrap_err();
+
+        assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
+    }
+
+    #[test]
     fn anchor_sui_parses_graphql_and_funder_options() {
         let o = parse_v(&[
             "--anchor",
@@ -557,7 +623,12 @@ mod tests {
             sui.funder_priv_key,
             "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
         );
-        assert_eq!(sui.funder_stake_coin_id, "0xcoin");
+        assert_eq!(
+            sui.stake_source,
+            SuiStakeSource::CoinObject {
+                coin_id: "0xcoin".into()
+            }
+        );
     }
 
     #[test]
@@ -581,7 +652,7 @@ mod tests {
         let opts = opts.expect("parse sui opts");
         let sui = opts.sui_anchor.expect("sui opts");
         assert!(sui.open_batching.enabled);
-        assert_eq!(sui.open_batching.max_batch_size, 50);
+        assert_eq!(sui.open_batching.max_batch_size, 255);
         assert_eq!(sui.open_batching.flush_interval_ms, 250);
         assert_eq!(sui.open_batching.max_wait_ms, 1000);
     }
@@ -666,7 +737,7 @@ mod tests {
         assert!(err.contains("sui-open-batch-size"), "{err}");
 
         let mut oversized_batch = base.to_vec();
-        oversized_batch.extend(["--sui-open-batch-size", "51"]);
+        oversized_batch.extend(["--sui-open-batch-size", "256"]);
         let err = parse_v(&oversized_batch).unwrap_err();
         assert!(err.contains("sui-open-batch-size"), "{err}");
 

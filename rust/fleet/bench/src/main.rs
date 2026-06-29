@@ -2,7 +2,7 @@
 //! resource sampler, and prints the loadbench-shaped report.
 
 use fleet_bench::cli::{self, AnchorMode, BenchMode};
-use fleet_bench::party_driver::build_sui_bench_context;
+use fleet_bench::party_driver::build_sui_sponsored_bench_context;
 use fleet_bench::report;
 use fleet_bench::{resources, swarm};
 
@@ -23,7 +23,7 @@ fn main() {
 
     let sui_context = match opts.anchor_mode {
         AnchorMode::Memory => None,
-        AnchorMode::Sui => match build_sui_bench_context(opts.sui_anchor.as_ref()) {
+        AnchorMode::Sui => match build_sui_sponsored_bench_context(opts.sui_anchor.as_ref()) {
             Ok(context) => Some(context),
             Err(e) => {
                 eprintln!("{e}");

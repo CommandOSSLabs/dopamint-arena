@@ -7,7 +7,7 @@
 //! the time-bounded throughput mode.
 
 use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode, TranscriptRecorderMode};
-use crate::party_driver::{SeatKit, SuiBenchContext};
+use crate::party_driver::{SeatKit, SuiSponsoredBenchContext};
 use crate::protocols::{play_match_for, PlayMatchRequest};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -147,7 +147,7 @@ pub fn run_simple(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -188,7 +188,7 @@ pub fn run_fresh_keys(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -236,7 +236,7 @@ pub fn run_preinitialized_signers(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {

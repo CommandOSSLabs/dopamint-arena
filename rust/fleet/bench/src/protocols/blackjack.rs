@@ -1,6 +1,6 @@
 use super::{play_with_strategies, CREATED_AT, DEFAULT_BALANCE, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
-use crate::party_driver::SuiBenchContext;
+use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::{play_protocol_match_with_strategies, MatchResult, SeatKit};
 use tunnel_blackjack::duel::BlackjackDuel;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
@@ -13,7 +13,7 @@ pub(crate) fn play_bet(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     match codec {
@@ -49,7 +49,7 @@ fn play_bet_with_codec<C>(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult
 where
@@ -83,7 +83,7 @@ pub(crate) fn play_duel(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     play_with_strategies(
@@ -109,7 +109,7 @@ pub(crate) fn play_v2(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);

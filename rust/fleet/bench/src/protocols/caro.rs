@@ -1,6 +1,6 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
-use crate::party_driver::SuiBenchContext;
+use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_caro::{Caro, CaroSeries, CaroSeriesStrategy, CaroStrategy, CaroStrength};
 
@@ -10,7 +10,7 @@ pub(crate) fn play_single(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -39,7 +39,7 @@ pub(crate) fn play_series(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
-    sui_context: Option<&SuiBenchContext>,
+    sui_context: Option<&SuiSponsoredBenchContext>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
