@@ -14,7 +14,10 @@ import {
 test("ed25519Address matches @mysten derivation", () => {
   const kp = generateKeyPair();
   const mysten = Ed25519Keypair.fromSecretKey(kp.secretKey);
-  assert.equal(ed25519Address(kp.publicKey), mysten.getPublicKey().toSuiAddress());
+  assert.equal(
+    ed25519Address(kp.publicKey),
+    mysten.getPublicKey().toSuiAddress(),
+  );
 });
 
 test("keyPairFromSecret round-trips", () => {

@@ -15,16 +15,25 @@ test("generated-key round-trip", () => {
 test("passphrase round-trip", () => {
   const access = "correct horse battery staple";
   const pt = randomBytes(32);
-  assert.deepEqual(unseal(seal(pt, access, "passphrase", aad), access, aad), pt);
+  assert.deepEqual(
+    unseal(seal(pt, access, "passphrase", aad), access, aad),
+    pt,
+  );
 });
 
 test("wrong access value throws", () => {
   const env = seal(randomBytes(32), generateAccessValue(), "generated", aad);
-  assert.throws(() => unseal(env, generateAccessValue(), aad), WrongAccessValueError);
+  assert.throws(
+    () => unseal(env, generateAccessValue(), aad),
+    WrongAccessValueError,
+  );
 });
 
 test("tampered aad throws", () => {
   const env = seal(randomBytes(32), generateAccessValue(), "generated", aad);
   const other = new TextEncoder().encode("wallet-pool:1:wp_x:testnet");
-  assert.throws(() => unseal(env, generateAccessValue(), other), WrongAccessValueError);
+  assert.throws(
+    () => unseal(env, generateAccessValue(), other),
+    WrongAccessValueError,
+  );
 });

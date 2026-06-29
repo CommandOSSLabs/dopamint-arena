@@ -1,7 +1,9 @@
 export class WalletPoolError extends Error {}
 
 export class WrongAccessValueError extends WalletPoolError {
-  constructor(message = "decryption failed (wrong access value or tampered blob)") {
+  constructor(
+    message = "decryption failed (wrong access value or tampered blob)",
+  ) {
     super(message);
     this.name = "WrongAccessValueError";
   }

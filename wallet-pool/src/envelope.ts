@@ -20,20 +20,21 @@ export interface SealedEnvelope {
 
 function deriveKey(
   accessValue: string,
-  env: Pick<SealedEnvelope, "mode" | "kdf">
+  env: Pick<SealedEnvelope, "mode" | "kdf">,
 ): Buffer {
   if (env.mode === "generated") {
     const ikm = Buffer.from(accessValue, "base64url");
     if (ikm.length !== 32) {
       throw new WrongAccessValueError(
-        "generated access value must decode to 32 bytes"
+        "generated access value must decode to 32 bytes",
       );
     }
     return Buffer.from(
-      hkdfSync("sha256", ikm, Buffer.alloc(0), Buffer.alloc(0), 32)
+      hkdfSync("sha256", ikm, Buffer.alloc(0), Buffer.alloc(0), 32),
     );
   }
-  if (!env.kdf) throw new WrongAccessValueError("passphrase envelope missing kdf params");
+  if (!env.kdf)
+    throw new WrongAccessValueError("passphrase envelope missing kdf params");
   const { salt, N, r, p } = env.kdf;
   return scryptSync(accessValue, Buffer.from(fromB64(salt)), 32, { N, r, p });
 }
@@ -42,7 +43,7 @@ export function seal(
   plaintext: Uint8Array,
   accessValue: string,
   mode: AccessMode,
-  aad: Uint8Array
+  aad: Uint8Array,
 ): SealedEnvelope {
   const nonce = randomBytes(12);
   const kdf =
@@ -69,13 +70,13 @@ export function seal(
 export function unseal(
   env: SealedEnvelope,
   accessValue: string,
-  aad: Uint8Array
+  aad: Uint8Array,
 ): Uint8Array {
   const key = deriveKey(accessValue, env);
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
-    Buffer.from(fromB64(env.nonce))
+    Buffer.from(fromB64(env.nonce)),
   );
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(Buffer.from(fromB64(env.tag)));
@@ -84,7 +85,7 @@ export function unseal(
       Buffer.concat([
         decipher.update(Buffer.from(fromB64(env.ciphertext))),
         decipher.final(),
-      ])
+      ]),
     );
   } catch {
     throw new WrongAccessValueError();
