@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
+        config.mtps_admin_cap_id.as_deref(),
     )?;
     let walrus = walrus::WalrusClient::new(
         Config::require("WALRUS_PUBLISHER_URL", &config.walrus_publisher_url)?.to_string(),
@@ -106,6 +107,11 @@ async fn main() -> anyhow::Result<()> {
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
+        faucet_user_amount: config.faucet_user_amount,
+        faucet_internal_amount: config.faucet_internal_amount,
+        faucet_cooldown_secs: config.faucet_cooldown_secs,
+        faucet_max_per_window: config.faucet_max_per_window,
+        faucet_admin_token: config.faucet_admin_token.clone(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
@@ -141,6 +147,10 @@ async fn main() -> anyhow::Result<()> {
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
+        // MTPS faucet (ADR-0015): the public route is per-address rate limited; the internal route
+        // is unlimited and bearer-gated (fails closed when FAUCET_ADMIN_TOKEN is unset).
+        .route("/v1/faucet", post(routes::faucet))
+        .route("/v1/faucet/internal", post(routes::faucet_admin))
         .route("/v1/chat", post(routes::chat))
         .route("/v1/chat/topic", get(routes::chat_topic))
         .route("/v1/chat/live/publish", post(routes::chat_publish))
@@ -169,7 +179,11 @@ fn cors_layer() -> CorsLayer {
         Ok(origins) if !origins.is_empty() => {
             let origins: Vec<http::HeaderValue> = origins
                 .split(',')
-                .map(|s| s.trim().parse().expect("invalid CORS_ALLOWED_ORIGINS value"))
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        .expect("invalid CORS_ALLOWED_ORIGINS value")
+                })
                 .collect();
             CorsLayer::new()
                 .allow_origin(origins)

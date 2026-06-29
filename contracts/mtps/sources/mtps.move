@@ -73,6 +73,20 @@ public fun admin_mint(
     coin::mint_and_transfer<MTPS>(&mut cap.treasury_cap, amount, recipient, ctx);
 }
 
+/// Mint `amount` MTPS straight into `recipient`'s account (SIP-58 address) balance, instead of as a
+/// version-pinned owned coin. The off-chain stake path withdraws from the address balance (ADR-0013),
+/// so this lets the backend faucet fund a player in ONE tx — no separate client-side sweep. Same
+/// AdminCap-only authority and per-call bound as `admin_mint`.
+public fun admin_mint_to_balance(
+    cap: &mut AdminCap,
+    amount: u64,
+    recipient: address,
+    ctx: &mut TxContext,
+) {
+    assert!(amount <= MAX_MINT_PER_CALL, EAmountTooLarge);
+    coin::send_funds(coin::mint(&mut cap.treasury_cap, amount, ctx), recipient);
+}
+
 /// Burn MTPS back out of supply (AdminCap-only).
 public fun burn(cap: &mut AdminCap, coin: Coin<MTPS>) {
     coin::burn(&mut cap.treasury_cap, coin);

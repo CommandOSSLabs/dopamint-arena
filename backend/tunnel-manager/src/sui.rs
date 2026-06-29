@@ -33,6 +33,9 @@ const GAS_BUDGET: u64 = 100_000_000;
 /// Gas budget cap for a sponsored open/fund tx (create + deposit + share). Same magnitude as a
 /// close; the dry-run rejects anything that would exceed it before the settler pays (ADR-0009).
 const SPONSOR_GAS_BUDGET: u64 = 100_000_000;
+/// Per-call mint cap, mirroring `mtps::admin_mint`'s `MAX_MINT_PER_CALL` (ADR-0015). The faucet
+/// pre-checks against this so an over-cap request returns a clean 422 instead of an on-chain abort.
+pub const MAX_MINT_PER_CALL: u64 = 1_000_000;
 /// 0x2 Sui framework — the only non-tunnel package the sponsor allows, for `public_share_object`.
 const SUI_FRAMEWORK_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000002";
@@ -84,16 +87,33 @@ struct SharedRef {
     initial_shared_version: u64,
 }
 
+/// An owned object's PTB reference: its current (id, version, digest). Owned inputs are
+/// version-pinned, so this must be re-resolved before each tx that mutates the object — the version
+/// bumps on every use (see the faucet's `mint_lock`).
+#[derive(Clone)]
+struct OwnedRef {
+    id: Address,
+    version: u64,
+    digest: Digest,
+}
+
 pub struct SuiSettler {
     http: reqwest::Client,
     rpc_url: String,
     package_id: Address,
     coin_type: TypeTag,
+    /// MTPS `AdminCap` object id (ADR-0015), owned by `sender`. `None` = the faucet is unconfigured
+    /// and `mint_mtps` refuses. The cap is an owned `&mut` input to `admin_mint`.
+    admin_cap_id: Option<Address>,
     signer: Ed25519PrivateKey,
     sender: Address,
     /// Per-sponsorship nonce source for the `ValidDuring` FundsWithdrawal replay guard. Seeded
     /// from wall-clock nanos at boot so two process runs in the same epoch don't collide.
     sponsor_nonce: AtomicU32,
+    /// Serializes `admin_mint` calls. The `AdminCap` is a single owned object: two concurrent mints
+    /// would pin the same version and equivocate (one fails). One in-flight mint at a time, so the
+    /// cap's owned ref re-resolved per call is always current.
+    mint_lock: tokio::sync::Mutex<()>,
 }
 
 /// A parsed tunnel lifecycle event: the type suffix drives status folding; the rest feeds the
@@ -185,9 +205,13 @@ impl SuiSettler {
         package_id: &str,
         coin_type: &str,
         settler_key_b64: &str,
+        mtps_admin_cap_id: Option<&str>,
     ) -> anyhow::Result<Self> {
         let signer = load_ed25519(settler_key_b64)?;
         let sender = signer.public_key().derive_address();
+        let admin_cap_id = mtps_admin_cap_id
+            .map(|s| Address::from_str(s).context("bad MTPS_ADMIN_CAP_ID"))
+            .transpose()?;
         // Seed the per-sponsorship nonce from the full wall clock (secs mixed with nanos), not
         // just subsec_nanos, so two restarts in the same epoch are very unlikely to pick colliding
         // seeds (a collision is a liveness hiccup — the node rejects the replayed withdrawal — not
@@ -206,9 +230,11 @@ impl SuiSettler {
             rpc_url,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
+            admin_cap_id,
             signer,
             sender,
             sponsor_nonce: AtomicU32::new(nonce_seed),
+            mint_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -223,9 +249,11 @@ impl SuiSettler {
             rpc_url: String::new(),
             package_id: Address::ZERO,
             coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
+            admin_cap_id: None,
             signer,
             sender,
             sponsor_nonce: AtomicU32::new(0),
+            mint_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -299,6 +327,57 @@ impl SuiSettler {
         Ok((tx_b64, sig.to_base64()))
     }
 
+    /// True iff the MTPS `AdminCap` id is configured. The faucet routes 503 when this is false, so
+    /// they never claim a cooldown nor sign a mint they cannot complete.
+    pub fn mint_configured(&self) -> bool {
+        self.admin_cap_id.is_some()
+    }
+
+    /// Mint `amount` whole-token MTPS to `recipient` (ADR-0015); returns the tx digest. `to_balance`
+    /// selects the entry: `admin_mint_to_balance` deposits straight into the recipient's SIP-58
+    /// address balance (the stake path withdraws from it — no client sweep), `admin_mint` gives an
+    /// owned coin. The settler holds the `AdminCap`, so this signs with the settler key. Serialized by
+    /// `mint_lock`: the cap is a single owned `&mut` input, so concurrent mints would equivocate on
+    /// its version — one mint at a time, with the cap's owned ref re-resolved fresh each call.
+    pub async fn mint_mtps(
+        &self,
+        recipient: &str,
+        amount: u64,
+        to_balance: bool,
+    ) -> anyhow::Result<String> {
+        let _guard = self.mint_lock.lock().await;
+        let cap_id = self
+            .admin_cap_id
+            .ok_or_else(|| anyhow!("faucet not configured: MTPS_ADMIN_CAP_ID unset"))?;
+        let recipient_addr = Address::from_str(recipient).context("bad recipient address")?;
+        // The MTPS module lives in the coin type's own package (`<pkg>::mtps::admin_mint`).
+        let mtps_package = coin_type_address(&self.coin_type)
+            .ok_or_else(|| anyhow!("TUNNEL_COIN_TYPE is not an MTPS struct type"))?;
+        let cap = self.resolve_owned(cap_id).await?;
+        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
+        let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
+        let tx = build_admin_mint_tx(
+            mtps_package,
+            self.sender,
+            &cap,
+            recipient_addr,
+            amount,
+            to_balance,
+            gas_price,
+            epoch,
+            chain,
+            self.sponsor_nonce.fetch_add(1, Ordering::Relaxed),
+        )?;
+        // Verify-before-gas (mirrors /settle): an unsigned dry-run catches the `MAX_MINT_PER_CALL`
+        // abort or a wrong cap before the settler pays gas.
+        self.dry_run(&tx).await?;
+        let sig = self
+            .signer
+            .sign_transaction(&tx)
+            .map_err(|e| anyhow!("sign mint tx: {e}"))?;
+        self.execute(&tx, &sig).await
+    }
+
     /// Dry-run the built close tx so the real `close_cooperative_with_root` runs (re-verifying
     /// both seat sigs against the on-chain pubkeys and the balance sum) WITHOUT executing — an
     /// invalid settlement is rejected here, before any gas is sponsored (ADR-0007). The seat sigs
@@ -353,6 +432,44 @@ impl SuiSettler {
         Ok(SharedRef {
             id: Address::from_str(object_id).context("tunnel id")?,
             initial_shared_version: isv,
+        })
+    }
+
+    /// Resolve an OWNED object's current (version, digest) for a version-pinned PTB input. Used for
+    /// the `AdminCap`, whose version bumps on every mint — so this is re-read under `mint_lock`
+    /// before each `admin_mint`. Verifies the cap is address-owned by the settler (`sender`): if it
+    /// is not, no mint this key signs could ever land, so fail loud rather than burn a dry-run.
+    async fn resolve_owned(&self, id: Address) -> anyhow::Result<OwnedRef> {
+        let r = self
+            .rpc(
+                "sui_getObject",
+                serde_json::json!([id.to_string(), {"showOwner": true}]),
+            )
+            .await?;
+        let owner = r
+            .pointer("/data/owner/AddressOwner")
+            .and_then(|v| v.as_str());
+        anyhow::ensure!(
+            owner == Some(self.sender.to_string().as_str()),
+            "AdminCap {id} is not owned by the settler address {} (owner: {owner:?})",
+            self.sender,
+        );
+        let version = r
+            .pointer("/data/version")
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| v.as_u64())
+            })
+            .ok_or_else(|| anyhow!("object {id} has no version: {r}"))?;
+        let digest = r
+            .pointer("/data/digest")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("object {id} has no digest: {r}"))?;
+        Ok(OwnedRef {
+            id,
+            version,
+            digest: Digest::from_base58(digest).context("object digest")?,
         })
     }
 
@@ -587,6 +704,70 @@ fn build_close_tx(
     Ok(tx)
 }
 
+/// PURE core: build the `mtps::admin_mint{,_to_balance}(cap, amount, recipient)` PTB (ADR-0015). Arg
+/// order matches the Move signature exactly: the owned `&mut AdminCap`, the `u64` amount, the
+/// recipient `address`. `to_balance` picks `admin_mint_to_balance` (deposit into the recipient's
+/// SIP-58 address balance) over `admin_mint` (owned coin); both share that signature and are not
+/// generic, so there is no type argument. SIP-58 address-balance gas like `build_close_tx`: a
+/// placeholder gas object satisfies `try_build`, then is cleared so the node charges gas from the
+/// settler's address balance (the caller must sign AFTER this returns, since the signature covers
+/// `gas_payment`). Unit-tested for arg order + empty gas.
+#[allow(clippy::too_many_arguments)] // mirrors the offline-build parameter list of build_close_tx
+fn build_admin_mint_tx(
+    mtps_package: Address,
+    sender: Address,
+    admin_cap: &OwnedRef,
+    recipient: Address,
+    amount: u64,
+    to_balance: bool,
+    gas_price: u64,
+    epoch: u64,
+    chain: Digest,
+    nonce: u32,
+) -> anyhow::Result<Transaction> {
+    let mut tb = TransactionBuilder::new();
+    let cap_arg = tb.object(ObjectInput::owned(
+        admin_cap.id,
+        admin_cap.version,
+        admin_cap.digest,
+    ));
+    let amount_arg = tb.pure(&amount);
+    let recipient_arg = tb.pure(&recipient);
+    let fn_name = if to_balance {
+        "admin_mint_to_balance"
+    } else {
+        "admin_mint"
+    };
+    let func = Function::new(
+        mtps_package,
+        Identifier::new("mtps").context("module ident")?,
+        Identifier::new(fn_name).context("fn ident")?,
+    );
+    tb.move_call(func, vec![cap_arg, amount_arg, recipient_arg]);
+
+    // Placeholder satisfies try_build's non-empty-gas check; cleared below (see build_close_tx).
+    tb.add_gas_objects([ObjectInput::owned(Address::ZERO, 1, Digest::ZERO)]);
+    tb.set_sender(sender);
+    tb.set_gas_budget(GAS_BUDGET);
+    tb.set_gas_price(gas_price.max(1));
+    // SIP-58 address-balance gas requires a `ValidDuring` window; nonce is the per-withdrawal replay
+    // guard. min==max==current epoch; chain is the genesis digest (see build_close_tx).
+    tb.set_expiration(TransactionExpiration::ValidDuring {
+        min_epoch: Some(epoch),
+        max_epoch: Some(epoch),
+        min_timestamp: None,
+        max_timestamp: None,
+        chain,
+        nonce,
+    });
+    let mut tx = tb
+        .try_build()
+        .map_err(|e| anyhow!("build admin_mint tx: {e}"))?;
+    // Empty objects => FundsWithdrawal from the settler's address balance (SIP-58).
+    tx.gas_payment.objects.clear();
+    Ok(tx)
+}
+
 /// Wrap a client-built transaction KIND in SIP-58 sponsor gas: the user is the sender, the settler
 /// owns the (empty, address-balance) gas, so the settler pays the user's gas from its own balance.
 /// Validates the kind is an allowlisted open/fund PTB first — the anti-abuse gate (ADR-0009).
@@ -651,6 +832,15 @@ fn command_references_gas(cmd: &Command) -> bool {
     }
 }
 
+/// Validate + canonicalize a Sui address: trim, then re-render via the SDK to the 0x-prefixed,
+/// lowercase, 32-byte-padded form. The faucet uses this to key the per-recipient cooldown and to
+/// credit the mint; `Err` on a malformed address maps to 422 at the handler.
+pub fn canonical_address(s: &str) -> anyhow::Result<String> {
+    Ok(Address::from_str(s.trim())
+        .context("invalid address")?
+        .to_string())
+}
+
 /// The package address of a struct coin type (`0xABC::mtps::MTPS` -> `0xABC`), or `None`
 /// for a primitive type like SUI. Used to locate the stake token's own faucet module.
 fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
@@ -689,13 +879,13 @@ fn validate_sponsorable(
                 let framework_share = mc.package == framework
                     && mc.module.as_str() == "transfer"
                     && mc.function.as_str() == "public_share_object";
-                // The MTPS stake token's faucet lives in the coin type's own package
-                // (`<pkg>::mtps`). Sponsor the free `mint`/`mint_default` so a 0-token player
-                // can faucet their stake (gas-sponsored) before opening a game. Also sponsor
-                // `mint_nft` so the regular-payments shop can gaslessly reward the miner.
+                // The stake faucet moved to the backend admin endpoint (ADR-0015 `admin_mint`), so
+                // the permissionless `mint`/`mint_default` are no longer sponsored. Only `mint_nft`
+                // (the regular-payments shop reward, in the coin type's own `<pkg>::mtps`) stays
+                // sponsorable so the miner receives the collectible gaslessly.
                 let mtps_package_call = coin_type_address(coin_type) == Some(mc.package)
                     && mc.module.as_str() == "mtps"
-                    && matches!(mc.function.as_str(), "mint" | "mint_default" | "mint_nft");
+                    && mc.function.as_str() == "mint_nft";
                 // SIP-58 stake path (ADR-0013): `redeem_funds` turns the sender's address-balance
                 // withdrawal into the stake `Coin<T>` for the open; `send_funds` is the funding
                 // sweep that deposits a faucet coin into the player's address balance;
@@ -893,6 +1083,59 @@ mod tests {
         assert_eq!(tx.gas_payment.budget, GAS_BUDGET);
     }
 
+    fn admin_cap_ref() -> OwnedRef {
+        OwnedRef {
+            id: Address::from_str("0x5").unwrap(),
+            version: 7,
+            digest: Digest::ZERO,
+        }
+    }
+
+    // The admin_mint PTB must build with the Move arg order (cap, amount, recipient) and no type
+    // argument — pins the faucet write-path wiring against `mtps::admin_mint`.
+    #[test]
+    fn build_admin_mint_tx_builds_for_valid_args() {
+        let tx = build_admin_mint_tx(
+            Address::from_str("0xabc").unwrap(),
+            Address::ZERO,
+            &admin_cap_ref(),
+            Address::from_str("0x9").unwrap(),
+            10_000,
+            true, // admin_mint_to_balance path
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
+        );
+        assert!(tx.is_ok(), "valid mint should build: {:?}", tx.err());
+    }
+
+    // Address-balance gas (SIP-58): the built mint tx carries an EMPTY gas payment owned by the
+    // settler — gas is charged from the settler's SUI balance, no owned gas coin to lock.
+    #[test]
+    fn build_admin_mint_tx_uses_address_balance_gas() {
+        let settler = Address::from_str("0x9").unwrap();
+        let tx = build_admin_mint_tx(
+            Address::from_str("0xabc").unwrap(),
+            settler,
+            &admin_cap_ref(),
+            Address::from_str("0x1").unwrap(),
+            10_000,
+            false, // admin_mint (owned coin) path
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
+        )
+        .expect("builds");
+        assert!(
+            tx.gas_payment.objects.is_empty(),
+            "gas payment must be empty (address-balance)"
+        );
+        assert_eq!(tx.gas_payment.owner, settler);
+        assert_eq!(tx.gas_payment.budget, GAS_BUDGET);
+    }
+
     fn sui_coin() -> TypeTag {
         "0x2::sui::SUI".parse().unwrap()
     }
@@ -1021,10 +1264,10 @@ mod tests {
         assert!(validate_sponsorable(&ptb(vec![mint_nft]), tunnel_pkg, &coin).is_ok());
     }
 
-    // The MTPS faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
-    // player can faucet their stake gaslessly.
+    // The permissionless `mtps::mint` faucet is no longer sponsorable — minting moved fully behind
+    // the backend `admin_mint` endpoint (ADR-0015). Even from the real coin package it is refused.
     #[test]
-    fn validate_accepts_mtps_faucet_mint() {
+    fn validate_refuses_mtps_mint_now_admin_only() {
         let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let mint = Command::MoveCall(sui_sdk_types::MoveCall {
             package: Address::from_str("0xabc").unwrap(),
@@ -1033,27 +1276,8 @@ mod tests {
             type_arguments: vec![],
             arguments: vec![Argument::Input(0), Argument::Input(1), Argument::Input(2)],
         });
-        // The tunnel package is unrelated to the faucet call; pass an arbitrary one.
         let tunnel_pkg = Address::from_str("0xfff").unwrap();
-        assert!(validate_sponsorable(&ptb(vec![mint]), tunnel_pkg, &coin).is_ok());
-    }
-
-    // A `mint` from a package OTHER than the configured coin type's is refused — only the real
-    // MTPS faucet is sponsored, not a look-alike.
-    #[test]
-    fn validate_rejects_faucet_mint_from_foreign_package() {
-        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
-        let mint = Command::MoveCall(sui_sdk_types::MoveCall {
-            package: Address::from_str("0xbad").unwrap(),
-            module: Identifier::new("mtps").unwrap(),
-            function: Identifier::new("mint").unwrap(),
-            type_arguments: vec![],
-            arguments: vec![],
-        });
-        assert!(
-            validate_sponsorable(&ptb(vec![mint]), Address::from_str("0xfff").unwrap(), &coin)
-                .is_err()
-        );
+        assert!(validate_sponsorable(&ptb(vec![mint]), tunnel_pkg, &coin).is_err());
     }
 
     fn coin_op(function: &str, coin: TypeTag) -> Command {

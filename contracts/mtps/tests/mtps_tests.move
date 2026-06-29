@@ -68,6 +68,42 @@ fun mint_above_per_call_cap_aborts() {
     scenario.end();
 }
 
+/// Minting to the address balance is AdminCap-only and respects the same per-call bound: over the
+/// cap it aborts before any mint.
+#[test, expected_failure(abort_code = mtps::EAmountTooLarge)]
+fun mint_to_balance_above_cap_aborts() {
+    let backend = @0xA;
+    let user = @0xB;
+    let mut scenario = ts::begin(backend);
+    mtps::test_init(scenario.ctx());
+
+    scenario.next_tx(backend);
+    let mut cap = scenario.take_from_sender<AdminCap>();
+    mtps::admin_mint_to_balance(&mut cap, mtps::max_mint_per_call() + 1, user, scenario.ctx());
+    scenario.return_to_sender(cap);
+    scenario.end();
+}
+
+/// A within-cap mint to the address balance deposits (SIP-58) without yielding an owned coin — the
+/// stake path withdraws from the address balance (ADR-0013). Exercises the mint + send_funds path.
+#[test]
+fun mint_to_balance_under_cap_deposits_without_owned_coin() {
+    let backend = @0xA;
+    let user = @0xB;
+    let mut scenario = ts::begin(backend);
+    mtps::test_init(scenario.ctx());
+
+    scenario.next_tx(backend);
+    let mut cap = scenario.take_from_sender<AdminCap>();
+    mtps::admin_mint_to_balance(&mut cap, 10, user, scenario.ctx());
+    scenario.return_to_sender(cap);
+
+    // The recipient holds NO owned Coin<MTPS> — the mint landed in the address balance.
+    scenario.next_tx(user);
+    assert_eq!(scenario.has_most_recent_for_sender<Coin<MTPS>>(), false);
+    scenario.end();
+}
+
 /// No lower-bound guard: minting 0 is allowed and yields a 0-value coin (documents the contract).
 #[test]
 fun mint_zero_amount_yields_zero_coin() {

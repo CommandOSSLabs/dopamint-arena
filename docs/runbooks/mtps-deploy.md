@@ -51,8 +51,36 @@ Verify the metadata (symbol `MTPS`, the favicon icon) now resolves in an explore
 
 Point the apps at the new package (see ADR-0015 follow-ups):
 
-- `VITE_MTPS_*` (frontend)
+- `VITE_MTPS_*` (frontend). `VITE_MTPS_FAUCET_ID` is **gone** — the shared faucet object no longer
+  exists; the frontend faucets via the backend `POST /v1/faucet`.
 - `TUNNEL_COIN_TYPE` = `${MTPS_PACKAGE_ID}::mtps::MTPS` (backend/SDK)
+
+## 4. Wire the backend faucet
+
+The faucet endpoints sign `admin_mint` with `SUI_SETTLER_KEY`, which **must be the deploy key** (it
+owns the `AdminCap`). Set on the `tunnel-manager`:
+
+- `MTPS_ADMIN_CAP_ID` = the **`AdminCap`** object id captured in step 1. Unset → both faucet routes
+  return 503 (disabled).
+- `FAUCET_USER_AMOUNT` (default 10000) and `FAUCET_COOLDOWN_SECS` (default 1800) — the public
+  faucet's per-pull amount and per-address rate limit.
+- `FAUCET_INTERNAL_AMOUNT` (default 1000000, the contract's `MAX_MINT_PER_CALL`) — the internal
+  faucet's default mint.
+- `FAUCET_ADMIN_TOKEN` — shared bearer secret for `POST /v1/faucet/internal`. Unset → internal
+  route disabled (503). **Set it** to use the internal faucet.
+
+Smoke-test after deploy:
+
+```bash
+# public faucet (rate-limited): mints FAUCET_USER_AMOUNT MTPS to the address
+curl -fsS -X POST "$BACKEND/v1/faucet" -H 'content-type: application/json' \
+  -d '{"address":"0x<recipient>"}'
+# internal faucet (unlimited): bearer-gated; amount optional
+curl -fsS -X POST "$BACKEND/v1/faucet/internal" -H "authorization: Bearer $FAUCET_ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"recipient":"0x<recipient>","amount":50000}'
+```
+
+A second public pull within the cooldown returns `429` with a `Retry-After` header.
 
 ## Updating metadata later
 

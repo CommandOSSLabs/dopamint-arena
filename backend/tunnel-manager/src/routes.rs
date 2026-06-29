@@ -29,6 +29,7 @@ pub(crate) mod test_support {
             "0x2",
             "0x2::sui::SUI",
             &key,
+            None,
         )
         .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
@@ -50,6 +51,11 @@ pub(crate) mod test_support {
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            faucet_user_amount: 10_000,
+            faucet_internal_amount: 1_000_000,
+            faucet_cooldown_secs: 1_800,
+            faucet_max_per_window: 5,
+            faucet_admin_token: None,
         })
     }
 }
@@ -412,6 +418,191 @@ pub(crate) async fn sponsor(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FaucetRequest {
+    /// Recipient address — the requesting wallet. The cooldown is keyed on its canonical form.
+    address: String,
+    /// Deposit straight into the recipient's SIP-58 address balance (`admin_mint_to_balance`) when
+    /// true — the default, since the stake path withdraws from the address balance (no client sweep).
+    /// Set false to mint an owned coin (the coin-object stake fallback). Omitted = true.
+    #[serde(default)]
+    to_balance: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FaucetResponse {
+    /// The `admin_mint` tx digest.
+    digest: String,
+    /// Whole-token MTPS minted (0 decimals; ADR-0015).
+    amount: u64,
+    /// Canonical recipient address the mint credited.
+    recipient: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AdminFaucetRequest {
+    /// Recipient address to credit.
+    recipient: String,
+    /// Whole-token MTPS to mint; defaults to the configured internal amount, capped at
+    /// `MAX_MINT_PER_CALL`.
+    amount: Option<u64>,
+    /// Deposit into the recipient's SIP-58 address balance when true (default), else an owned coin.
+    #[serde(default)]
+    to_balance: Option<bool>,
+}
+
+/// 503 response when the on-chain faucet (the `AdminCap`) is not configured. Returned by both
+/// faucet routes so neither claims a cooldown nor signs a mint it cannot complete.
+fn faucet_disabled() -> Response {
+    ApiError::resp(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "faucet_disabled",
+        "faucet is not configured (MTPS_ADMIN_CAP_ID unset)",
+    )
+    .into_response()
+}
+
+/// Public MTPS faucet (ADR-0015): mint a fixed amount to the requesting address, rate-limited to
+/// once per `faucet_cooldown_secs` per address. The cooldown is claimed BEFORE the mint and released
+/// if the mint fails, so a transient backend error never locks the user out for the full window.
+/// 503 when unconfigured, 422 on a bad address, 429 (+ `Retry-After`) when on cooldown.
+pub(crate) async fn faucet(
+    State(state): State<SharedState>,
+    Json(req): Json<FaucetRequest>,
+) -> Response {
+    if !state.settler.mint_configured() {
+        return faucet_disabled();
+    }
+    let recipient = match crate::sui::canonical_address(&req.address) {
+        Ok(a) => a,
+        Err(e) => {
+            return ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bad_address",
+                &e.to_string(),
+            )
+            .into_response();
+        }
+    };
+    // Claim a slot in the per-address rate-limit window first. Window exhausted → 429 + Retry-After.
+    if !state
+        .control
+        .claim_faucet_slot(
+            &recipient,
+            state.faucet_cooldown_secs,
+            state.faucet_max_per_window,
+        )
+        .await
+    {
+        let retry = state
+            .control
+            .faucet_window_ttl(&recipient)
+            .await
+            .unwrap_or(state.faucet_cooldown_secs);
+        let mut resp = ApiError::resp(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "faucet rate limit reached; try again later",
+        )
+        .into_response();
+        if let Ok(v) = axum::http::HeaderValue::from_str(&retry.to_string()) {
+            resp.headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, v);
+        }
+        return resp;
+    }
+    let amount = state.faucet_user_amount;
+    let to_balance = req.to_balance.unwrap_or(true);
+    match state
+        .settler
+        .mint_mtps(&recipient, amount, to_balance)
+        .await
+    {
+        Ok(digest) => Json(FaucetResponse {
+            digest,
+            amount,
+            recipient,
+        })
+        .into_response(),
+        Err(e) => {
+            // Free the slot so a transient failure doesn't burn one of the window's allowed pulls.
+            state.control.release_faucet_slot(&recipient).await;
+            tracing::warn!(recipient = %recipient, error = %e, "faucet mint failed");
+            ApiError::resp(StatusCode::BAD_GATEWAY, "faucet_failed", &e.to_string()).into_response()
+        }
+    }
+}
+
+/// Internal (unlimited) MTPS faucet: mint to any recipient with no cooldown, for internal/ops use.
+/// Bearer-gated by `FAUCET_ADMIN_TOKEN`; fails closed (503) when the token is unset so an unlimited
+/// mint can never be accidentally open. Amount defaults to the configured internal amount, capped at
+/// `MAX_MINT_PER_CALL`.
+pub(crate) async fn faucet_admin(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(req): Json<AdminFaucetRequest>,
+) -> Response {
+    let Some(token) = state.faucet_admin_token.as_deref() else {
+        return ApiError::resp(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "faucet_admin_disabled",
+            "internal faucet is not configured (FAUCET_ADMIN_TOKEN unset)",
+        )
+        .into_response();
+    };
+    if !bearer_matches(&headers, token) {
+        return ApiError::resp(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing or invalid bearer token",
+        )
+        .into_response();
+    }
+    if !state.settler.mint_configured() {
+        return faucet_disabled();
+    }
+    let recipient = match crate::sui::canonical_address(&req.recipient) {
+        Ok(a) => a,
+        Err(e) => {
+            return ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bad_address",
+                &e.to_string(),
+            )
+            .into_response();
+        }
+    };
+    let amount = req.amount.unwrap_or(state.faucet_internal_amount);
+    let to_balance = req.to_balance.unwrap_or(true);
+    if amount == 0 || amount > crate::sui::MAX_MINT_PER_CALL {
+        return ApiError::resp(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_amount",
+            &format!("amount must be 1..={}", crate::sui::MAX_MINT_PER_CALL),
+        )
+        .into_response();
+    }
+    match state
+        .settler
+        .mint_mtps(&recipient, amount, to_balance)
+        .await
+    {
+        Ok(digest) => Json(FaucetResponse {
+            digest,
+            amount,
+            recipient,
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::warn!(recipient = %recipient, error = %e, "internal faucet mint failed");
+            ApiError::resp(StatusCode::BAD_GATEWAY, "faucet_failed", &e.to_string()).into_response()
+        }
+    }
+}
+
 /// Proxy a non-streaming chat request to the configured Ollama model.
 pub(crate) async fn chat(
     State(state): State<SharedState>,
@@ -753,6 +944,159 @@ mod tests {
             .await
             .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    // A settler whose faucet is configured (admin cap set) but whose RPC is unreachable — so the
+    // config guards pass while any actual mint fails fast (connection refused).
+    fn settler_with_admin_cap(rpc_url: &str) -> crate::sui::SuiSettler {
+        use base64::Engine;
+        let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
+        crate::sui::SuiSettler::new(rpc_url.into(), "0x2", "0x2::sui::SUI", &key, Some("0x5"))
+            .expect("settler with admin cap")
+    }
+
+    // The public faucet is 503 when the on-chain faucet is unconfigured (no AdminCap) — it never
+    // claims a cooldown nor signs a mint it cannot complete. test_state has no admin cap.
+    #[tokio::test]
+    async fn faucet_disabled_without_admin_cap() {
+        let state = test_state();
+        let resp = faucet(
+            State(state),
+            Json(FaucetRequest {
+                address: "0x9".into(),
+                to_balance: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // Once the per-address window is exhausted, the next pull is refused with 429 + Retry-After.
+    // Pre-claim all `faucet_max_per_window` slots directly so the handler's own claim is the one
+    // refused — no mint, no RPC.
+    #[tokio::test]
+    async fn faucet_rejects_pull_when_window_exhausted() {
+        let mut state = test_state();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .settler = settler_with_admin_cap("http://127.0.0.1:9999");
+        let recipient = crate::sui::canonical_address("0x9").unwrap();
+        for _ in 0..state.faucet_max_per_window {
+            assert!(
+                state
+                    .control
+                    .claim_faucet_slot(
+                        &recipient,
+                        state.faucet_cooldown_secs,
+                        state.faucet_max_per_window
+                    )
+                    .await
+            );
+        }
+        let resp = faucet(
+            State(state),
+            Json(FaucetRequest {
+                address: "0x9".into(),
+                to_balance: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            resp.headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .is_some(),
+            "429 must carry Retry-After"
+        );
+    }
+
+    // A failed mint frees the claimed slot, so a transient backend error doesn't burn one of the
+    // window's allowed pulls. The settler's RPC is unreachable, so the mint errors after the slot
+    // is claimed.
+    #[tokio::test]
+    async fn faucet_releases_slot_on_mint_failure() {
+        let mut state = test_state();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .settler = settler_with_admin_cap("http://127.0.0.1:9999");
+        let recipient = crate::sui::canonical_address("0x9").unwrap();
+        let resp = faucet(
+            State(state.clone()),
+            Json(FaucetRequest {
+                address: "0x9".into(),
+                to_balance: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY, "mint failed");
+        assert!(
+            state.control.faucet_window_ttl(&recipient).await.is_none(),
+            "slot freed so the pull wasn't counted against the window"
+        );
+    }
+
+    // The internal faucet fails closed: with no FAUCET_ADMIN_TOKEN it is 503, never an open mint.
+    #[tokio::test]
+    async fn faucet_admin_disabled_without_token() {
+        let state = test_state();
+        let resp = faucet_admin(
+            State(state),
+            HeaderMap::new(),
+            Json(AdminFaucetRequest {
+                recipient: "0x9".into(),
+                amount: None,
+                to_balance: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // With a token configured, a missing/wrong bearer is 401.
+    #[tokio::test]
+    async fn faucet_admin_requires_bearer() {
+        let mut state = test_state();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .faucet_admin_token = Some("tok".into());
+        let resp = faucet_admin(
+            State(state),
+            HeaderMap::new(),
+            Json(AdminFaucetRequest {
+                recipient: "0x9".into(),
+                amount: None,
+                to_balance: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // An over-cap amount is rejected (422) before any mint — mirrors the contract's MAX_MINT_PER_CALL.
+    #[tokio::test]
+    async fn faucet_admin_rejects_over_cap_amount() {
+        let mut state = test_state();
+        {
+            let s = std::sync::Arc::get_mut(&mut state).expect("unique test arc");
+            s.faucet_admin_token = Some("tok".into());
+            s.settler = settler_with_admin_cap("http://127.0.0.1:9999");
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer tok".parse().unwrap(),
+        );
+        let resp = faucet_admin(
+            State(state),
+            headers,
+            Json(AdminFaucetRequest {
+                recipient: "0x9".into(),
+                amount: Some(crate::sui::MAX_MINT_PER_CALL + 1),
+                to_balance: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     // POST /v1/chat forwards messages to Ollama and returns the assistant reply.
