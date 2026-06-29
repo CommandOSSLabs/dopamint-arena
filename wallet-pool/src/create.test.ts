@@ -101,4 +101,14 @@ test("create rejects invalid member counts", async () => {
       }),
     WalletPoolError,
   );
+  await assert.rejects(
+    () =>
+      create({
+        network: "testnet",
+        members: NaN,
+        master: { generate: true },
+        store,
+      }),
+    WalletPoolError,
+  );
 });

@@ -31,7 +31,9 @@ export interface CreateResult {
 const MAX_MEMBERS = 10_000;
 
 export async function create(opts: CreateOptions): Promise<CreateResult> {
-  if (opts.members < 1) throw new WalletPoolError("members must be >= 1");
+  if (!Number.isInteger(opts.members) || opts.members < 1) {
+    throw new WalletPoolError("members must be a positive integer");
+  }
   if (opts.members > MAX_MEMBERS) {
     throw new WalletPoolError(`members must be <= ${MAX_MEMBERS}`);
   }
