@@ -9,7 +9,6 @@ import { ChevronDown, Eye, Plus, X } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 
 import "../games"; // register all game modules (side-effect import)
-import { GameIcon } from "../games/GameIcon";
 import { get, listByWorkspace } from "../games/registry";
 import type { GameModule, Workspace } from "../games/types";
 import { Button } from "@/components/ui/button";
@@ -56,6 +55,8 @@ import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
 import { GameContent } from "./GameContent";
+import { GameTpsBadge } from "./GameTpsBadge";
+import { OverviewFloor, type OverviewGroup } from "./OverviewFloor";
 import { MobileFloor } from "./MobileFloor";
 import { MobileAddSheet } from "./MobileAddSheet";
 import { AddAppDialog } from "./AddAppDialog";
@@ -451,6 +452,54 @@ export function ArenaView() {
     [setLayout, setHidden, setFloating],
   );
 
+  // Close-by-id scoped to a given workspace (not just the active floor). The overview
+  // floor mounts windows from every workspace at once, so its tiles must close into the
+  // right floor's stores. Mirrors `close`, keyed by `ws` instead of `floorWs`.
+  const closeInWorkspace = useCallback(
+    (ws: Workspace, id: string) => {
+      disposeWindow(id);
+      setLayouts((prev) => ({
+        ...prev,
+        [ws]: tile(prev[ws].filter((w) => w.id !== id)),
+      }));
+      setHiddens((prev) => ({ ...prev, [ws]: dropKey(prev[ws], id) }));
+      setFloatings((prev) => ({ ...prev, [ws]: dropKey(prev[ws], id) }));
+    },
+    [setLayouts, setHiddens, setFloatings],
+  );
+  // Stable per-workspace closers so the overview tiles' GameContent memo holds across
+  // ArenaView re-renders (a changing onClose would re-mount every game each render).
+  const closeGames = useCallback(
+    (id: string) => closeInWorkspace("games", id),
+    [closeInWorkspace],
+  );
+  const closePayment = useCallback(
+    (id: string) => closeInWorkspace("payment", id),
+    [closeInWorkspace],
+  );
+  const closeChat = useCallback(
+    (id: string) => closeInWorkspace("chat", id),
+    [closeInWorkspace],
+  );
+  // The overview's groups: every workspace's open windows (tiled + minimized + floating).
+  // A window lives in exactly one of the three stores, so concatenating their ids per
+  // workspace lists each instance once.
+  const idsFor = (ws: Workspace) => [
+    ...layouts[ws].map((w) => w.id),
+    ...Object.keys(hiddens[ws]),
+    ...Object.values(floatings[ws]).map((f) => f.item.id),
+  ];
+  const overviewGroups: OverviewGroup[] = [
+    { ws: "games", label: "Game", ids: idsFor("games"), onClose: closeGames },
+    {
+      ws: "payment",
+      label: "Payment",
+      ids: idsFor("payment"),
+      onClose: closePayment,
+    },
+    { ws: "chat", label: "Chat", ids: idsFor("chat"), onClose: closeChat },
+  ];
+
   // Minimize → fly into the dock, hide off the floor (keeping geometry), re-tile.
   const hide = (id: string) => {
     const item = layout.find((w) => w.id === id);
@@ -778,7 +827,7 @@ export function ArenaView() {
   // The floor's tools now live in the workspace tab bar (top), so the floor stays clear.
   const workspaceTabs = (
     <WorkspaceTabs
-      active={floorWs}
+      active={section}
       dockSide={dockSide}
       onAdd={() => setAddOpen(true)}
       onArrange={arrange}
@@ -837,7 +886,7 @@ export function ArenaView() {
           const win = (
             <GameWindow
               title={mod.name}
-              icon={<GameIcon game={mod} className="size-5" />}
+              icon={<GameTpsBadge gameId={gameOf(item.id)} />}
               domId={item.id}
               dragHandleProps={
                 fl ? floatDragProps(item.id) : handle.dragHandleProps
@@ -901,6 +950,16 @@ export function ArenaView() {
     </div>
   );
 
+  // The "All" floor swaps in for the per-workspace floor but keeps the same dock/panel
+  // chrome around it (it's just another floor, grouped). Rendered exclusively, so games
+  // mount once even though their real window ids are reused here.
+  const activeFloor =
+    section === "all" ? (
+      <OverviewFloor groups={overviewGroups} onOpenWorkspace={goToSection} />
+    ) : (
+      floorArea
+    );
+
   const collapseRotate =
     dockSide === "bottom"
       ? bottomCollapsed
@@ -951,7 +1010,7 @@ export function ArenaView() {
                   minSize="20%"
                   className="min-h-0"
                 >
-                  {floorArea}
+                  {activeFloor}
                 </ResizablePanel>
                 <ResizableHandle>{collapseButton}</ResizableHandle>
                 <ResizablePanel
@@ -975,7 +1034,7 @@ export function ArenaView() {
                   minSize="35%"
                   className="min-w-0"
                 >
-                  {floorArea}
+                  {activeFloor}
                 </ResizablePanel>
                 <ResizableHandle>{collapseButton}</ResizableHandle>
                 <ResizablePanel
@@ -995,6 +1054,13 @@ export function ArenaView() {
       ) : section === "live" ? (
         <main className="h-full overflow-auto">
           <MobileLive />
+        </main>
+      ) : section === "all" ? (
+        <main className="h-full min-h-0">
+          <OverviewFloor
+            groups={overviewGroups}
+            onOpenWorkspace={goToSection}
+          />
         </main>
       ) : (
         // The phone floor: the on-screen workspace's windows scrolled vertically, each
