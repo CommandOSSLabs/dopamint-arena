@@ -1157,4 +1157,141 @@ mod tests {
         let member_balances = balances.get(&member_address).unwrap();
         assert_eq!(member_balances.get("0x2::sui::SUI").copied(), Some(9_000));
     }
+
+    #[tokio::test]
+    async fn full_lifecycle_from_create_to_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FileWalletPoolStore::new(dir.path()));
+        let rpc: Arc<dyn SuiRpc> = Arc::new(MockRpc::default());
+        let pool = pool(store, rpc);
+
+        // Create a pool with two members.
+        let created = pool
+            .create(CreateOptions {
+                network: Network::Testnet,
+                member_count: 2,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // Open the pool and verify member keys can be resolved.
+        let handle = pool
+            .open(OpenOptions {
+                id: created.wallet_pool_id.clone(),
+                access_value: created.access_value.clone(),
+                network: Network::Testnet,
+                cache_mode: CacheMode::Default,
+            })
+            .await
+            .unwrap();
+        let member_address = handle.blob.index[1].address.clone();
+        let by_address_key = handle
+            .get_member_key(By::Address(member_address.clone()))
+            .unwrap();
+        assert_eq!(
+            ed25519_address(&by_address_key.public_key()),
+            member_address
+        );
+
+        // List all entries and filter down to members only.
+        let all = pool
+            .list(ListOptions {
+                id: created.wallet_pool_id.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+
+        let members_only = pool
+            .list(ListOptions {
+                id: created.wallet_pool_id.clone(),
+                filter: Filter {
+                    role: Some(WalletRole::Member),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(members_only.len(), 2);
+
+        // Disable one member and confirm the mutation persists.
+        pool.set_enabled(SetEnabledOptions {
+            id: created.wallet_pool_id.clone(),
+            by: By::Address(member_address.clone()),
+            enabled: false,
+        })
+        .await
+        .unwrap();
+
+        let disabled = pool
+            .list(ListOptions {
+                id: created.wallet_pool_id.clone(),
+                filter: Filter {
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(disabled[0].address, member_address);
+
+        // Export, delete, import, and verify the store reflects the imported pool.
+        let exported = pool.export(&created.wallet_pool_id).await.unwrap();
+        assert!(!exported.is_empty());
+
+        pool.delete(&created.wallet_pool_id).await.unwrap();
+        assert!(pool.export(&created.wallet_pool_id).await.is_err());
+        assert!(pool.list_pools().await.unwrap().is_empty());
+
+        let imported_id = pool.import(&exported).await.unwrap();
+        assert_eq!(imported_id, created.wallet_pool_id);
+
+        let summaries = pool.list_pools().await.unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].wallet_pool_id, created.wallet_pool_id);
+
+        // Clean up.
+        pool.delete(&created.wallet_pool_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_with_wrong_access_value_returns_core_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FileWalletPoolStore::new(dir.path()));
+        let rpc: Arc<dyn SuiRpc> = Arc::new(MockRpc::default());
+        let pool = pool(store, rpc);
+
+        let created = pool
+            .create(CreateOptions {
+                network: Network::Testnet,
+                member_count: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let wrong_access = wallet_pool_core::envelope::generate_access_value();
+        let err = pool
+            .open(OpenOptions {
+                id: created.wallet_pool_id,
+                access_value: wrong_access,
+                network: Network::Testnet,
+                cache_mode: CacheMode::Default,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                Error::Core(wallet_pool_core::error::Error::WrongAccessValue)
+            ),
+            "expected WrongAccessValue core error, got {err}"
+        );
+    }
 }

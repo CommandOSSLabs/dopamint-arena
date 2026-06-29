@@ -345,6 +345,7 @@ fn parse_u64(value: &Value) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::sync::{Arc, Mutex};
 
     /// A recorded RPC call made to the mock client.
@@ -484,5 +485,205 @@ mod tests {
     async fn reqwest_rpc_can_be_instantiated() {
         let _rpc =
             ReqwestRpc::new("http://localhost:9000").with_faucet_url("http://localhost:9123");
+    }
+
+    #[test]
+    fn parse_u64_accepts_number_and_string() {
+        assert_eq!(parse_u64(&json!(42)).unwrap(), 42);
+        assert_eq!(parse_u64(&json!("42")).unwrap(), 42);
+    }
+
+    #[test]
+    fn parse_u64_rejects_invalid_values() {
+        assert!(parse_u64(&json!("not a number")).is_err());
+        assert!(parse_u64(&json!(-1)).is_err());
+        assert!(parse_u64(&json!(null)).is_err());
+        assert!(parse_u64(&json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_balance_extracts_all_fields() {
+        let value = json!({
+            "coinType": "0x2::sui::SUI",
+            "coinObjectCount": 3,
+            "totalBalance": "1000000",
+        });
+
+        let got = parse_balance(&value).unwrap();
+
+        assert_eq!(
+            got,
+            Balance {
+                coin_type: "0x2::sui::SUI".into(),
+                coin_object_count: 3,
+                total_balance: 1_000_000,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_balance_defaults_missing_numeric_fields() {
+        let value = json!({ "coinType": "0x2::sui::SUI" });
+
+        let got = parse_balance(&value).unwrap();
+
+        assert_eq!(
+            got,
+            Balance {
+                coin_type: "0x2::sui::SUI".into(),
+                coin_object_count: 0,
+                total_balance: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_balance_requires_coin_type() {
+        assert!(parse_balance(&json!({ "coinObjectCount": 1 })).is_err());
+    }
+
+    #[test]
+    fn parse_coin_extracts_all_fields() {
+        let value = json!({
+            "coinType": "0x2::sui::SUI",
+            "coinObjectId": "0xabc",
+            "version": "5",
+            "digest": "txDgQ...",
+            "balance": 1234,
+        });
+
+        let got = parse_coin(&value).unwrap();
+
+        assert_eq!(
+            got,
+            Coin {
+                coin_type: "0x2::sui::SUI".into(),
+                object_id: "0xabc".into(),
+                version: 5,
+                digest: "txDgQ...".into(),
+                balance: 1234,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_coin_defaults_missing_version_and_balance() {
+        let value = json!({
+            "coinType": "0x2::sui::SUI",
+            "coinObjectId": "0xabc",
+            "digest": "txDgQ...",
+        });
+
+        let got = parse_coin(&value).unwrap();
+
+        assert_eq!(got.version, 0);
+        assert_eq!(got.balance, 0);
+    }
+
+    #[test]
+    fn parse_coin_requires_coin_type_object_id_and_digest() {
+        assert!(parse_coin(&json!({ "coinObjectId": "0xabc", "digest": "d" })).is_err());
+        assert!(parse_coin(&json!({ "coinType": "t", "digest": "d" })).is_err());
+        assert!(parse_coin(&json!({ "coinType": "t", "coinObjectId": "0xabc" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_records_get_coins_call() {
+        let owner = "0xowner";
+        let coin = Coin {
+            coin_type: "0x2::sui::SUI".into(),
+            object_id: "0xabc".into(),
+            version: 1,
+            digest: "d".into(),
+            balance: 100,
+        };
+        let rpc = MockRpc::new(vec![], vec![coin.clone()], None, false, false);
+
+        let got = rpc.get_coins(owner, "0x2::sui::SUI").await.unwrap();
+
+        assert_eq!(got, vec![coin]);
+        assert_eq!(
+            rpc.calls(),
+            vec![RecordedCall {
+                method: "get_coins".into(),
+                address: owner.into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_records_execute_transaction_call() {
+        let response = ExecuteResponse {
+            digest: "tx".into(),
+            effects: Some(json!({ "status": { "status": "success" } })),
+        };
+        let rpc = MockRpc::new(vec![], vec![], Some(response.clone()), false, false);
+
+        let got = rpc
+            .execute_transaction(b"tx", vec![b"sig".to_vec()])
+            .await
+            .unwrap();
+
+        assert_eq!(got, response);
+        assert_eq!(
+            rpc.calls(),
+            vec![RecordedCall {
+                method: "execute_transaction".into(),
+                address: String::new(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_execute_transaction_errors_without_response() {
+        let rpc = MockRpc::new(vec![], vec![], None, false, false);
+
+        assert!(rpc.execute_transaction(b"tx", vec![]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_records_wait_for_transaction_call() {
+        let digest = "d";
+        let rpc = MockRpc::new(vec![], vec![], None, true, false);
+
+        rpc.wait_for_transaction(digest).await.unwrap();
+
+        assert_eq!(
+            rpc.calls(),
+            vec![RecordedCall {
+                method: "wait_for_transaction".into(),
+                address: digest.into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_wait_for_transaction_respects_wait_ok() {
+        let rpc = MockRpc::new(vec![], vec![], None, false, false);
+
+        assert!(rpc.wait_for_transaction("d").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_records_faucet_request_call() {
+        let address = "0xaddr";
+        let rpc = MockRpc::new(vec![], vec![], None, false, true);
+
+        rpc.faucet_request(address).await.unwrap();
+
+        assert_eq!(
+            rpc.calls(),
+            vec![RecordedCall {
+                method: "faucet_request".into(),
+                address: address.into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_rpc_faucet_request_respects_faucet_ok() {
+        let rpc = MockRpc::new(vec![], vec![], None, false, false);
+
+        assert!(rpc.faucet_request("0xaddr").await.is_err());
     }
 }
