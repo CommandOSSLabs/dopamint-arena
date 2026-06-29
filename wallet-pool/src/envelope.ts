@@ -40,6 +40,8 @@ function deriveKey(
   if (!env.kdf)
     throw new WrongAccessValueError("passphrase envelope missing kdf params");
   const { salt, N, r, p } = env.kdf;
+  const cached = scryptKeyCache.get(salt);
+  if (cached) return cached;
   return scryptSync(accessValue, Buffer.from(fromB64(salt)), 32, { N, r, p });
 }
 
