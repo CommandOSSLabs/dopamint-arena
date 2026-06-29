@@ -67,10 +67,12 @@ async fn handle_fleet_socket(socket: WebSocket, state: SharedState) {
                 match serde_json::from_str::<FleetClientMsg>(&text) {
                     // One registration per socket; a re-register on an already-registered socket
                     // is ignored (the bot reconnects for its next match instead).
-                    Ok(FleetClientMsg::Register { game, eph_pubkey }) if bot_id.is_none() => {
+                    Ok(FleetClientMsg::Register { game, eph_pubkey, address })
+                        if bot_id.is_none() =>
+                    {
                         bot_id = Some(state.fleet.register(
                             &game,
-                            BotHandle { eph_pubkey, ctrl: tx.clone() },
+                            BotHandle { eph_pubkey, address, ctrl: tx.clone() },
                         ));
                     }
                     _ => continue,

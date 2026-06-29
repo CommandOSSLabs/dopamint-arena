@@ -241,9 +241,11 @@ pub(crate) struct ArenaAllocateRequest {
 pub(crate) struct ArenaAllocation {
     game: String,
     match_id: String,
-    /// The reserved bot's ephemeral pubkey (hex) — the frontend needs it as party B to build the
-    /// open PTB.
+    /// The reserved bot's ephemeral pubkey (hex) — tunnel party B's `pk` (verifies move sigs).
     bot_eph_pubkey: String,
+    /// The reserved bot's on-chain address — tunnel party B's `address` (funds/receives seat B).
+    /// Distinct from the ephemeral pubkey; the frontend needs both to build the open PTB's party B.
+    bot_address: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -277,6 +279,7 @@ pub(crate) async fn arena_allocate(
             game: r.game,
             match_id: r.match_id,
             bot_eph_pubkey: r.eph_pubkey,
+            bot_address: r.address,
         });
     }
     tracing::info!(user = %req.user_address, allocated = allocations.len(), "arena allocate");
@@ -1047,6 +1050,7 @@ mod arena_tests {
             game,
             BotHandle {
                 eph_pubkey: pk.into(),
+                address: format!("0x{pk}"),
                 ctrl: tx,
             },
         );

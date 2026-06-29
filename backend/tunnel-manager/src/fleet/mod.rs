@@ -56,26 +56,34 @@ pub enum FleetServerMsg {
 pub enum FleetClientMsg {
     Register {
         game: String,
+        /// The bot's ephemeral pubkey (hex) — tunnel party B's `pk`, verifies its move signatures.
         eph_pubkey: String,
+        /// The bot's on-chain address — tunnel party B's `address`. Distinct from `eph_pubkey`:
+        /// it funds/receives seat B and gates `deposit_party_b`. The frontend needs both to build
+        /// the open PTB's party B.
+        address: String,
     },
     #[serde(other)]
     Other,
 }
 
-/// A registered bot: its ephemeral pubkey (hex) and a sender to push control messages to its
-/// `/v1/fleet` socket task.
+/// A registered bot. Party B in a tunnel is identified by TWO keys: `address` (on-chain identity —
+/// funds/receives seat B) and `eph_pubkey` (signs co-signed move updates). `ctrl` pushes control
+/// messages to the bot's `/v1/fleet` socket task.
 #[derive(Clone)]
 pub struct BotHandle {
     pub eph_pubkey: String,
+    pub address: String,
     pub ctrl: mpsc::UnboundedSender<FleetServerMsg>,
 }
 
 /// What `reserve` hands back to the allocate handler: the minted match id, the game, and the bot's
-/// ephemeral pubkey (which the frontend needs as party B to build the open PTB).
+/// party-B identity (both keys) the frontend needs to build the open PTB.
 pub struct Reservation {
     pub match_id: String,
     pub game: String,
     pub eph_pubkey: String,
+    pub address: String,
 }
 
 struct Reserved {
@@ -143,6 +151,7 @@ impl BotPool {
         inner.next_match += 1;
         let match_id = format!("arena_{}", inner.next_match);
         let eph_pubkey = bot.eph_pubkey.clone();
+        let address = bot.address.clone();
         inner.reserved.insert(
             match_id.clone(),
             Reserved {
@@ -157,6 +166,7 @@ impl BotPool {
             match_id,
             game: game.to_owned(),
             eph_pubkey,
+            address,
         })
     }
 
@@ -206,6 +216,7 @@ mod tests {
         (
             BotHandle {
                 eph_pubkey: pk.into(),
+                address: format!("0x{pk}"),
                 ctrl: tx,
             },
             rx,
@@ -330,14 +341,16 @@ mod tests {
     // The bot's register message decodes; unknown control messages are total (Other).
     #[test]
     fn fleet_client_msg_decodes_register_and_is_total() {
-        let reg: FleetClientMsg =
-            serde_json::from_str(r#"{"type":"register","game":"blackjack","ephPubkey":"aa"}"#)
-                .unwrap();
+        let reg: FleetClientMsg = serde_json::from_str(
+            r#"{"type":"register","game":"blackjack","ephPubkey":"aa","address":"0xbot"}"#,
+        )
+        .unwrap();
         assert_eq!(
             reg,
             FleetClientMsg::Register {
                 game: "blackjack".into(),
-                eph_pubkey: "aa".into()
+                eph_pubkey: "aa".into(),
+                address: "0xbot".into(),
             }
         );
         let other: FleetClientMsg = serde_json::from_str(r#"{"type":"surprise"}"#).unwrap();
