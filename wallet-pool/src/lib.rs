@@ -4,6 +4,7 @@ pub mod error;
 pub mod fund;
 pub mod key_cache;
 pub mod rpc;
+pub mod sign;
 pub mod store;
 
 #[cfg(test)]
