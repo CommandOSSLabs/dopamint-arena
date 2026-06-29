@@ -1,11 +1,18 @@
 //! Async wallet pool built on top of `wallet-pool-core`.
 
+pub mod client;
 pub mod error;
 pub mod fund;
 pub mod key_cache;
 pub mod rpc;
 pub mod sign;
 pub mod store;
+
+pub use client::{
+    BalanceOptions, By, CacheMode, CreateOptions, CreateResult, FundOptions, ListOptions,
+    OpenOptions, PoolSummary, SetEnabledOptions, SignAndExecuteOptions, WalletBalanceMap,
+    WalletPool, WalletPoolHandle,
+};
 
 #[cfg(test)]
 mod tests {
