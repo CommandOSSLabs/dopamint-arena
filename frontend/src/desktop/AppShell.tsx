@@ -52,7 +52,7 @@ export function AppShell() {
   const { pathname, search } = useRouterState({ select: (s) => s.location });
   const onArena = pathname === "/";
   const onExplorer = pathname.startsWith("/explorer");
-  const section = (search as { section?: MobileSection }).section ?? "games";
+  const section = (search as { section?: MobileSection }).section ?? "all";
 
   return (
     <div className="relative flex h-full flex-col text-foreground">
@@ -93,7 +93,7 @@ export function AppShell() {
               <Link
                 key={t.section}
                 to="/"
-                search={t.section === "games" ? {} : { section: t.section }}
+                search={t.section === "all" ? {} : { section: t.section }}
                 aria-label={t.label}
                 className={cn(
                   tabClass,

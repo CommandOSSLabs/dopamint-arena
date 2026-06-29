@@ -78,8 +78,8 @@ export function useWalletSession(): WalletSession {
     { owner: realAddress ?? "" },
     { enabled: !!realAddress },
   );
-  // MTPS balance (0-decimal). Default stakes come from the SIP-58 address balance, so sum the owned
-  // coins (`totalBalance`) and the address balance (`fundsInAddressBalance`) for the true holdings.
+  // MTPS balance (0-decimal). Stakes are withdrawn from the SIP-58 address balance, so the header
+  // shows that — the spendable/playable balance — not the wallet's coin total.
   const { data: mtpsBalance, refetch: refetchMtps } = useSuiClientQuery(
     "getBalance",
     { owner: realAddress ?? "", coinType: MTPS_COIN_TYPE },
@@ -89,9 +89,7 @@ export function useWalletSession(): WalletSession {
     | { totalBalance: string; fundsInAddressBalance?: string }
     | undefined;
   const balanceMtps = mtps
-    ? Number(
-        BigInt(mtps.totalBalance) + BigInt(mtps.fundsInAddressBalance ?? "0"),
-      )
+    ? Number(BigInt(mtps.fundsInAddressBalance ?? "0"))
     : null;
 
   if (realAddress) {

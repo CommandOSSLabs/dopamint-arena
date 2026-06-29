@@ -60,6 +60,19 @@ const playgroundRoute = createRoute({
   ),
 });
 
+/**
+ * Internal MTPS faucet — ops-only mint tool gated by the backend's `FAUCET_ADMIN_TOKEN`.
+ * Outside the wallet gate / navbar shell and code-split so it never ships in the main bundle.
+ */
+const faucetRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/faucet",
+  component: lazyRouteComponent(
+    () => import("./faucet/FaucetInternalPage"),
+    "FaucetInternalPage",
+  ),
+});
+
 /** Public settlement explorer — paginated list, address filter, live SSE prepend. */
 const explorerRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -83,6 +96,7 @@ const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([homeRoute, explorerRoute, explorerDetailRoute]),
   designSystemRoute,
   playgroundRoute,
+  faucetRoute,
 ]);
 
 export const router = createRouter({ routeTree });

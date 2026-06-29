@@ -73,6 +73,8 @@ import { openAndFundSelfPlay, readCreatedAt } from "@/onchain/tunnelTx";
 import { settleViaBackend } from "@/backend/settle";
 import {
   isMtpsConfigured,
+  isMtpsAddressBalance,
+  ensureMtpsAddressBalance,
   ensureMtpsStakeCoin,
   MTPS_COIN_TYPE,
 } from "@/onchain/mtps";
@@ -108,7 +110,7 @@ const NUM_COLORS = 16;
 /** SUI-fallback per-seat stake (MIST) when MTPS env is unset. Collaborative free
  *  mode never shifts balances, so any close is a draw (each seat keeps its stake). */
 const STAKE = 1n;
-/** MTPS per-seat stake (1 token, 9 decimals) — the default on-chain path (ADR-0010):
+/** MTPS per-seat stake (1 token; 0 decimals, ADR-0015) — the default on-chain path (ADR-0010):
  *  faucet-minted, so painters need ZERO SUI; only gas is sponsored. Mirrors the other games. */
 const MTPS_STAKE_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
@@ -1046,30 +1048,48 @@ export function useWorldCanvasOnchain(
       >[0]["reads"];
 
       try {
-        // Pre-select the MTPS stake coin BEFORE the open so concurrent (re)opens of
-        // the single tunnel — and React StrictMode's double-mount — don't equivocate at
-        // the shared faucet object. Funding each open against a coin that's already in
-        // hand is what lets us drop the old open serializer: the faucet pull (if any)
-        // happens here, off the hot open path, and the `create_and_fund` then only splits
-        // a ready coin (Sui's own object-version ordering settles any overlap). Mirrors
-        // chickenCross's `prepareStake` ahead of the open, but keyed to the ephemeral
-        // seat-A identity (a 0-SUI bot key, gas-sponsored), not a connected wallet. SUI
-        // fallback (MTPS env unset) has no such coin — the framework splits the stake
-        // from the gas coin inside openAndFundSelfPlay.
-        let stakeCoinId: string | undefined;
+        // Fund the stake BEFORE the open so concurrent (re)opens of the single tunnel — and
+        // React StrictMode's double-mount — never equivocate. ADR-0013: stake from the seat-A
+        // identity's MTPS *address balance* (withdrawn inside `create_and_fund`), topping it up
+        // off the hot open path (faucet/sweep) only when short — so the open just redeems a ready
+        // balance and Sui's own version ordering settles any overlap. Keyed to the ephemeral
+        // seat-A identity (a 0-SUI bot key, gas-sponsored), not a connected wallet. SUI fallback
+        // (MTPS env unset) has no such balance — the framework splits the stake from the gas coin
+        // inside openAndFundSelfPlay.
+        let stakeOpt: {
+          stakeCoinId?: string;
+          stakeFromBalance?: { amount: bigint; coinType: string };
+        } = {};
         if (mtpsOn) {
-          // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
-          stakeCoinId = await ensureMtpsStakeCoin({
-            client: client as never,
-            owner: identities.a.address,
-            need: 2n * stakePerSeat,
-          });
+          // Self-play funds BOTH seats from one source → fund for the 2-seat total.
+          if (isMtpsAddressBalance) {
+            await ensureMtpsAddressBalance({
+              client: client as never,
+              signExec: sponsoredSignExec,
+              owner: identities.a.address,
+              need: 2n * stakePerSeat,
+            });
+            stakeOpt = {
+              stakeFromBalance: {
+                amount: 2n * stakePerSeat,
+                coinType: MTPS_COIN_TYPE,
+              },
+            };
+          } else {
+            stakeOpt = {
+              stakeCoinId: await ensureMtpsStakeCoin({
+                client: client as never,
+                owner: identities.a.address,
+                need: 2n * stakePerSeat,
+              }),
+            };
+          }
         }
 
         // ONE create_and_fund opens the tunnel AND funds BOTH distinct seats' stakes in a
-        // single signature (the shared, proven self-play helper). MTPS: gas-sponsored,
-        // staked from the pre-selected faucet coin. SUI fallback: sponsored first, then
-        // sender-pays (the seat-A key paying its own gas).
+        // single signature (the shared, proven self-play helper). MTPS: gas-sponsored, staked
+        // from the address balance (or a coin). SUI fallback: sponsored first, then sender-pays
+        // (the seat-A key paying its own gas).
         const openedTunnelId = mtpsOn
           ? await openAndFundSelfPlay({
               reads,
@@ -1079,7 +1099,7 @@ export function useWorldCanvasOnchain(
               aAmount: stakePerSeat,
               bAmount: stakePerSeat,
               coinType,
-              stakeCoinId,
+              ...stakeOpt,
             })
           : await withSponsorFallback(
               () =>

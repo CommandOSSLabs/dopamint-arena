@@ -125,7 +125,7 @@ export function WalletButton({
               disabled={fauceting}
               onClick={handleFaucet}
             >
-              {fauceting ? <Loader2 className="animate-spin" /> : <Coins />}
+              {fauceting ? <Loader2 className="animate-spin" /> : ""}
               {fauceting ? "Fauceting…" : "Faucet MTPS"}
             </Button>
           </div>

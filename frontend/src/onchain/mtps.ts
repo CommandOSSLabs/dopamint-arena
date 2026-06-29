@@ -50,26 +50,77 @@ export async function faucetMtps(opts: {
       toBalance: opts.toBalance,
     }),
   });
-  if (!res.ok) {
-    // Surface the backend's clean `error.message` (the ApiError envelope), not the raw JSON, and
-    // attach the HTTP status so callers can special-case the 429 rate limit.
-    const raw = await res.text().catch(() => "");
-    let message = raw;
-    try {
-      message =
-        (JSON.parse(raw) as { error?: { message?: string } })?.error?.message ??
-        raw;
-    } catch {
-      /* not JSON — fall back to the raw text */
-    }
-    const err = new Error(
-      message || `faucet request failed (${res.status})`,
-    ) as Error & { status?: number };
-    err.status = res.status;
-    throw err;
-  }
+  if (!res.ok) throw await faucetError(res);
   const { digest } = (await res.json()) as { digest: string };
   return { digest };
+}
+
+/** What the backend's faucet routes report on a successful mint (the `FaucetResponse` envelope). */
+export interface FaucetMintResult {
+  /** The `admin_mint` tx digest. */
+  digest: string;
+  /** Whole-token MTPS actually minted (0 decimals; ADR-0015). */
+  amount: number;
+  /** Canonical recipient address the mint credited. */
+  recipient: string;
+}
+
+/** Per-call mint ceiling, mirroring the backend `MAX_MINT_PER_CALL` / `mtps::admin_mint` (ADR-0015).
+ *  The internal endpoint rejects an `amount` outside `1..=MTPS_MAX_MINT_PER_CALL`. */
+export const MTPS_MAX_MINT_PER_CALL = 1_000_000;
+
+/**
+ * Internal (unlimited, no-cooldown) MTPS faucet for ops use (`POST /v1/faucet/internal`, ADR-0015).
+ * Mints to any `recipient`, bearer-gated by the backend's `FAUCET_ADMIN_TOKEN` — pass that secret as
+ * `adminToken`. Omit `amount` to mint the backend's configured internal default. Returns the mint
+ * digest + amount + canonical recipient; throws on a non-2xx (401 bad token, 422 bad address/amount,
+ * 503 faucet/token unconfigured) with the backend's `error.message` and the HTTP `status` attached.
+ */
+export async function faucetMtpsInternal(opts: {
+  /** The backend's `FAUCET_ADMIN_TOKEN` bearer secret gating the internal endpoint. */
+  adminToken: string;
+  recipient: string;
+  /** Whole-token MTPS to mint (`1..=MTPS_MAX_MINT_PER_CALL`); omitted → the backend default. */
+  amount?: number;
+  /** Deposit into the recipient's SIP-58 address balance (default) vs. an owned coin. */
+  toBalance?: boolean;
+}): Promise<FaucetMintResult> {
+  const res = await fetch(`${resolveBackendUrl()}/v1/faucet/internal`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${opts.adminToken}`,
+    },
+    body: JSON.stringify({
+      recipient: opts.recipient,
+      amount: opts.amount,
+      toBalance: opts.toBalance,
+    }),
+  });
+  if (!res.ok) throw await faucetError(res);
+  return (await res.json()) as FaucetMintResult;
+}
+
+/** Turn a non-2xx faucet response into an `Error` carrying the backend's clean `error.message` (the
+ *  ApiError envelope), not the raw JSON, with the HTTP `status` attached so callers can special-case
+ *  e.g. a 429 cooldown or a 401 bad token. Shared by both the public and internal faucet clients. */
+async function faucetError(
+  res: Response,
+): Promise<Error & { status?: number }> {
+  const raw = await res.text().catch(() => "");
+  let message = raw;
+  try {
+    message =
+      (JSON.parse(raw) as { error?: { message?: string } })?.error?.message ??
+      raw;
+  } catch {
+    /* not JSON — fall back to the raw text */
+  }
+  const err = new Error(
+    message || `faucet request failed (${res.status})`,
+  ) as Error & { status?: number };
+  err.status = res.status;
+  return err;
 }
 
 const utf8 = (s: string) => Array.from(new TextEncoder().encode(s));
@@ -155,15 +206,12 @@ export async function ensureMtpsStakeCoin(opts: {
 /**
  * SIP-58 address-balance stake path (ADR-0013): fund the stake by withdrawing from the player's
  * MTPS *address balance* instead of a version-pinned coin object, so concurrent opens (every
- * game auto-opening on a reload) never equivocate. ON by default whenever MTPS is configured;
- * set `VITE_MTPS_ADDRESS_BALANCE=false` as a kill switch back to the coin-object path.
+ * game auto-opening on a reload) never equivocate. Always on whenever MTPS is configured.
  *
  * REQUIRES a backend whose sponsor allowlists `coin::redeem_funds`/`coin::send_funds` (ADR-0013) —
  * an older settler refuses those calls (`sponsor refuses move call …::coin::send_funds`).
  */
-export const isMtpsAddressBalance =
-  isMtpsConfigured &&
-  String(import.meta.env?.VITE_MTPS_ADDRESS_BALANCE ?? "true") !== "false";
+export const isMtpsAddressBalance = isMtpsConfigured;
 
 /** Read surface for the address-balance funding path: coins (to sweep) + per-type balance (to know
  *  how much already sits in the address balance). Satisfied by dapp-kit's SuiClient. */

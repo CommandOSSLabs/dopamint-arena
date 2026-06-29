@@ -11,10 +11,17 @@ import {
 } from "@/backend/explorerClient";
 import { useSuiClientContext } from "@mysten/dapp-kit";
 import { useBackendStats } from "@/backend/useBackendStats";
+import { usePageMeta } from "@/lib/usePageMeta";
 import { MetricsStrip } from "./MetricsStrip";
 import { TpsGraph } from "./TpsGraph";
 
 export function ExplorerPage() {
+  usePageMeta({
+    title: "Explorer — MillionsTPS",
+    description: "Live feed of every settlement on Sui.",
+    image: "/og-explorer.png",
+    imageAlt: "MillionsTPS Explorer — live feed of every settlement on Sui.",
+  });
   const { network } = useSuiClientContext();
   // One shared /v1/stats/live stream for the whole page — the strip and the throughput chart
   // read the same snapshot, so their "current TPS" can never disagree.
