@@ -129,6 +129,10 @@ pub fn winner_around(board: &[u8], size: usize, idx: usize) -> u8 {
             row += dr;
             col += dc;
         }
+        // A block only if an opponent stone sits just past the run (it stopped, so the cell
+        // is not `mark`); the board edge leaves `in_bounds` false and counts as open.
+        let forward_blocked =
+            in_bounds(size, row, col) && board[row as usize * size + col as usize] != EMPTY;
         row = row0 - dr;
         col = col0 - dc;
         while in_bounds(size, row, col) && board[row as usize * size + col as usize] == mark {
@@ -136,7 +140,11 @@ pub fn winner_around(board: &[u8], size: usize, idx: usize) -> u8 {
             row -= dr;
             col -= dc;
         }
-        if count >= 5 {
+        let backward_blocked =
+            in_bounds(size, row, col) && board[row as usize * size + col as usize] != EMPTY;
+        // Standard caro: exactly five (no overline) and not flanked by the opponent on both
+        // ends. The board edge is an open end, not a block.
+        if count == 5 && !(forward_blocked && backward_blocked) {
             return mark;
         }
     }
@@ -465,6 +473,54 @@ mod tests {
                 Seat::A,
             )
             .unwrap()
+    }
+
+    /// Standard-caro win rule, mirroring the TS `winnerAround` parity tests: exactly five,
+    /// no overline, and not flanked by the opponent on both ends (the board edge is open).
+    #[test]
+    fn winner_around_enforces_standard_rule() {
+        let size = 15;
+        let at = |r: usize, c: usize| r * size + c;
+
+        // A clean horizontal five (open ends) wins.
+        let mut b = vec![EMPTY; size * size];
+        for c in 3..=7 {
+            b[at(2, c)] = 1;
+        }
+        assert_eq!(winner_around(&b, size, at(2, 7)), 1);
+
+        // An overline (six in a row) does not win.
+        let mut b = vec![EMPTY; size * size];
+        for c in 2..=7 {
+            b[at(0, c)] = 1;
+        }
+        assert_eq!(winner_around(&b, size, at(0, 7)), EMPTY);
+
+        // A five flanked by the opponent on both ends does not win.
+        let mut b = vec![EMPTY; size * size];
+        b[at(2, 2)] = 2;
+        for c in 3..=7 {
+            b[at(2, c)] = 1;
+        }
+        b[at(2, 8)] = 2;
+        assert_eq!(winner_around(&b, size, at(2, 7)), EMPTY);
+
+        // Blocked on only one end still wins (the other end is open).
+        let mut b = vec![EMPTY; size * size];
+        b[at(4, 2)] = 2;
+        for c in 3..=7 {
+            b[at(4, c)] = 1;
+        }
+        assert_eq!(winner_around(&b, size, at(4, 7)), 1);
+
+        // The board edge is an open end: a five against the wall wins even with the
+        // inner end blocked by the opponent.
+        let mut b = vec![EMPTY; size * size];
+        for c in 0..=4 {
+            b[at(5, c)] = 1;
+        }
+        b[at(5, 5)] = 2;
+        assert_eq!(winner_around(&b, size, at(5, 4)), 1);
     }
 
     /// Parity gate: caro uses the identical accumulator formula with domain `caro.v2`.

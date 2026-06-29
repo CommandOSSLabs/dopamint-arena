@@ -150,7 +150,17 @@ impl MoveStrategy<CaroSeries> for CaroSeriesStrategy {
     }
 }
 
-fn line_info(board: &[u8], size: usize, idx: usize, dr: i32, dc: i32, mark: u8) -> (usize, usize) {
+/// Run length plus its two ends. `open_ends` (empty neighbour, edge excluded) drives the
+/// extension scoring; `opp_blocked_ends` (an opponent stone, edge excluded) decides whether a
+/// five actually wins — matching `caro::winner_around`'s standard-caro rule.
+fn line_info(
+    board: &[u8],
+    size: usize,
+    idx: usize,
+    dr: i32,
+    dc: i32,
+    mark: u8,
+) -> (usize, usize, usize) {
     let row0 = (idx / size) as i32;
     let col0 = (idx % size) as i32;
     let mut run = 1;
@@ -162,6 +172,7 @@ fn line_info(board: &[u8], size: usize, idx: usize, dr: i32, dc: i32, mark: u8) 
         col += dc;
     }
     let fwd_open = in_bounds(size, row, col) && board[row as usize * size + col as usize] == EMPTY;
+    let fwd_opp = in_bounds(size, row, col) && board[row as usize * size + col as usize] != EMPTY;
     row = row0 - dr;
     col = col0 - dc;
     while in_bounds(size, row, col) && board[row as usize * size + col as usize] == mark {
@@ -170,19 +181,27 @@ fn line_info(board: &[u8], size: usize, idx: usize, dr: i32, dc: i32, mark: u8) 
         col -= dc;
     }
     let bwd_open = in_bounds(size, row, col) && board[row as usize * size + col as usize] == EMPTY;
-    (run, usize::from(fwd_open) + usize::from(bwd_open))
+    let bwd_opp = in_bounds(size, row, col) && board[row as usize * size + col as usize] != EMPTY;
+    (
+        run,
+        usize::from(fwd_open) + usize::from(bwd_open),
+        usize::from(fwd_opp) + usize::from(bwd_opp),
+    )
 }
 
-fn pattern_value(run: usize, open_ends: usize) -> u32 {
-    match (run, open_ends) {
-        (5.., _) => 100_000,
-        (4, 1..) => 9_000,
-        (4, _) => 200,
-        (3, 2) => 1_500,
-        (3, _) => 150,
-        (2, 2) => 200,
-        (2, _) => 30,
-        (_, 2) => 20,
+fn pattern_value(run: usize, open_ends: usize, opp_blocked_ends: usize) -> u32 {
+    match run {
+        // Standard caro: only an exactly-five not flanked by the opponent on both ends wins.
+        5 if opp_blocked_ends < 2 => 100_000,
+        5 => 200,          // dead five (both ends blocked) — no win
+        n if n > 5 => 200, // overline — no win
+        4 if open_ends >= 1 => 9_000,
+        4 => 200,
+        3 if open_ends == 2 => 1_500,
+        3 => 150,
+        2 if open_ends == 2 => 200,
+        2 => 30,
+        _ if open_ends == 2 => 20,
         _ => 5,
     }
 }
@@ -190,8 +209,8 @@ fn pattern_value(run: usize, open_ends: usize) -> u32 {
 fn move_score(board: &[u8], size: usize, idx: usize, mark: u8) -> u32 {
     let mut best = 0;
     for (dr, dc) in [(0, 1), (1, 0), (1, 1), (1, -1)] {
-        let (run, open_ends) = line_info(board, size, idx, dr, dc, mark);
-        best = best.max(pattern_value(run, open_ends));
+        let (run, open_ends, opp_blocked_ends) = line_info(board, size, idx, dr, dc, mark);
+        best = best.max(pattern_value(run, open_ends, opp_blocked_ends));
     }
     best
 }
