@@ -492,12 +492,20 @@ class SoloBotSession<
     this.pendingIntent = undefined;
     this.paused = false;
 
-    // Per-game stake from the lobby (the small swap), floored at the game's minimum.
+    // The bank funded on-chain per seat. Each duel wagers the per-game stake off it, so the stake
+    // must never exceed the bank — else the first duel underflows a seat's balance (u64 out of range:
+    // e.g. a 1-token MTPS bank with a 500 lobby stake → 1 - 500 = -499).
+    const fundedPerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
+    // Per-game stake from the lobby (the small swap): floored at the game's minimum, capped at the
+    // bank so a single duel can't wager more than a seat holds.
     const floored = Math.floor(nextStake);
     const stakePerGame = BigInt(
-      Math.max(
-        Number(this.spec.minStake),
-        Number.isFinite(floored) ? floored : 0,
+      Math.min(
+        Number(fundedPerSeat),
+        Math.max(
+          Number(this.spec.minStake),
+          Number.isFinite(floored) ? floored : 0,
+        ),
       ),
     );
     this.stake = Number(stakePerGame);
@@ -508,10 +516,6 @@ class SoloBotSession<
 
     void (async () => {
       try {
-        // The LARGE bank funded on-chain per seat (vs the small per-game stake). Multi-game
-        // swaps `stakePerGame` per duel off this bank, so it survives MANY duels (not one).
-        const fundedPerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
-
         const reads = deps.client as unknown as SuiReads;
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
