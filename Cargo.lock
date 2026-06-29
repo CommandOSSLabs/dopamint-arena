@@ -7639,6 +7639,7 @@ dependencies = [
  "bcs 0.2.1",
  "dotenvy",
  "ed25519-dalek",
+ "fleet-core",
  "fred",
  "futures",
  "hex",
@@ -7658,6 +7659,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "tunnel-harness",
  "uuid",
  "wiremock",
 ]

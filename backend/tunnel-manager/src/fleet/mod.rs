@@ -12,6 +12,7 @@
 //! disconnects when the match ends, which `unregister`s it; an unclaimed reservation (user never
 //! opened) is reclaimed after `RESERVATION_TTL_MS`.
 
+pub mod bus_transport;
 pub mod ws;
 
 use std::collections::HashMap;

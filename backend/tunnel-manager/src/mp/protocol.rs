@@ -63,8 +63,10 @@ pub enum ClientMsg {
     Resume { match_id: String },
 }
 
-/// Messages the server sends to the client.
-#[derive(Debug, Serialize, PartialEq)]
+/// Messages the server sends to the client. `Deserialize` is for the co-located fleet (ADR-0024):
+/// an in-process bot reads its own bus-delivered frames back into typed form (the bus carries only
+/// strings). The browser still only ever deserializes these — same wire either way.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",

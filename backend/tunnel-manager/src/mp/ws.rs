@@ -571,7 +571,11 @@ async fn notify_peers_dropped(
 /// store at most once per match, then route every subsequent frame from the in-task copy.
 /// Removes both per-move Redis GETs (counting + forwarding). conn_a/conn_b are fixed at
 /// match creation, so the cached copy is valid for the life of the connection.
-async fn relay_to_other(
+///
+/// `pub(crate)` so the co-located fleet's `BusRelayTransport` (ADR-0024) routes a bot's outbound
+/// frames through this SAME path — keeping move-counting and seat routing in exact parity with the
+/// human WS path instead of duplicating either.
+pub(crate) async fn relay_to_other(
     state: &SharedState,
     cache: &mut std::collections::HashMap<String, MatchRecord>,
     from: ConnId,
