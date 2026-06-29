@@ -28,7 +28,10 @@
 
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
-import type { BattleshipState, ShotResult } from "../protocol/battleship";
+import type {
+  BattleshipState,
+  BattleshipShotResult as ShotResult,
+} from "sui-tunnel-ts/protocol/battleship";
 import {
   BOARD_SIZE,
   CELL_COUNT,

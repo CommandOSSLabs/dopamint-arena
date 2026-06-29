@@ -13,7 +13,7 @@
 #
 # Frontend game source included:
 #   - frontend/src/agent            — game kits and bots
-#   - frontend/src/games/battleship — battleship kit imports protocol + engine
+#   - frontend/src/games/battleship — battleship kit imports engine (protocol is SDK-only)
 #   - frontend/src/games/blackjack/app/lib — blackjack kit imports bjBetProtocol
 #   - frontend/src/games/ticTacToe/packages/shared — @ttt/shared with its deps
 # Other games (bombIt, chickenCross, quantumPoker) only import sui-tunnel-ts
@@ -39,8 +39,7 @@ COPY frontend/src/games/ticTacToe/packages/shared/tsconfig.json \
      /app/frontend/src/games/ticTacToe/packages/shared/tsconfig.json
 
 # ── game source files needed by agent kits ────────────────────────────────────
-# battleship: kit imports protocol + engine directly via @/ alias
-COPY frontend/src/games/battleship/protocol /app/frontend/src/games/battleship/protocol
+# battleship: kit imports engine directly via @/ alias; protocol is now SDK-only
 COPY frontend/src/games/battleship/engine /app/frontend/src/games/battleship/engine
 # blackjack: kit imports bjBetProtocol and bjCards via @/ alias
 COPY frontend/src/games/blackjack/app/lib /app/frontend/src/games/blackjack/app/lib

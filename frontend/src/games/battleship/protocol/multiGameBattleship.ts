@@ -12,7 +12,7 @@
  *   running game is number `gamesPlayed + 1`.
  *
  *   applyMove(state, move, by):
- *     - inner NOT over -> delegate to inner.applyMove (commit / shoot / reveal).
+ *     - inner NOT over -> delegate to inner.applyMove (commit / shoot / answer / reveal_board).
  *     - inner IS over  -> the move STARTS the next game. Reset to a fresh
  *       `awaitingCommits` board (carrying inner balances forward), bump gamesPlayed,
  *       and apply the move to it. A fresh board only accepts a `commit`, so any
@@ -51,7 +51,7 @@ import {
   BattleshipProtocol,
   type BattleshipState,
   type BattleshipMove,
-} from "./battleship";
+} from "sui-tunnel-ts/protocol/battleship";
 
 export interface MultiGameBattleshipState {
   /** The current single battleship game (commits, shots, hits, carried balances, stake). */
@@ -72,9 +72,9 @@ export class MultiGameBattleshipProtocol implements Protocol<
   MultiGameBattleshipState,
   MultiGameBattleshipMove
 > {
-  readonly name = "battleship.multi.v1";
+  readonly name = "battleship.multi.v2";
 
-  private readonly domain = protocolDomain("battleship.multi.v1");
+  private readonly domain = protocolDomain("battleship.multi.v2");
   private readonly inner: BattleshipProtocol;
 
   /** @param stake per-game amount shifted loser -> winner, passed to the inner protocol. */

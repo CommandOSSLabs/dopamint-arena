@@ -4,11 +4,9 @@ import {
   MultiGameBattleshipProtocol,
   type MultiGameBattleshipState,
 } from "./multiGameBattleship";
-import {
-  nextMove,
-  randomFleetSecret,
-  type FleetSecret,
-} from "../engine/selfPlay";
+import { randomFleetSecret, type FleetSecret } from "../engine/selfPlay";
+import { type BattleshipTunnel, makeSeatBot } from "../battleshipSelfPlay";
+import type { BotContext } from "@/agent/gameKit";
 
 /** Deterministic LCG so the multi-game playthrough is reproducible. */
 function rngFrom(seed: number): () => number {
@@ -28,8 +26,8 @@ const conserved = (s: MultiGameBattleshipState, total: bigint): boolean =>
 
 /**
  * Drive one full inner game to a winner on the wrapper. For game 2+ the inner game
- * is already `over`, so the FIRST commit triggers the rematch reset; then `nextMove`
- * (which owns both fleet secrets) drives the rest.
+ * is already `over`, so the FIRST commit triggers the rematch reset; then the kit
+ * bots (which own both fleet secrets) drive the rest.
  */
 function playOneGame(
   proto: MultiGameBattleshipProtocol,
@@ -42,21 +40,44 @@ function playOneGame(
   if (state.inner.phase === "over") {
     state = proto.applyMove(
       state,
-      { type: "commit", root: secrets.A.commitment.root },
+      { kind: "commit", commitment: secrets.A.commitment },
       "A",
     );
     assert.ok(conserved(state, total), "conserved across the rematch commit");
   }
+
+  // Wrap the shared rng so both bots draw from the same stream (matching the
+  // previous nextMove behaviour where a single rng fed all decisions).
+  const ctx: BotContext = { rngForSeat: () => rng };
+  const botA = makeSeatBot("A", 100n, "hard", secrets.A, true, ctx);
+  const botB = makeSeatBot("B", 100n, "hard", secrets.B, true, ctx);
+
   let guard = 0;
   while (state.inner.winner === 0) {
     if (++guard > 5000) throw new Error("game did not terminate");
-    const driven = nextMove(state.inner, secrets, rng, "hard");
-    if (!driven) break;
-    state = proto.applyMove(state, driven.move, driven.by);
-    assert.ok(conserved(state, total), "conserved on every step");
+    const moveA = botA.plan(state.inner);
+    if (moveA) {
+      state = proto.applyMove(state, moveA, "A");
+      assert.ok(conserved(state, total), "conserved on every step");
+      continue;
+    }
+    const moveB = botB.plan(state.inner);
+    if (moveB) {
+      state = proto.applyMove(state, moveB, "B");
+      assert.ok(conserved(state, total), "conserved on every step");
+      continue;
+    }
+    break;
   }
   return state;
 }
+
+test("protocol name is battleship.multi.v2", () => {
+  assert.equal(
+    new MultiGameBattleshipProtocol(100n).name,
+    "battleship.multi.v2",
+  );
+});
 
 test("plays many games on one tunnel, conserving balances every step", () => {
   const proto = new MultiGameBattleshipProtocol(100n);
@@ -122,7 +143,7 @@ test("a rematch commit carries balances forward and bumps gamesPlayed", () => {
   const next = freshSecrets(rng);
   state = proto.applyMove(
     state,
-    { type: "commit", root: next.A.commitment.root },
+    { kind: "commit", commitment: next.A.commitment },
     "A",
   );
   assert.equal(state.gamesPlayed, 1, "gamesPlayed bumped on the rematch");
@@ -142,7 +163,7 @@ test("only a commit can start the next game after one ends", () => {
     initialBalances: { a: 1000n, b: 1000n },
   });
   state = playOneGame(proto, state, freshSecrets(rng), rng, 2000n);
-  assert.throws(() => proto.applyMove(state, { type: "shoot", cell: 0 }, "A"));
+  assert.throws(() => proto.applyMove(state, { kind: "shoot", cell: 0 }, "A"));
 });
 
 test("encodeState is deterministic and distinguishes gamesPlayed", () => {

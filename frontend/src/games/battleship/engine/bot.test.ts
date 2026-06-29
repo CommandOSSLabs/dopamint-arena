@@ -2,10 +2,69 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { BOT_CONFIGS, BOT_DIFFICULTIES, pickShot } from "./bot.ts";
-import { CELL_COUNT, cellAt, colOf, rowOf } from "./fleet.ts";
-import { BattleshipProtocol } from "../protocol/battleship.ts";
-import type { BattleshipState, ShotResult } from "../protocol/battleship.ts";
-import { playToCompletion, randomFleetSecret } from "./selfPlay.ts";
+import { CELL_COUNT, FLEET_CELLS, cellAt, colOf, rowOf } from "./fleet.ts";
+import type {
+  BattleshipState,
+  BattleshipShotResult as ShotResult,
+} from "sui-tunnel-ts/protocol/battleship.ts";
+import { randomFleetSecret } from "./selfPlay.ts";
+import { MultiGameBattleshipProtocol } from "../protocol/multiGameBattleship.ts";
+import {
+  type BattleshipTunnel,
+  makeSeatBot,
+  runBattleshipSelfPlayToEnd,
+} from "../battleshipSelfPlay.ts";
+
+function mockTunnel(proto: MultiGameBattleshipProtocol): BattleshipTunnel {
+  const ctx = { tunnelId: "0x1", initialBalances: { a: 1000n, b: 1000n } };
+  let state = proto.initialState(ctx);
+  return {
+    get state() {
+      return state;
+    },
+    step(move: never, by: never) {
+      state = proto.applyMove(state, move, by);
+      return {} as never;
+    },
+  } as unknown as BattleshipTunnel;
+}
+
+function seatCtx(seed: number) {
+  return {
+    rngForSeat: () => {
+      let x = seed >>> 0;
+      return () => ((x = (x * 1664525 + 1013904223) >>> 0), x / 0x100000000);
+    },
+  };
+}
+
+function seedRng(s: number): () => number {
+  let x = s >>> 0;
+  return () => ((x = (x * 1664525 + 1013904223) >>> 0), x / 0x100000000);
+}
+
+function playToOver(seed: number) {
+  const proto = new MultiGameBattleshipProtocol(100n);
+  const t = mockTunnel(proto);
+  const botA = makeSeatBot(
+    "A",
+    100n,
+    "hard",
+    randomFleetSecret(seedRng(seed)),
+    true,
+    seatCtx(seed),
+  );
+  const botB = makeSeatBot(
+    "B",
+    100n,
+    "hard",
+    randomFleetSecret(seedRng(seed + 50)),
+    true,
+    seatCtx(seed + 50),
+  );
+  runBattleshipSelfPlayToEnd(t, botA, botB, 5000);
+  return t.state.inner; // BattleshipState
+}
 
 function mulberry32(seed: number): () => number {
   let a = seed;
@@ -130,25 +189,17 @@ test("hard stops shooting around a ship it has already sunk", () => {
 });
 
 test("a hard self-play game still terminates with a decisive, conserved result", () => {
-  const proto = new BattleshipProtocol(100n);
-  const ctx = { tunnelId: "t1", initialBalances: { a: 1000n, b: 1000n } };
   for (let seed = 1; seed <= 10; seed++) {
-    const secrets = {
-      A: randomFleetSecret(mulberry32(seed * 2)),
-      B: randomFleetSecret(mulberry32(seed * 2 + 1)),
-    };
-    const final = playToCompletion(
-      proto,
-      proto.initialState(ctx),
-      secrets,
-      mulberry32(seed),
-      "hard",
-    );
+    const final = playToOver(seed);
     assert.ok(
       final.winner === 1 || final.winner === 2,
       `seed ${seed} decisive`,
     );
     assert.equal(final.phase, "over");
     assert.equal(final.balanceA + final.balanceB, final.total);
+    assert.ok(
+      final.hitsOnA === FLEET_CELLS || final.hitsOnB === FLEET_CELLS,
+      `seed ${seed}: a fleet must be fully sunk (17 hits)`,
+    );
   }
 });

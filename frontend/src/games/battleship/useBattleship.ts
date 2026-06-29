@@ -28,7 +28,7 @@ import {
   isMtpsAddressBalance,
   isMtpsConfigured,
 } from "../../onchain/mtps";
-import { type BattleshipMove } from "./protocol/battleship";
+import { type BattleshipMove } from "sui-tunnel-ts/protocol/battleship";
 import {
   MultiGameBattleshipProtocol,
   type MultiGameBattleshipMove,
@@ -40,13 +40,20 @@ import {
   placeFleetRandom,
   placementsToBoard,
 } from "./engine/fleet";
-import { randomSalts } from "./engine/merkle";
 import {
   type FleetSecret,
   makeFleetSecret,
-  nextMove,
   randomFleetSecret,
+  secureSalt,
 } from "./engine/selfPlay";
+import {
+  type BattleshipSeatBot,
+  applyHumanShot,
+  LIVE_BOT_CONTEXT,
+  makeSeatBot,
+  stepBattleshipAuto,
+  stepBattleshipWithHuman,
+} from "./battleshipSelfPlay";
 import { type BotDifficulty } from "./engine/bot";
 
 /** MTPS stake locked per seat (1 MTPS, 9 decimals). */
@@ -176,6 +183,8 @@ class BotSession {
   > | null = null;
   private protocol: MultiGameBattleshipProtocol | null = null;
   private secrets: { A: FleetSecret; B: FleetSecret } | null = null;
+  private botA: BattleshipSeatBot | null = null;
+  private botB: BattleshipSeatBot | null = null;
   // One tunnel hosts many games; settlement is player-driven. `settleRequested`
   // stops the auto-rematch loop, `score`/`lastScoredGames` track the running tally.
   private settleRequested = false;
@@ -287,6 +296,7 @@ class BotSession {
     this.protocol = null;
     this.transcript = null;
     this.secrets = null;
+    this.botA = this.botB = null;
     this.session = null;
     this.score = { you: 0, foe: 0 };
     this.lastScoredGames = -1;
@@ -308,6 +318,7 @@ class BotSession {
     this.tunnel = null;
     this.transcript = null;
     this.secrets = null;
+    this.botA = this.botB = null;
     this.session = null;
     this.listeners.clear();
   };
@@ -338,7 +349,7 @@ class BotSession {
   }
 
   private reportShotTxn(
-    move: Extract<BattleshipMove, { type: "reveal" }>,
+    move: Extract<BattleshipMove, { kind: "answer" }>,
     defender: "A" | "B",
   ) {
     const youFired = otherParty(defender) === "A";
@@ -347,9 +358,9 @@ class BotSession {
       game: "battleship",
       time: new Date().toLocaleTimeString("en-GB"),
       bot: youFired ? "You" : "Foe Bot",
-      type: move.isShip ? (youFired ? "Hit" : "Hit taken") : "Miss",
+      type: move.isHit ? (youFired ? "Hit" : "Hit taken") : "Miss",
       status: "Success",
-      amount: move.isShip
+      amount: move.isHit
         ? `${youFired ? "+" : "-"}$${Number(STAKE)}.00`
         : "$0.00",
     });
@@ -449,13 +460,35 @@ class BotSession {
     });
   }
 
+  /** (Re)build the two kit bots from the current secrets. Seat A is the human seat
+   *  (bare answers; its shots are human-gated); seat B is the bot (pipelined). */
+  private rebuildBots() {
+    if (!this.secrets) return;
+    this.botA = makeSeatBot(
+      "A",
+      STAKE,
+      BOT_SKILL,
+      this.secrets.A,
+      false,
+      LIVE_BOT_CONTEXT,
+    );
+    this.botB = makeSeatBot(
+      "B",
+      STAKE,
+      BOT_SKILL,
+      this.secrets.B,
+      true,
+      LIVE_BOT_CONTEXT,
+    );
+  }
+
   /** Fresh fleets + placement for the next game on the same tunnel (auto rematch). */
   private makeMatchSecrets(): {
     secrets: { A: FleetSecret; B: FleetSecret };
     placements: Placement[];
   } {
     const placements = placeFleetRandom(Math.random);
-    const human = makeFleetSecret(placementsToBoard(placements), randomSalts());
+    const human = makeFleetSecret(placementsToBoard(placements), secureSalt());
     const bot = randomFleetSecret(Math.random);
     return { secrets: { A: human, B: bot }, placements };
   }
@@ -479,6 +512,10 @@ class BotSession {
       let frameDeadline = Date.now() + FRAME_BUDGET_MS;
       while (tunnel && protocol && this.secrets) {
         const inner = tunnel.state.inner;
+        // winner !== 0 (not phase === "over") is the game-end detector: a push
+        // (winner 0 at "over") is unreachable here — a side always sinks the
+        // 17-cell fleet before exhausting all 100 shots. Revisit if the board
+        // geometry or fleet size ever changes.
         if (inner.winner !== 0) {
           // A game finished. Tally it once, then decide: loop, roll over, or stop.
           this.recordGameResult();
@@ -497,28 +534,38 @@ class BotSession {
           // Auto rematch on the SAME tunnel: fresh fleets, A's commit resets the board.
           const next = this.makeMatchSecrets();
           this.secrets = next.secrets;
+          this.rebuildBots();
           this.placements = next.placements;
           this.lastYourShot = null;
           this.lastEnemyShot = null;
           tunnel.step(
-            { type: "commit", root: next.secrets.A.commitment.root },
+            { kind: "commit", commitment: next.secrets.A.commitment },
             "A",
           );
         } else {
-          const driven = nextMove(inner, this.secrets, Math.random, BOT_SKILL);
-          if (!driven) break;
-          // Human's shot: stop and wait for fire() — unless autopilot drives it too.
-          if (driven.by === "A" && driven.move.type === "shoot" && !this.auto)
-            break;
-          if (driven.move.type === "shoot") {
-            if (driven.by === "A") this.lastYourShot = driven.move.cell;
-            else this.lastEnemyShot = driven.move.cell;
+          if (!this.botA || !this.botB) break;
+          if (this.auto) {
+            const r = stepBattleshipAuto(tunnel, this.botA, this.botB);
+            if (!r) break;
+            if (r.move.kind === "shoot") {
+              if (r.by === "A") this.lastYourShot = r.move.cell;
+              else this.lastEnemyShot = r.move.cell;
+            }
+          } else {
+            const step = stepBattleshipWithHuman(
+              tunnel,
+              this.botA,
+              this.botB,
+              "A",
+            );
+            if (step.kind !== "applied") break; // await-human (your shot) / idle
+            if (step.move.kind === "shoot") {
+              if (step.by === "A") this.lastYourShot = step.move.cell;
+              else this.lastEnemyShot = step.move.cell;
+            }
+            if (step.move.kind === "answer")
+              this.reportShotTxn(step.move, step.by);
           }
-          tunnel.step(driven.move, driven.by);
-          // Per-shot rows flood the feed (and re-render it) at autopilot speed — only
-          // log them in MANUAL play, where you can actually read them.
-          if (driven.move.type === "reveal" && !this.auto)
-            this.reportShotTxn(driven.move, driven.by);
         }
         // End of frame: flush the batched counters, paint the latest state once, then
         // yield so the UI can repaint / process input. A synchronous batch never blocks
@@ -568,9 +615,10 @@ class BotSession {
     this.lastEnemyShot = null;
 
     this.placements = placements;
-    const human = makeFleetSecret(placementsToBoard(placements), randomSalts());
+    const human = makeFleetSecret(placementsToBoard(placements), secureSalt());
     const bot = randomFleetSecret(Math.random);
     this.secrets = { A: human, B: bot };
+    this.rebuildBots();
 
     // Multi-game: one funded tunnel hosts many games; the player settles once (or the
     // autopilot rolls to a fresh tunnel every ROLLOVER_GAMES — see rolloverTunnel).
@@ -804,13 +852,14 @@ class BotSession {
     this.gen += 1; // abandon any stale loop; a fresh advance() drives the new game
     this.advancing = false;
     this.placements = placements;
-    const human = makeFleetSecret(placementsToBoard(placements), randomSalts());
+    const human = makeFleetSecret(placementsToBoard(placements), secureSalt());
     const bot = randomFleetSecret(Math.random);
     this.secrets = { A: human, B: bot };
+    this.rebuildBots();
     this.lastYourShot = null;
     this.lastEnemyShot = null;
     try {
-      tunnel.step({ type: "commit", root: human.commitment.root }, "A");
+      tunnel.step({ kind: "commit", commitment: human.commitment }, "A");
       this.pushView();
       void this.advance();
     } catch (e) {
@@ -846,7 +895,8 @@ class BotSession {
     }
     if (st.shotsAtB.some((s) => s.cell === cell)) return;
     try {
-      tunnel.step({ type: "shoot", cell }, "A");
+      if (!this.botA) return;
+      applyHumanShot(tunnel, this.botA, "A", cell);
       this.lastYourShot = cell;
       this.pushView();
       void this.advance();
