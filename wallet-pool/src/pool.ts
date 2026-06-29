@@ -104,8 +104,6 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     if (!entry) throw new Error(`wallet not found: ${by}`);
     if (entry.role === "master") throw new MasterNotRetrievableError();
     if (!entry.enabled) throw new AccountDisabledError(entry.address);
-    entry.useCount += 1;
-    entry.lastUsedAt = Date.now();
     const key = `${blobRef.current.walletPoolId}:${entry.ordinal}`;
     let kp = cacheOn ? keyCache.get(key) : undefined;
     if (!kp) {
@@ -143,9 +141,10 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     entryBy: (by) => findEntry(blobRef.current, by),
     getMemberKey,
     signAndExecute,
-    /** Clears the in-process key cache and drops the sealed member secrets. */
+    /** Clears the in-process key cache and drops the sealed secrets. */
     wipe: () => {
       keyCache.clear();
+      members.masterSecret = "";
       members.members = [];
     },
   };
