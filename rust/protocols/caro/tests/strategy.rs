@@ -41,6 +41,33 @@ fn runtime(
 }
 
 #[tokio::test]
+async fn plan_move_is_idempotent_for_replayed_state() {
+    let protocol = Caro::new(15, 0).unwrap();
+    let state = protocol.initial_state(&ctx());
+    // Place one mark so pick_cell exercises the scoring path (moves_count > 0).
+    let mut state = state;
+    state.board[112] = MARK_A;
+    state.moves_count = 1;
+    state.turn = Seat::B;
+
+    let mut strategy = CaroStrategy::with_seed(15, CaroStrength::Strong, 42).unwrap();
+
+    let a = strategy
+        .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+        .await;
+    let b = strategy
+        .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+        .await;
+    let c = strategy
+        .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+        .await;
+
+    assert!(a.is_some(), "expected a move");
+    assert_eq!(a.as_ref().map(|m| &m.salt), b.as_ref().map(|m| &m.salt), "salt must be idempotent");
+    assert_eq!(a.as_ref().map(|m| &m.salt), c.as_ref().map(|m| &m.salt), "salt must be idempotent");
+}
+
+#[tokio::test]
 async fn strategy_opens_at_center_and_waits_off_turn() {
     let protocol = Caro::new(15, 0).unwrap();
     let state = protocol.initial_state(&ctx());

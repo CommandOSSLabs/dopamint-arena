@@ -12,6 +12,8 @@ pub enum CaroStrength {
 #[derive(Clone, Copy, Debug)]
 pub struct CaroStrategy {
     strength: CaroStrength,
+    /// Immutable per-bot seed used only for salt derivation, never consumed by pick_cell.
+    fast_seed: u64,
     rng_state: u64,
 }
 
@@ -28,6 +30,7 @@ impl CaroStrategy {
         Caro::new(size, 0)?;
         Ok(Self {
             strength,
+            fast_seed: seed,
             rng_state: seed,
         })
     }
@@ -94,9 +97,10 @@ impl MoveStrategy<Caro> for CaroStrategy {
         _ctx: &MoveStrategyContext,
     ) -> Option<CaroMove> {
         self.pick_cell(state, seat).map(|cell| {
-            // Derive a deterministic 16-byte salt from the rng state and move index
-            // so plan_move is idempotent for replays of the same state.
-            let salt = derive_salt(self.rng_state, state.moves_count);
+            // Derive the salt from the immutable fast_seed (never from rng_state, which
+            // pick_cell has already advanced). This keeps plan_move idempotent: the same
+            // state always produces the same salt regardless of how many times it is called.
+            let salt = derive_salt(self.fast_seed, state.moves_count);
             CaroMove { cell, salt }
         })
     }
@@ -139,7 +143,7 @@ impl MoveStrategy<CaroSeries> for CaroSeriesStrategy {
         if state.inner.winner != EMPTY {
             return (seat == Seat::A).then_some(CaroMove {
                 cell: 0,
-                salt: derive_salt(self.inner.rng_state, state.inner.moves_count),
+                salt: derive_salt(self.inner.fast_seed, state.inner.moves_count),
             });
         }
         self.inner.plan_move(&state.inner, seat, ctx).await
@@ -228,16 +232,16 @@ fn in_bounds(size: usize, row: i32, col: i32) -> bool {
     row >= 0 && row < size as i32 && col >= 0 && col < size as i32
 }
 
-/// Derive a deterministic 16-byte salt from the rng state and move index.
+/// Derive a deterministic 16-byte salt from an immutable seed and the move index.
 ///
-/// Bots need idempotent salts so that `plan_move` on the same state always
-/// produces the same move (including salt), required for replays.
-fn derive_salt(rng_state: u64, moves_count: usize) -> Vec<u8> {
+/// The seed must never be mutated (use `fast_seed`, not `rng_state`) so that
+/// the same state always yields the same salt regardless of replay count.
+fn derive_salt(seed: u64, moves_count: usize) -> Vec<u8> {
     let mut salt = [0u8; 16];
-    salt[..8].copy_from_slice(&rng_state.to_be_bytes());
+    salt[..8].copy_from_slice(&seed.to_be_bytes());
     salt[8] = (moves_count & 0xFF) as u8;
     salt[9] = ((moves_count >> 8) & 0xFF) as u8;
-    // Fill remaining bytes with an expansion of the rng state.
+    // Fill remaining bytes with an expansion of the seed.
     for i in 10..16 {
         salt[i] = salt[i - 8] ^ (i as u8);
     }

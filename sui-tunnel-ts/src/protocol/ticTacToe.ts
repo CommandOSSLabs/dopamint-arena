@@ -191,7 +191,7 @@ export class TicTacToeProtocol
 
     // Fold the salted commitment into the accumulator.
     // value = u8(mover) || u64be(moveIndex) || u64be(cell)
-    // mover: 1 for A, 2 for B; moveIndex = movesCount (pre-incremented above).
+    // mover: 1 for A, 2 for B; moveIndex = movesCount after increment (the first placed mark = 1).
     const moverByte = by === "A" ? 1 : 2;
     const value = concatBytes([
       Uint8Array.of(moverByte),
