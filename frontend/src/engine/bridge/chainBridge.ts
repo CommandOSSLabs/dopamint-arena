@@ -6,12 +6,19 @@
  */
 import {
   openSharedTunnelStakedMany,
-  openSelfPlayStaked,
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
 import { closeCooperativeWithRoot, readCreatedAt } from "@/onchain/tunnelTx";
-import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
+import {
+  MTPS_COIN_TYPE,
+  isMtpsConfigured,
+  isMtpsAddressBalance,
+} from "@/onchain/mtps";
+import {
+  configureSharedBatcher,
+  requestTunnelOpen,
+} from "@/onchain/sharedTunnelOpenBatcher";
 import { BulkOpenJob } from "../chain/bulkOpenJob";
 import type {
   OpenTunnelParams,
@@ -67,24 +74,32 @@ export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
     });
     return ids.map((tunnelId) => ({ tunnelId }));
   });
+  // Self-play opens (BOTH ephemeral bot seats funded from one wallet) coalesce through the SAME
+  // shared batcher the legacy solo path uses (ADR-0019): concurrent same-wallet opens collapse into
+  // one `openAndFundMany` PTB funded from the address balance (ADR-0013), so they NEVER equivocate
+  // on a coin/gas object — unlike a per-window single open. Refresh its wallet-bound deps here so
+  // the worker path (which doesn't mount the legacy solo hook that otherwise configures it) works.
+  configureSharedBatcher({
+    reads: deps.reads,
+    sponsoredSignExec: deps.sponsoredSignExec,
+    signExec: deps.signExec,
+    ensureStakeBalance: deps.ensureStakeBalance,
+    prepareStake: deps.prepareStake,
+    selectStakeCoin: deps.selectStakeCoin,
+  });
   return {
     openTunnel(p: OpenTunnelParams, intentId?: string) {
       return bulkOpenJob.enqueue(p, intentId);
     },
-    // Self-play opens are NOT batched: each is a single `create_and_fund` of BOTH the player's own
-    // bot seats (one wallet, one signature) with no opponent to coalesce against, so it opens
-    // directly via the funding-strategy helper (no bulk-open window).
-    async openSelfPlay(p: OpenSelfPlayParams) {
-      const tunnelId = await openSelfPlayStaked({
-        reads: deps.reads,
-        partyA: { address: p.partyA.address, publicKey: p.partyA.publicKey },
-        partyB: { address: p.partyB.address, publicKey: p.partyB.publicKey },
+    openSelfPlay(p: OpenSelfPlayParams) {
+      return requestTunnelOpen({
+        partyA: p.partyA,
+        partyB: p.partyB,
         aAmount: p.aAmount,
         bAmount: p.bAmount,
-        label: p.label,
-        ...stake(),
-      });
-      return { tunnelId };
+        coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
+        usesAddressBalance: isMtpsAddressBalance,
+      }).then((tunnelId) => ({ tunnelId }));
     },
     // Orphan-tunnel cancel (design §4.1): the worker calls this from its match teardown so a
     // still-queued open is dropped before the window flushes. async to give the worker an awaitable
