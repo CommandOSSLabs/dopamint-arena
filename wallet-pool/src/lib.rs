@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod key_cache;
+pub mod rpc;
 pub mod store;
 
 #[cfg(test)]
