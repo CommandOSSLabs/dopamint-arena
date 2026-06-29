@@ -13,6 +13,7 @@ members = [
   "rust/protocols/tic-tac-toe",
   "rust/protocols/world-canvas",
   "rust/fleet/serve", "rust/fleet/bench",
+  "wallet-pool", "wallet-pool/core",
 ]
 
 [workspace.package]
