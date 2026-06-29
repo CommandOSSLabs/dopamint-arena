@@ -8,6 +8,7 @@ use blake2::digest::consts::U32;
 use blake2::{Blake2b, Digest};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use getrandom::getrandom;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 type Blake2b256 = Blake2b<U32>;
 
@@ -20,6 +21,16 @@ pub struct KeyPair {
     signing: SigningKey,
     public: [u8; 32],
 }
+
+impl Zeroize for KeyPair {
+    fn zeroize(&mut self) {
+        // The `SigningKey` already zeroizes its secret bytes on drop via
+        // `ZeroizeOnDrop`; we only need to explicitly clear the cached public key.
+        self.public.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for KeyPair {}
 
 impl KeyPair {
     /// Returns the 32-byte ed25519 public key.
@@ -59,19 +70,24 @@ pub fn keypair_from_secret(secret: &[u8; 32]) -> KeyPair {
     KeyPair { signing, public }
 }
 
-/// Computes the Sui address for a 32-byte ed25519 public key.
+/// Computes the raw 32-byte Sui address bytes for a 32-byte ed25519 public key.
 ///
-/// Address format: `0x || hex(blake2b256(0x00 || public_key))`.
-pub fn ed25519_address(public_key: &[u8; 32]) -> String {
+/// Address format: `blake2b256(0x00 || public_key)`.
+pub fn ed25519_address_bytes(public_key: &[u8; 32]) -> [u8; 32] {
     let mut data = Vec::with_capacity(1 + public_key.len());
     data.push(0x00);
     data.extend_from_slice(public_key);
 
     let mut hasher = Blake2b256::new();
     hasher.update(&data);
-    let hash: [u8; 32] = hasher.finalize().into();
+    hasher.finalize().into()
+}
 
-    format!("0x{}", hex::encode(hash))
+/// Computes the Sui address for a 32-byte ed25519 public key.
+///
+/// Address format: `0x || hex(blake2b256(0x00 || public_key))`.
+pub fn ed25519_address(public_key: &[u8; 32]) -> String {
+    format!("0x{}", hex::encode(ed25519_address_bytes(public_key)))
 }
 
 /// Verifies an ed25519 signature over the raw message (no pre-hash).
