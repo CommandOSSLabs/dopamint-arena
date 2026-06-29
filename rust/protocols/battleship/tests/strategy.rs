@@ -4,8 +4,9 @@ use tunnel_battleship::{
 };
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
-    Balances, InMemoryFrameTransport, LocalSigner, MoveStrategy, MoveStrategyContext, PartyDriver,
-    PartyRuntime, Protocol, Seat, TunnelContext,
+    Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, MoveStrategy,
+    MoveStrategyContext, NullTranscriptRecorder, PartyDriver, Protocol, Seat, SeatParts,
+    TunnelContext,
 };
 
 fn ctx(initial: Balances) -> TunnelContext {
@@ -23,21 +24,18 @@ fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
     }
 }
 
-fn runtime(
+fn parts(
     seat: Seat,
     secret: &[u8; 32],
     opponent_pk: [u8; 32],
-) -> PartyRuntime<BattleshipSeries, LocalSigner> {
-    PartyRuntime::new(
-        BattleshipSeries::new("party-driver-battleship", 100),
-        LocalSigner::from_secret(secret),
+) -> SeatParts<BattleshipSeries, LocalSigner> {
+    SeatParts {
+        protocol: BattleshipSeries::new("party-driver-battleship", 100),
+        signer: LocalSigner::from_secret(secret),
         opponent_pk,
-        TunnelContext {
-            tunnel_id: "0xba77".into(),
-            initial: Balances { a: 200, b: 200 },
-            seat,
-        },
-    )
+        initial: Balances { a: 200, b: 200 },
+        seat,
+    }
 }
 
 fn finished_series_state(balance_a: u64, balance_b: u64, stake: u64) -> BattleshipSeriesState {
@@ -232,20 +230,25 @@ async fn party_driver_series_self_play_conserves_balances() {
     let pk_b = keypair_from_secret(&secret_b).public_key();
     let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
+    let anchor = InMemoryAnchor::new();
     let driver_a = PartyDriver::new(
-        runtime(Seat::A, &secret_a, pk_b),
+        parts(Seat::A, &secret_a, pk_b),
         BattleshipSeriesStrategy::new(1, 100),
         ch_a,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
     let driver_b = PartyDriver::new(
-        runtime(Seat::B, &secret_b, pk_a),
+        parts(Seat::B, &secret_b, pk_a),
         BattleshipSeriesStrategy::new(2, 100),
         ch_b,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
 
     let (out_a, out_b) = tokio::join!(driver_a.run(1000, || 1), driver_b.run(1000, || 1));
-    let out_a = out_a.unwrap();
-    let out_b = out_b.unwrap();
+    let out_a = out_a.unwrap().0;
+    let out_b = out_b.unwrap().0;
 
     assert_eq!(out_a.final_balances.sum(), 400);
     assert_eq!(out_a.final_balances, out_b.final_balances);

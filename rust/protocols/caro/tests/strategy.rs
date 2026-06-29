@@ -4,8 +4,9 @@ use tunnel_caro::{
 };
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
-    Balances, InMemoryFrameTransport, LocalSigner, MoveStrategy, MoveStrategyContext, PartyDriver,
-    PartyRuntime, Protocol, Seat, TunnelContext,
+    Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, MoveStrategy,
+    MoveStrategyContext, NullTranscriptRecorder, PartyDriver, Protocol, Seat, SeatParts,
+    TunnelContext,
 };
 
 fn ctx() -> TunnelContext {
@@ -23,21 +24,18 @@ fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
     }
 }
 
-fn runtime(
+fn parts(
     seat: Seat,
     secret: &[u8; 32],
     opponent_pk: [u8; 32],
-) -> PartyRuntime<CaroSeries, LocalSigner> {
-    PartyRuntime::new(
-        CaroSeries::new(2, 15).unwrap(),
-        LocalSigner::from_secret(secret),
+) -> SeatParts<CaroSeries, LocalSigner> {
+    SeatParts {
+        protocol: CaroSeries::new(2, 15).unwrap(),
+        signer: LocalSigner::from_secret(secret),
         opponent_pk,
-        TunnelContext {
-            tunnel_id: "0xca70".into(),
-            initial: Balances { a: 100, b: 100 },
-            seat,
-        },
-    )
+        initial: Balances { a: 100, b: 100 },
+        seat,
+    }
 }
 
 #[tokio::test]
@@ -146,20 +144,25 @@ async fn party_driver_series_self_play_conserves_balances() {
     let pk_b = keypair_from_secret(&secret_b).public_key();
     let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
+    let anchor = InMemoryAnchor::new();
     let driver_a = PartyDriver::new(
-        runtime(Seat::A, &secret_a, pk_b),
+        parts(Seat::A, &secret_a, pk_b),
         CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 1).unwrap(),
         ch_a,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
     let driver_b = PartyDriver::new(
-        runtime(Seat::B, &secret_b, pk_a),
+        parts(Seat::B, &secret_b, pk_a),
         CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 2).unwrap(),
         ch_b,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
 
     let (out_a, out_b) = tokio::join!(driver_a.run(1000, || 1), driver_b.run(1000, || 1));
-    let out_a = out_a.unwrap();
-    let out_b = out_b.unwrap();
+    let out_a = out_a.unwrap().0;
+    let out_b = out_b.unwrap().0;
 
     assert_eq!(out_a.final_balances, Balances { a: 100, b: 100 });
     assert_eq!(out_a.final_balances, out_b.final_balances);

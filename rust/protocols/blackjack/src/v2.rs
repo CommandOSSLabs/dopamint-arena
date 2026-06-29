@@ -785,8 +785,8 @@ impl Protocol for BlackjackV2 {
 mod strategy_tests {
     use super::*;
     use tunnel_harness::{
-        Balances, InMemoryFrameTransport, LocalSigner, MoveStrategy, MoveStrategyContext,
-        PartyDriver, PartyRuntime, Signer, TunnelContext,
+        Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, MoveStrategy,
+        MoveStrategyContext, NullTranscriptRecorder, PartyDriver, SeatParts, Signer,
     };
 
     fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
@@ -895,21 +895,18 @@ mod strategy_tests {
             .is_some());
     }
 
-    fn runtime(
+    fn parts(
         seat: Seat,
         signer: LocalSigner,
         opponent_pk: [u8; 32],
-    ) -> PartyRuntime<BlackjackV2, LocalSigner> {
-        PartyRuntime::new(
-            BlackjackV2,
+    ) -> SeatParts<BlackjackV2, LocalSigner> {
+        SeatParts {
+            protocol: BlackjackV2,
             signer,
             opponent_pk,
-            TunnelContext {
-                tunnel_id: "0xb1".into(),
-                initial: Balances { a: 500, b: 500 },
-                seat,
-            },
-        )
+            initial: Balances { a: 500, b: 500 },
+            seat,
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -922,20 +919,25 @@ mod strategy_tests {
         let pk_b = signer_b.public_key();
         let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
+        let anchor = InMemoryAnchor::with_fixed_id("0xb1");
         let driver_a = PartyDriver::new(
-            runtime(Seat::A, signer_a, pk_b),
+            parts(Seat::A, signer_a, pk_b),
             BlackjackV2Strategy::new(1),
             ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
         let driver_b = PartyDriver::new(
-            runtime(Seat::B, signer_b, pk_a),
+            parts(Seat::B, signer_b, pk_a),
             BlackjackV2Strategy::new(2),
             ch_b,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
 
         let (out_a, out_b) = tokio::join!(driver_a.run(200, || 1), driver_b.run(200, || 1));
-        let out_a = out_a.unwrap();
-        let out_b = out_b.unwrap();
+        let out_a = out_a.unwrap().0;
+        let out_b = out_b.unwrap().0;
 
         assert_eq!(out_a.final_balances.sum(), 1000);
         assert_eq!(out_a.final_balances, out_b.final_balances);
