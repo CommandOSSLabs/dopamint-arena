@@ -6,7 +6,9 @@ import { fromB64 } from "./crypto";
 import { KeyCache } from "./keycache";
 import { getClient } from "./rpc";
 import {
-  AccountDisabledError, MasterNotRetrievableError, PoolNotFoundError,
+  AccountDisabledError,
+  MasterNotRetrievableError,
+  PoolNotFoundError,
 } from "./errors";
 import type { Network, PoolBlob, SealedMembers, WalletEntry } from "./types";
 import type { WalletPoolStore } from "./store";
@@ -28,19 +30,31 @@ export interface OpenedPool {
   entryBy(by: string | number): WalletEntry | undefined;
   getMemberKey(by: string | number): Promise<Ed25519Keypair>;
   signAndExecute(input: {
-    by: string | number; transaction: unknown; client?: SuiClient; awaitEffects?: boolean;
+    by: string | number;
+    transaction: unknown;
+    client?: SuiClient;
+    awaitEffects?: boolean;
   }): Promise<{ digest: string }>;
   wipe(): void;
 }
 
-export interface LoadedPool { blob: PoolBlob; members: SealedMembers; }
+export interface LoadedPool {
+  blob: PoolBlob;
+  members: SealedMembers;
+}
 
-export async function loadPool(store: WalletPoolStore, walletPoolId: string, accessValue: string): Promise<LoadedPool> {
+export async function loadPool(
+  store: WalletPoolStore,
+  walletPoolId: string,
+  accessValue: string,
+): Promise<LoadedPool> {
   const bytes = await store.read(walletPoolId);
   if (!bytes) throw new PoolNotFoundError(walletPoolId);
   const blob = parseBlob(bytes);
   const plaintext = unseal(blob.crypto, accessValue, aadFor(blob));
-  const members = JSON.parse(new TextDecoder().decode(plaintext)) as SealedMembers;
+  const members = JSON.parse(
+    new TextDecoder().decode(plaintext),
+  ) as SealedMembers;
   return { blob, members };
 }
 
@@ -48,7 +62,10 @@ function seedToKeypair(secretB64: string): Ed25519Keypair {
   return Ed25519Keypair.fromSecretKey(fromB64(secretB64));
 }
 
-function findEntry(blob: PoolBlob, by: string | number): WalletEntry | undefined {
+function findEntry(
+  blob: PoolBlob,
+  by: string | number,
+): WalletEntry | undefined {
   return typeof by === "number"
     ? blob.index.find((e) => e.ordinal === by)
     : blob.index.find((e) => e.address === by);
@@ -56,12 +73,23 @@ function findEntry(blob: PoolBlob, by: string | number): WalletEntry | undefined
 
 export async function open(opts: OpenOptions): Promise<OpenedPool> {
   const cacheOn = opts.cache !== "none";
-  const keyCache = new KeyCache<Ed25519Keypair>(opts.cacheMax ?? 256, opts.cacheTtlMs ?? 60_000);
-  const { blob, members } = await loadPool(opts.store, opts.walletPoolId, opts.accessValue);
+  const keyCache = new KeyCache<Ed25519Keypair>(
+    opts.cacheMax ?? 256,
+    opts.cacheTtlMs ?? 60_000,
+  );
+  const { blob, members } = await loadPool(
+    opts.store,
+    opts.walletPoolId,
+    opts.accessValue,
+  );
   const blobRef = { current: blob };
 
   if (cacheOn) {
-    for (const m of members.members) keyCache.set(`${blob.walletPoolId}:${m.ordinal}`, seedToKeypair(m.secret));
+    for (const m of members.members)
+      keyCache.set(
+        `${blob.walletPoolId}:${m.ordinal}`,
+        seedToKeypair(m.secret),
+      );
   }
 
   const getMemberKey = async (by: string | number): Promise<Ed25519Keypair> => {
@@ -81,14 +109,21 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
   };
 
   const signAndExecute = async (input: {
-    by: string | number; transaction: unknown; client?: SuiClient; awaitEffects?: boolean;
+    by: string | number;
+    transaction: unknown;
+    client?: SuiClient;
+    awaitEffects?: boolean;
   }): Promise<{ digest: string }> => {
     const kp = await getMemberKey(input.by);
-    const client = input.client ?? getClient(blobRef.current.network, opts.rpcUrl);
+    const client =
+      input.client ?? getClient(blobRef.current.network, opts.rpcUrl);
     const res = await client.signAndExecuteTransaction({
-      signer: kp, transaction: input.transaction as never, options: { showEffects: true },
+      signer: kp,
+      transaction: input.transaction as never,
+      options: { showEffects: true },
     });
-    if (input.awaitEffects) await client.waitForTransaction({ digest: res.digest });
+    if (input.awaitEffects)
+      await client.waitForTransaction({ digest: res.digest });
     return { digest: res.digest };
   };
 
@@ -104,7 +139,10 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
 
 /** Public: toggle an account's enabled flag (index metadata only — no access, no re-seal). */
 export async function setEnabled(input: {
-  store: WalletPoolStore; walletPoolId: string; by: string | number; enabled: boolean;
+  store: WalletPoolStore;
+  walletPoolId: string;
+  by: string | number;
+  enabled: boolean;
 }): Promise<void> {
   const bytes = await input.store.read(input.walletPoolId);
   if (!bytes) throw new PoolNotFoundError(input.walletPoolId);
