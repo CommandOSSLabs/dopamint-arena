@@ -6,7 +6,6 @@ export interface SecurityGroupSet {
   backend: aws.ec2.SecurityGroup;
   db: aws.ec2.SecurityGroup;
   cache: aws.ec2.SecurityGroup;
-  benchmark: aws.ec2.SecurityGroup;
 }
 
 export function createSecurityGroups(
@@ -63,14 +62,6 @@ export function createSecurityGroups(
     ],
   });
 
-  const benchmark = new aws.ec2.SecurityGroup(`${name}-benchmark-sg`, {
-    vpcId,
-    description: "Benchmark fleet",
-    egress: [
-      { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
-    ],
-  });
-
   const cache = new aws.ec2.SecurityGroup(`${name}-cache-sg`, {
     vpcId,
     description: "ElastiCache Redis",
@@ -81,14 +72,8 @@ export function createSecurityGroups(
         toPort: 6379,
         securityGroups: [backend.id],
       },
-      {
-        protocol: "tcp",
-        fromPort: 6379,
-        toPort: 6379,
-        securityGroups: [benchmark.id],
-      },
     ],
   });
 
-  return { alb, backend, db, cache, benchmark };
+  return { alb, backend, db, cache };
 }
