@@ -24,6 +24,7 @@ import type {
 } from "./engineApi";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
+import { elog } from "./debug";
 
 const IDLE_SNAPSHOT: MatchSnapshot = {
   status: "idle",
@@ -83,6 +84,7 @@ function spawn(windowId: string): WindowEntry {
   });
   const api = Comlink.wrap<EngineApi>(worker);
   const entry: WindowEntry = { worker, api, snap: IDLE_SNAPSHOT, listeners: new Set() };
+  elog("client", "spawn worker", { windowId, configured: !!(config && bridge) });
   // Snapshot sink the worker calls back into (coalesced ~16ms upstream). Closes over `entry`.
   const onSnapshot = (snap: MatchSnapshot): void => {
     entry.snap = snap;
@@ -94,6 +96,8 @@ function spawn(windowId: string): WindowEntry {
     fire(api.init(config));
     fire(api.attachBridge(Comlink.proxy(bridge)));
     fire(api.subscribe(Comlink.proxy(onSnapshot)));
+  } else {
+    elog("client", "spawned BEFORE bridge configured (worker idle until wallet/EngineProvider)", windowId);
   }
   windows.set(windowId, entry);
   // Tear the worker down on explicit window close (mirrors the legacy session disposer); a

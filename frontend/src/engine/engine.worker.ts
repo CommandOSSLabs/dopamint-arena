@@ -11,6 +11,7 @@
 import * as Comlink from "comlink";
 import { PvpEngine } from "./pvpEngine";
 import { getSpec } from "./specs/registry";
+import { elog } from "./debug";
 import type { EngineApi } from "./engineApi";
 
 const engine = new PvpEngine(getSpec);
@@ -28,3 +29,7 @@ const api: EngineApi = {
 };
 
 Comlink.expose(api);
+
+// Definitive proof this ran in a Web Worker: this line only executes inside the worker thread,
+// and `self.name` is the per-window worker name set by engineClient (`tunnel-<windowId>`).
+elog("worker", "booted", typeof self !== "undefined" ? self.name : "");
