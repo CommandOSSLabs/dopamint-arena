@@ -18,7 +18,9 @@ use crate::state::{SessionRecord, SharedState, StatsSnapshot};
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::state::{AppState, SharedState};
+    use axum::http::HeaderMap;
+
+    use crate::state::{AppState, SessionRecord, SharedState};
 
     /// Shared `AppState` builder for unit tests across modules.
     pub(crate) fn test_state() -> SharedState {
@@ -69,6 +71,33 @@ pub(crate) mod test_support {
             faucet_max_per_window: 5,
             faucet_admin_token: None,
         })
+    }
+
+    /// Register a fixed test session with a known bearer token.
+    pub(crate) async fn register_test_session(state: &SharedState, token: &str) -> String {
+        let session_id = "sess_test".to_string();
+        state
+            .control
+            .put_session(
+                &session_id,
+                SessionRecord {
+                    game: "chat".into(),
+                    tunnels: vec![],
+                    stats_token: token.into(),
+                },
+            )
+            .await;
+        session_id
+    }
+
+    /// Build an `Authorization: Bearer <token>` header map.
+    pub(crate) fn auth_headers(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+        headers
     }
 }
 
@@ -1022,7 +1051,7 @@ fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::test_state;
+    use super::test_support::{auth_headers, register_test_session, test_state};
     use super::*;
     use crate::state::AppState;
 
@@ -1414,6 +1443,8 @@ mod tests {
             .expect("unique test arc")
             .ollama = ollama;
 
+        let session_id = register_test_session(&state, "tok").await;
+
         let req = ChatRequest {
             messages: vec![OllamaMessage {
                 role: "user".into(),
@@ -1422,10 +1453,84 @@ mod tests {
             model: None,
             stream: None,
         };
-        let resp = chat(axum::extract::State(state), axum::Json(req)).await;
+        let resp = chat(
+            axum::extract::State(state),
+            axum::extract::Path(session_id),
+            auth_headers("tok"),
+            axum::Json(req),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value = serde_json::from_str(&response_body(resp).await).unwrap();
         assert_eq!(body["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn chat_endpoint_rejects_missing_bearer_token() {
+        use crate::ollama::OllamaMessage;
+        let state = test_state();
+        let session_id = register_test_session(&state, "tok").await;
+        let req = ChatRequest {
+            messages: vec![OllamaMessage {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            model: None,
+            stream: None,
+        };
+        let resp = chat(
+            axum::extract::State(state),
+            axum::extract::Path(session_id),
+            HeaderMap::new(),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn chat_endpoint_rejects_wrong_bearer_token() {
+        use crate::ollama::OllamaMessage;
+        let state = test_state();
+        let session_id = register_test_session(&state, "tok").await;
+        let req = ChatRequest {
+            messages: vec![OllamaMessage {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            model: None,
+            stream: None,
+        };
+        let resp = chat(
+            axum::extract::State(state),
+            axum::extract::Path(session_id),
+            auth_headers("wrong"),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn chat_endpoint_rejects_unknown_session() {
+        use crate::ollama::OllamaMessage;
+        let state = test_state();
+        let req = ChatRequest {
+            messages: vec![OllamaMessage {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            model: None,
+            stream: None,
+        };
+        let resp = chat(
+            axum::extract::State(state),
+            axum::extract::Path("sess_does_not_exist".into()),
+            auth_headers("tok"),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -1443,6 +1548,8 @@ mod tests {
             .expect("unique test arc")
             .ollama = ollama;
 
+        let session_id = register_test_session(&state, "tok").await;
+
         let req = ChatRequest {
             messages: vec![OllamaMessage {
                 role: "user".into(),
@@ -1451,7 +1558,13 @@ mod tests {
             model: None,
             stream: None,
         };
-        let resp = chat(axum::extract::State(state), axum::Json(req)).await;
+        let resp = chat(
+            axum::extract::State(state),
+            axum::extract::Path(session_id),
+            auth_headers("tok"),
+            axum::Json(req),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     }
 
@@ -1531,7 +1644,14 @@ mod tests {
             .expect("unique test arc")
             .ollama = ollama;
 
-        let resp = chat_topic(axum::extract::State(state)).await;
+        let session_id = register_test_session(&state, "tok").await;
+
+        let resp = chat_topic(
+            axum::extract::State(state),
+            axum::extract::Path(session_id),
+            auth_headers("tok"),
+        )
+        .await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 }
