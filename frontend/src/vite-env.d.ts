@@ -5,6 +5,12 @@ interface ImportMetaEnv {
   // MP relay base for PvP matchmaking (resolveMpWsUrl appends /v1/mp). Optional — derived from
   // VITE_BACKEND_URL / the page origin when unset.
   readonly VITE_MP_URL?: string;
+  // Direct-to-Ollama chat (bypasses the authenticated backend /v1/chat proxy). Set
+  // VITE_OLLAMA_URL to enable; empty = use the backend proxy, a full URL = direct
+  // Ollama access (cross-origin, requires OLLAMA_ORIGINS on the Ollama side).
+  readonly VITE_OLLAMA_URL?: string;
+  readonly VITE_OLLAMA_MODEL?: string;
+  readonly VITE_OLLAMA_MAX_TOKENS?: string;
   readonly VITE_QUANTUM_POKER_SERVER_URL?: string;
   // Sui network: the fullnode RPC URL + a display name ("testnet" / "mainnet").
   readonly VITE_SUI_NETWORK?: string;
