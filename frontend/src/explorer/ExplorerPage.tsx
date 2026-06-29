@@ -48,7 +48,9 @@ export function ExplorerPage() {
           const seen = new Set(prev.map((r) => `${r.txDigest}:${r.tunnelId}`));
           return [
             ...prev,
-            ...page.rows.filter((r) => !seen.has(`${r.txDigest}:${r.tunnelId}`)),
+            ...page.rows.filter(
+              (r) => !seen.has(`${r.txDigest}:${r.tunnelId}`),
+            ),
           ];
         });
         setCursor(page.nextCursor);

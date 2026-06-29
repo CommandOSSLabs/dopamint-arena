@@ -1,4 +1,6 @@
 import { useCallback, useState, type CSSProperties } from "react";
+import { ConnectModal, useCurrentAccount } from "@mysten/dapp-kit";
+import { isEnokiWallet } from "@mysten/enoki";
 import type { GameWindowProps } from "../types";
 import { SketchDefs } from "../sketch";
 import { CanvasView } from "./ui/CanvasView";
@@ -44,13 +46,20 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
   // registers doesn't re-register every render.
   const goHome = useCallback(() => setMode("menu"), []);
 
+  // Every painted cell co-signs a real on-chain tunnel, so a wallet is required to play —
+  // matching the arena's other games. Gas is sponsored (free to paint). Until connected, the
+  // window shows the connect gate instead of the canvas.
+  const account = useCurrentAccount();
+
   return (
     <div
       className="wc-sketch sketch"
       style={{ height: "100%", width: "100%", position: "relative" }}
     >
       <SketchDefs />
-      {mode === "menu" ? (
+      {!account ? (
+        <WalletGate />
+      ) : mode === "menu" ? (
         <Lobby
           onSolo={() => setMode("solo")}
           onPvp={() => setMode("pvp")}
@@ -75,6 +84,42 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Wallet gate — shown until a wallet is connected, mirroring the arena's other games
+ * (Battleship/Quantum Poker). Painting co-signs a real tunnel that settles on-chain; gas is
+ * sponsored, so it's free. One Enoki connect (wallets + Google zkLogin) via {@link ConnectModal}.
+ * Sketch-styled to match the lobby card.
+ */
+function WalletGate() {
+  return (
+    <div className="sketch-welcome">
+      <div className="sketch-welcome__card sketch-panel sketch-stroke">
+        <div className="sketch-welcome__head">
+          <span className="sketch-eyebrow">Wallet required</span>
+          <span className="sketch-title">Connect to paint</span>
+        </div>
+        <p
+          className="sketch-note"
+          style={{ maxWidth: 320, margin: "2px 0 10px" }}
+        >
+          Every painted cell is one co-signed move on a real tunnel that settles
+          on-chain — gas is sponsored, so painting is free.
+        </p>
+        <div className="sketch-welcome__actions">
+          <ConnectModal
+            walletFilter={isEnokiWallet}
+            trigger={
+              <button type="button" className="sketch-btn sketch-btn--go">
+                👛 Connect wallet
+              </button>
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 }
