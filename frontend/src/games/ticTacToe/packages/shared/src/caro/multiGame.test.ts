@@ -65,4 +65,31 @@ describe("MultiGameCaroProtocol", () => {
     const advanced = proto.applyMove(s, { cell: 0 }, "A");
     expect(proto.encodeState(advanced)).not.toEqual(enc1);
   });
+
+  it("staked: carries shifted balances into the next game", () => {
+    const proto = new MultiGameCaroProtocol(3, 15, 10n);
+    let s = playAFive(proto, proto.initialState(ctx(100n, 100n)));
+    expect(s.inner.winner).toBe(1);
+    expect(proto.balances(s)).toEqual({ a: 110n, b: 90n });
+    // Advance to game 2 and verify balances carry forward.
+    s = proto.applyMove(s, { cell: 0 }, "A");
+    expect(s.gamesPlayed).toBe(1);
+    expect(proto.balances(s)).toEqual({ a: 110n, b: 90n });
+  });
+
+  it("staked: terminal when a side cannot fund the next game", () => {
+    // stake=100, A starts with 150, B starts with 50. After one A win, B has 0n.
+    const proto = new MultiGameCaroProtocol(3, 15, 100n);
+    const s = playAFive(proto, proto.initialState(ctx(150n, 50n)));
+    expect(s.inner.winner).toBe(1);
+    // B has 0n — can't fund another stake of 100n, so session must be terminal.
+    expect(proto.isTerminal(s)).toBe(true);
+  });
+
+  it("staked (0n): always fundable when stake is zero", () => {
+    const proto = new MultiGameCaroProtocol(3, 15, 0n);
+    const s = playAFive(proto, proto.initialState(ctx(1n, 1n)));
+    // Not terminal (maxGames=3, only 1 played).
+    expect(proto.isTerminal(s)).toBe(false);
+  });
 });

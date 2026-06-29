@@ -100,4 +100,51 @@ describe("CaroProtocol", () => {
     const tEnc = ttt.encodeState(ttt.initialState(ctx(1n, 1n)));
     expect(cEnc).not.toEqual(tEnc); // distinct domain tags
   });
+
+  it("staked: shifts stake from loser to winner on a five-in-a-row", () => {
+    const proto = new CaroProtocol(19, 10n);
+    const s = playAFive(proto, proto.initialState(ctx(100n, 100n)));
+    expect(s.winner).toBe(1); // A wins
+    expect(s.balanceA).toBe(110n);
+    expect(s.balanceB).toBe(90n);
+    expect(s.balanceA + s.balanceB).toBe(s.total); // invariant holds
+  });
+
+  it("staked: clamps stake to loser balance when stake exceeds balance", () => {
+    // Stake of 200n but loser only has 50n — only 50n should shift.
+    const proto = new CaroProtocol(19, 200n);
+    const s = playAFive(proto, proto.initialState(ctx(150n, 50n)));
+    expect(s.winner).toBe(1); // A wins; B is the loser with 50n
+    expect(s.balanceA).toBe(200n); // 150 + 50
+    expect(s.balanceB).toBe(0n);
+    expect(s.balanceA + s.balanceB).toBe(s.total);
+  });
+
+  it("staked: a draw leaves balances unchanged", () => {
+    // 3x3 fills with no five — always a draw.
+    const proto = new CaroProtocol(3, 10n);
+    let s = proto.initialState(ctx(100n, 100n));
+    const order: Array<[number, "A" | "B"]> = [
+      [0, "A"],
+      [1, "B"],
+      [2, "A"],
+      [4, "B"],
+      [3, "A"],
+      [5, "B"],
+      [7, "A"],
+      [6, "B"],
+      [8, "A"],
+    ];
+    for (const [cell, by] of order) s = proto.applyMove(s, { cell }, by);
+    expect(s.winner).toBe(3); // draw
+    expect(s.balanceA).toBe(100n);
+    expect(s.balanceB).toBe(100n);
+  });
+
+  it("staked: stake field is present in initial state and equals clamped value", () => {
+    const proto = new CaroProtocol(19, 10n);
+    const s = proto.initialState(ctx(100n, 100n));
+    expect(s.stake).toBe(10n);
+    expect(s.total).toBe(200n);
+  });
 });
