@@ -50,9 +50,10 @@ against pre-allocated fleet bots.**
    `BatchCommittedError` no-double-open contract.
 3. Each fleet bot **deposits its own seat B** server-side (gas-sponsored), so
    neither party funds the other.
-4. The user is always **seat A** (creator/funder); the bot is always **seat B**
-   and, as the always-online party, drives the cooperative settle (ADR-0007) —
-   overriding any per-game "who hosts" convention.
+4. The user is always **seat A** (funds seat A; under ADR-0025 the bot, not the
+   user, creates the tunnel); the bot is always **seat B** and, as the
+   always-online party, drives the cooperative settle (ADR-0007) — overriding any
+   per-game "who hosts" convention.
 5. Auto-play becomes genuine: when connected, each game's kit auto-loop co-signs
    the **user's** seat against the remote bot (realizing ADR-0012's deferred
    you-vs-bot). Take-over stops that game's auto-loop. Logged-out, the floor
