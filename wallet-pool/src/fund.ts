@@ -4,6 +4,7 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { loadPool } from "./pool";
 import { fromB64 } from "./crypto";
 import { getClient } from "./rpc";
+import { parseBlob, serializeBlob } from "./blob";
 import { InsufficientFundsError, NetworkMismatchError } from "./errors";
 import type { CoinType, Network, PoolBlob } from "./types";
 import type { WalletPoolStore } from "./store";
@@ -74,18 +75,23 @@ export async function fund(opts: FundOptions): Promise<{ digest: string }> {
   const total = targets.reduce((s, t) => s + t.amount, 0n);
 
   let tx: Transaction;
+  const masterSuiBalance = BigInt(
+    (await client.getBalance({ owner: masterAddr, coinType: SUI_TYPE }))
+      .totalBalance,
+  );
   if (coinType === SUI_TYPE) {
-    const bal = BigInt(
-      (await client.getBalance({ owner: masterAddr, coinType: SUI_TYPE }))
-        .totalBalance,
-    );
-    if (bal < total + GAS_BUDGET) {
+    if (masterSuiBalance < total + GAS_BUDGET) {
       throw new InsufficientFundsError(
-        `master SUI ${bal} < ${total + GAS_BUDGET}`,
+        `master SUI ${masterSuiBalance} < ${total + GAS_BUDGET}`,
       );
     }
     tx = buildSuiFundTransaction(targets);
   } else {
+    if (masterSuiBalance < GAS_BUDGET) {
+      throw new InsufficientFundsError(
+        `master SUI ${masterSuiBalance} < ${GAS_BUDGET} for gas`,
+      );
+    }
     const coinObjectId = await pickCoinObjectId(
       client,
       masterAddr,
@@ -108,8 +114,28 @@ export async function fund(opts: FundOptions): Promise<{ digest: string }> {
     transaction: tx,
     options: { showEffects: true },
   });
-  if (opts.awaitEffects)
-    await client.waitForTransaction({ digest: res.digest });
+  const awaited = opts.awaitEffects ?? true;
+  if (awaited) await client.waitForTransaction({ digest: res.digest });
+
+  if (awaited) {
+    const bytes = await opts.store.read(opts.walletPoolId);
+    if (bytes) {
+      const blob2 = parseBlob(bytes);
+      const now = Date.now();
+      for (const t of targets) {
+        const entry = blob2.index.find((e) => e.address === t.address);
+        if (entry) {
+          entry.lastFundedAt = now;
+          entry.fundedAmounts ??= {};
+          entry.fundedAmounts[coinType] = (
+            BigInt(entry.fundedAmounts[coinType] ?? "0") + t.amount
+          ).toString();
+        }
+      }
+      await opts.store.write(opts.walletPoolId, serializeBlob(blob2));
+    }
+  }
+
   return { digest: res.digest };
 }
 

@@ -6,9 +6,13 @@ import {
 } from "node:crypto";
 import { randomBytes, fromB64, toB64 } from "./crypto";
 import { WrongAccessValueError } from "./errors";
+import { KeyCache } from "./keycache";
 
 export type AccessMode = "generated" | "passphrase";
 const SCRYPT = { N: 16384, r: 8, p: 1 };
+
+/** Session-scoped cache so passphrase pools only run scrypt once per salt. */
+const scryptKeyCache = new KeyCache<Buffer>(64, 300_000);
 
 export interface SealedEnvelope {
   mode: AccessMode;
@@ -81,12 +85,16 @@ export function unseal(
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(Buffer.from(fromB64(env.tag)));
   try {
-    return new Uint8Array(
+    const plaintext = new Uint8Array(
       Buffer.concat([
         decipher.update(Buffer.from(fromB64(env.ciphertext))),
         decipher.final(),
       ]),
     );
+    if (env.mode === "passphrase" && env.kdf) {
+      scryptKeyCache.set(env.kdf.salt, key);
+    }
+    return plaintext;
   } catch {
     throw new WrongAccessValueError();
   }

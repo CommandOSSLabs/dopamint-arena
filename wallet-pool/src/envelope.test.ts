@@ -37,3 +37,11 @@ test("tampered aad throws", () => {
     WrongAccessValueError,
   );
 });
+
+test("passphrase unseal succeeds repeatedly", () => {
+  const access = "correct horse battery staple";
+  const pt = randomBytes(32);
+  const env = seal(pt, access, "passphrase", aad);
+  assert.deepEqual(unseal(env, access, aad), pt);
+  assert.deepEqual(unseal(env, access, aad), pt);
+});

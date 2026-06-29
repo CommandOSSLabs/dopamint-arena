@@ -78,8 +78,9 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     opts.cacheMax ?? 256,
     opts.cacheTtlMs ?? 60_000,
   );
+  const store = opts.store;
   const { blob, members: loadedMembers } = await loadPool(
-    opts.store,
+    store,
     opts.walletPoolId,
     opts.accessValue,
   );
@@ -104,6 +105,12 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     if (!entry) throw new Error(`wallet not found: ${by}`);
     if (entry.role === "master") throw new MasterNotRetrievableError();
     if (!entry.enabled) throw new AccountDisabledError(entry.address);
+    entry.useCount += 1;
+    entry.lastUsedAt = Date.now();
+    await store.write(
+      blobRef.current.walletPoolId,
+      serializeBlob(blobRef.current),
+    );
     const key = `${blobRef.current.walletPoolId}:${entry.ordinal}`;
     let kp = cacheOn ? keyCache.get(key) : undefined;
     if (!kp) {

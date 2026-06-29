@@ -4,7 +4,7 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { SuiClient } from "@mysten/sui/client";
 import { open, setEnabled } from "./pool";
 import { seal } from "./envelope";
-import { aadFor, encodeMembers, serializeBlob } from "./blob";
+import { aadFor, encodeMembers, parseBlob, serializeBlob } from "./blob";
 import {
   generateKeyPair,
   generateAccessValue,
@@ -245,4 +245,23 @@ test("network mismatch throws NetworkMismatchError", async () => {
       }),
     NetworkMismatchError,
   );
+});
+
+test("getMemberKey updates useCount and lastUsedAt", async () => {
+  const { id, access, blob, members } = makePool(1);
+  const store = memStore({ [id]: serializeBlob(blob) });
+  const before = Date.now();
+  const p = await open({
+    store,
+    network: "testnet",
+    walletPoolId: id,
+    accessValue: access,
+  });
+  await p.getMemberKey(members[0].ordinal);
+  const bytes = await store.read(id);
+  assert.ok(bytes);
+  const blob2 = parseBlob(bytes);
+  const entry = blob2.index.find((e) => e.ordinal === members[0].ordinal);
+  assert.equal(entry?.useCount, 1);
+  assert.ok(entry && entry.lastUsedAt >= before);
 });
