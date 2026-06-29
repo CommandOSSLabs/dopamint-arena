@@ -10,7 +10,7 @@ export interface KeyPair {
 }
 
 export function randomBytes(n: number): Uint8Array {
-  return nodeRandomBytes(n);
+  return new Uint8Array(nodeRandomBytes(n));
 }
 
 export function generateKeyPair(): KeyPair {
