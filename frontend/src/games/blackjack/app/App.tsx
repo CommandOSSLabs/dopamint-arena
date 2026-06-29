@@ -12,7 +12,7 @@ import {
 import { ScaledWrapper } from "./components/app/ScaledWrapper";
 import "../blackjack.css";
 
-function AppContent() {
+function AppContent({ windowId }: { windowId: string }) {
   const currentRoute = useCurrentRoute();
   const navigate = useGameNavigate();
   const account = useCurrentAccount();
@@ -37,7 +37,7 @@ function AppContent() {
     case "/":
       return <Home />;
     case "/bot":
-      return <PlayerBot autoStarted={autoStartedRef} />;
+      return <PlayerBot autoStarted={autoStartedRef} windowId={windowId} />;
     case "/pvp":
       return <PvpBlackjack />;
     default:
@@ -68,13 +68,13 @@ export function SketchDefs() {
   );
 }
 
-export default function App() {
+export default function App({ windowId }: { windowId: string }) {
   return (
     <GameRouterProvider>
       <div className="bj-root qp-sketch w-full h-full relative overflow-hidden">
         <SketchDefs />
         <ScaledWrapper>
-          <AppContent />
+          <AppContent windowId={windowId} />
         </ScaledWrapper>
         <Toaster
           position="top-right"

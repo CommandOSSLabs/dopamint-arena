@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
-import {
-  useBotGame,
-  type Difficulty,
-} from "@/games/ticTacToe/app/hooks/useBotGame";
+import { type Difficulty } from "@/games/ticTacToe/app/hooks/useBotGame";
+import { useTttBotGame } from "@/games/ticTacToe/useTttBotGame";
 import { useCaroBotGame } from "@/games/ticTacToe/app/hooks/useCaroBotGame";
 import {
   useCustomWallet,
@@ -29,7 +27,7 @@ type Scene = "login" | "setup" | "game" | "pvp";
 // playing. Even the bots before spending wallet SUI; only fund when the pair is genuinely short.
 const MIN_BOT_BALANCE_MIST = 30_000_000n; // 0.03 SUI
 
-function AppContent() {
+function AppContent({ windowId }: { windowId: string }) {
   const { isConnected, executeTransaction } = useCustomWallet();
   const [scene, setScene] = useState<Scene>("login");
   const [mode, setMode] = useState<PlayMode>("auto");
@@ -41,7 +39,7 @@ function AppContent() {
 
   // Both hooks are always called (rules of hooks); only the active one is driven. They share
   // the same bot identities and SuiClient, so the idle hook costs only one extra balance read.
-  const tttGame = useBotGame(difficulty);
+  const tttGame = useTttBotGame(windowId, difficulty);
   const caroGame = useCaroBotGame(difficulty, boardSize);
   const g = gameType === "caro" ? caroGame : tttGame;
 
@@ -306,10 +304,10 @@ function AppContent() {
   );
 }
 
-export default function App() {
+export default function App({ windowId }: { windowId: string }) {
   return (
     <CustomWalletProvider>
-      <AppContent />
+      <AppContent windowId={windowId} />
     </CustomWalletProvider>
   );
 }

@@ -18,5 +18,7 @@ import "@/games/chickenCross/chickenCrossSoloSpec";
 import "@/games/worldCanvas/worldCanvasSpec";
 import "@/games/battleship/battleshipSpec";
 import "@/games/quantumPoker/quantumPokerSoloSpec";
+import "@/games/ticTacToe/tttSoloSpec";
+import "@/games/blackjack/blackjackSoloSpec";
 
 export { getSpec, getSoloSpec } from "./defineGame";

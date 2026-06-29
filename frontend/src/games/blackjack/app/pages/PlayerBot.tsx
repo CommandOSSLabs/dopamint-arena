@@ -9,11 +9,11 @@ import {
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
 import { SketchDefs } from "@/games/blackjack/app/App";
 import {
-  useBlackjackBot,
   type BotPhase,
   MIN_ROUNDS_PER_TUNNEL,
   MAX_ROUNDS_PER_TUNNEL,
 } from "@/games/blackjack/app/hooks/useBlackjackBot";
+import { useBlackjackBotGame } from "@/games/blackjack/useBlackjackBotGame";
 import {
   loadOrCreateBots,
   buildFundTx,
@@ -68,12 +68,14 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 // when the window is closed/reset (App remounts), so a reset re-auto-starts all windows.
 export default function PlayerBot({
   autoStarted,
+  windowId,
 }: {
   autoStarted: { current: boolean };
+  windowId: string;
 }) {
   const navigate = useGameNavigate();
   const { isPortrait } = useGameScale();
-  const game = useBlackjackBot();
+  const game = useBlackjackBotGame(windowId);
   const {
     view,
     result,
