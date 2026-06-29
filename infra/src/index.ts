@@ -16,7 +16,6 @@ import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
 import { createMonitoring } from "./components/Monitoring.js";
-import { createBenchmarkFleet } from "./components/BenchmarkFleet.js";
 import { createExplorerServices } from "./components/ExplorerServices.js";
 import { githubEnvOutputs } from "./github.js";
 
@@ -212,18 +211,6 @@ export const backendUrl = dns.certificateArn
   ? pulumi.interpolate`https://${cfg.backendDomain}`
   : pulumi.interpolate`http://${alb.alb.dnsName}`;
 
-const benchmarkFleet = createBenchmarkFleet({
-  name: `dopamint-${cfg.environment}`,
-  subnetIds: network.privateSubnetIds,
-  securityGroupId: sgs.benchmark.id,
-  instanceType: cfg.benchmarkInstanceType,
-  minSize: cfg.benchmarkMinSize,
-  maxSize: cfg.benchmarkMaxSize,
-  imageBuilderProfileName: iam.imageBuilderProfile.name,
-  benchmarkInstanceProfileArn: iam.benchmarkInstanceProfile.arn,
-  version: cfg.benchmarkImageVersion,
-});
-
 export const githubEnv = githubEnvOutputs({
   backendUrl,
   frontendDomain: frontend.distributionDomain,
@@ -237,13 +224,7 @@ export const githubEnv = githubEnvOutputs({
   githubDeployRoleArn: iam.githubDeployRoleArn,
   privateSubnetIds: network.privateSubnetIds,
   backendSecurityGroupId: sgs.backend.id,
-  benchmarkAsgName: benchmarkFleet.asgName,
 });
-
-export const benchmarkAsgName = benchmarkFleet.asgName;
-export const benchmarkMinSize = cfg.benchmarkMinSize;
-export const benchmarkComponentArn = benchmarkFleet.componentArn;
-export const benchmarkPipelineArn = benchmarkFleet.pipelineArn;
 
 export const indexerServiceName = explorer.indexerServiceName;
 export const explorerApiServiceName = explorer.apiServiceName;

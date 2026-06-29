@@ -5,9 +5,6 @@ export interface IamOutputs {
   taskExecutionRole: aws.iam.Role;
   taskRole: aws.iam.Role;
   githubDeployRoleArn: pulumi.Output<string>;
-  imageBuilderRole: aws.iam.Role;
-  imageBuilderProfile: aws.iam.InstanceProfile;
-  benchmarkInstanceProfile: aws.iam.InstanceProfile;
 }
 
 export interface IamInputs {
@@ -120,8 +117,6 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
             "rds:*",
             "ec2:*",
             "elasticloadbalancing:*",
-            "autoscaling:*",
-            "imagebuilder:*",
             "secretsmanager:*",
             "iam:*",
           ],
@@ -131,65 +126,9 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
     }),
   });
 
-  const imageBuilderRole = new aws.iam.Role(`${name}-image-builder-role`, {
-    assumeRolePolicy: JSON.stringify({
-      Version: "2012-10-17",
-      Statement: [
-        {
-          Effect: "Allow",
-          Principal: { Service: "ec2.amazonaws.com" },
-          Action: "sts:AssumeRole",
-        },
-        {
-          Effect: "Allow",
-          Principal: { Service: "imagebuilder.amazonaws.com" },
-          Action: "sts:AssumeRole",
-        },
-      ],
-    }),
-    managedPolicyArns: [
-      "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-      "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder",
-    ],
-  });
-
-  const imageBuilderProfile = new aws.iam.InstanceProfile(
-    `${name}-image-builder-profile`,
-    {
-      role: imageBuilderRole.name,
-    },
-  );
-
-  const benchmarkRole = new aws.iam.Role(`${name}-benchmark-role`, {
-    assumeRolePolicy: JSON.stringify({
-      Version: "2012-10-17",
-      Statement: [
-        {
-          Effect: "Allow",
-          Principal: { Service: "ec2.amazonaws.com" },
-          Action: "sts:AssumeRole",
-        },
-      ],
-    }),
-    managedPolicyArns: [
-      "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-      "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-    ],
-  });
-
-  const benchmarkInstanceProfile = new aws.iam.InstanceProfile(
-    `${name}-benchmark-profile`,
-    {
-      role: benchmarkRole.name,
-    },
-  );
-
   return {
     taskExecutionRole,
     taskRole,
     githubDeployRoleArn: githubDeployRole.arn,
-    imageBuilderRole,
-    imageBuilderProfile,
-    benchmarkInstanceProfile,
   };
 }
