@@ -275,8 +275,7 @@ impl Protocol for Caro {
         value.push(mover_byte);
         value.extend_from_slice(&u64_to_be_bytes(moves_count as u64));
         value.extend_from_slice(&u64_to_be_bytes(mv.cell as u64));
-        let commitment = compute_commitment(&value, &mv.salt)
-            .map_err(|e| ProtocolError(e))?;
+        let commitment = compute_commitment(&value, &mv.salt).map_err(ProtocolError)?;
         let move_accumulator = advance_accumulator(&state.move_accumulator, &commitment);
 
         Ok(CaroState {
@@ -569,22 +568,64 @@ mod tests {
         let proto = Caro::new(15, 0).unwrap();
         let state = proto.initial_state(&ctx());
         assert!(proto
-            .apply_move(&state, &CaroMove { cell: -1, salt: test_salt() }, Seat::A)
+            .apply_move(
+                &state,
+                &CaroMove {
+                    cell: -1,
+                    salt: test_salt()
+                },
+                Seat::A
+            )
             .is_err());
         assert!(proto
-            .apply_move(&state, &CaroMove { cell: 225, salt: test_salt() }, Seat::A)
+            .apply_move(
+                &state,
+                &CaroMove {
+                    cell: 225,
+                    salt: test_salt()
+                },
+                Seat::A
+            )
             .is_err());
         assert!(proto
-            .apply_move(&state, &CaroMove { cell: 0, salt: test_salt() }, Seat::B)
+            .apply_move(
+                &state,
+                &CaroMove {
+                    cell: 0,
+                    salt: test_salt()
+                },
+                Seat::B
+            )
             .is_err());
         let next = proto
-            .apply_move(&state, &CaroMove { cell: 0, salt: test_salt() }, Seat::A)
+            .apply_move(
+                &state,
+                &CaroMove {
+                    cell: 0,
+                    salt: test_salt(),
+                },
+                Seat::A,
+            )
             .unwrap();
         assert!(proto
-            .apply_move(&next, &CaroMove { cell: 0, salt: test_salt() }, Seat::B)
+            .apply_move(
+                &next,
+                &CaroMove {
+                    cell: 0,
+                    salt: test_salt()
+                },
+                Seat::B
+            )
             .is_err());
         assert!(proto
-            .apply_move(&next, &CaroMove { cell: 1, salt: test_salt() }, Seat::A)
+            .apply_move(
+                &next,
+                &CaroMove {
+                    cell: 1,
+                    salt: test_salt()
+                },
+                Seat::A
+            )
             .is_err());
     }
 
@@ -595,7 +636,14 @@ mod tests {
         assert_eq!(state.winner, MARK_A);
         assert!(proto.is_terminal(&state));
         assert!(proto
-            .apply_move(&state, &CaroMove { cell: 100, salt: test_salt() }, Seat::B)
+            .apply_move(
+                &state,
+                &CaroMove {
+                    cell: 100,
+                    salt: test_salt()
+                },
+                Seat::B
+            )
             .is_err());
     }
 
@@ -615,7 +663,14 @@ mod tests {
             (8, Seat::A),
         ] {
             state = proto
-                .apply_move(&state, &CaroMove { cell, salt: test_salt() }, seat)
+                .apply_move(
+                    &state,
+                    &CaroMove {
+                        cell,
+                        salt: test_salt(),
+                    },
+                    seat,
+                )
                 .unwrap();
         }
         assert_eq!(state.winner, DRAW);
@@ -628,7 +683,14 @@ mod tests {
         let s15 = p15.initial_state(&ctx());
         assert_eq!(p15.encode_state(&s15), p15.encode_state(&s15.clone()));
         let after = p15
-            .apply_move(&s15, &CaroMove { cell: 0, salt: test_salt() }, Seat::A)
+            .apply_move(
+                &s15,
+                &CaroMove {
+                    cell: 0,
+                    salt: test_salt(),
+                },
+                Seat::A,
+            )
             .unwrap();
         assert_ne!(p15.encode_state(&after), p15.encode_state(&s15));
 
@@ -692,7 +754,14 @@ mod tests {
             (8, Seat::A),
         ] {
             state = proto
-                .apply_move(&state, &CaroMove { cell, salt: test_salt() }, seat)
+                .apply_move(
+                    &state,
+                    &CaroMove {
+                        cell,
+                        salt: test_salt(),
+                    },
+                    seat,
+                )
                 .unwrap();
         }
         assert_eq!(state.winner, DRAW);

@@ -157,8 +157,7 @@ fn initial_accumulator() -> [u8; 32] {
 ///
 /// acc' = blake2b256(DOMAIN_COMMIT_REVEAL || lp(prev_acc) || lp(commitment))
 fn advance_accumulator(prev_acc: &[u8; 32], commitment: &[u8; 32]) -> [u8; 32] {
-    let mut buf =
-        Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 2 * (8 + 32));
+    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 2 * (8 + 32));
     buf.extend_from_slice(DOMAIN_COMMIT_REVEAL);
     push_length_prefixed(&mut buf, prev_acc);
     push_length_prefixed(&mut buf, commitment);
@@ -240,8 +239,7 @@ impl Protocol for TicTacToe {
         value.push(mover_byte);
         value.extend_from_slice(&u64_to_be_bytes(moves_count as u64));
         value.extend_from_slice(&u64_to_be_bytes(mv.cell as u64));
-        let commitment = compute_commitment(&value, &mv.salt)
-            .map_err(|e| ProtocolError(e))?;
+        let commitment = compute_commitment(&value, &mv.salt).map_err(ProtocolError)?;
         let move_accumulator = advance_accumulator(&state.move_accumulator, &commitment);
 
         Ok(TicTacToeState {
@@ -307,8 +305,8 @@ impl Protocol for TicTacToe {
         let idx = raw.min(empties.len() - 1);
         // Derive a 16-byte deterministic salt from two rng() floats packed as f64be.
         let mut salt = [0u8; 16];
-        salt[..8].copy_from_slice(&(rng() as f64).to_be_bytes());
-        salt[8..].copy_from_slice(&(rng() as f64).to_be_bytes());
+        salt[..8].copy_from_slice(&rng().to_be_bytes());
+        salt[8..].copy_from_slice(&rng().to_be_bytes());
         Some(TicTacToeMove {
             cell: empties[idx],
             salt: salt.to_vec(),
@@ -430,8 +428,7 @@ mod tests {
 
         let acc0_hex = hex::encode(state.move_accumulator);
         assert_eq!(
-            acc0_hex,
-            "c67f8d9b8448d4eb2ccfc316cd107d03398a958eef4eb75fb2afb47cc1890cf9",
+            acc0_hex, "c67f8d9b8448d4eb2ccfc316cd107d03398a958eef4eb75fb2afb47cc1890cf9",
             "acc0 mismatch: got {acc0_hex}"
         );
 
@@ -441,8 +438,7 @@ mod tests {
 
         let acc1_hex = hex::encode(state1.move_accumulator);
         assert_eq!(
-            acc1_hex,
-            "13dd5eb9d2cf5456c5b4c0293c8e586ac020d185411aa221f0386072c153e18f",
+            acc1_hex, "13dd5eb9d2cf5456c5b4c0293c8e586ac020d185411aa221f0386072c153e18f",
             "acc1 mismatch: got {acc1_hex}"
         );
     }
@@ -464,10 +460,24 @@ mod tests {
         let state = proto.initial_state(&ctx());
         let salt = vec![0x01u8; 16];
         let s1 = proto
-            .apply_move(&state, &TicTacToeMove { cell: 0, salt: salt.clone() }, Seat::A)
+            .apply_move(
+                &state,
+                &TicTacToeMove {
+                    cell: 0,
+                    salt: salt.clone(),
+                },
+                Seat::A,
+            )
             .unwrap();
         let s2 = proto
-            .apply_move(&state, &TicTacToeMove { cell: 1, salt: salt.clone() }, Seat::A)
+            .apply_move(
+                &state,
+                &TicTacToeMove {
+                    cell: 1,
+                    salt: salt.clone(),
+                },
+                Seat::A,
+            )
             .unwrap();
         assert_ne!(s1.move_accumulator, s2.move_accumulator);
     }

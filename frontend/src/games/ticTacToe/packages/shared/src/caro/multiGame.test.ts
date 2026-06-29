@@ -63,7 +63,9 @@ describe("MultiGameCaroProtocol", () => {
     const proto = new MultiGameCaroProtocol(1, 15);
     const s = playAFive(proto, proto.initialState(ctx(1n, 1n)));
     expect(proto.isTerminal(s)).toBe(true);
-    expect(() => proto.applyMove(s, { cell: 0, salt: testSalt(0) }, "A")).toThrow();
+    expect(() =>
+      proto.applyMove(s, { cell: 0, salt: testSalt(0) }, "A"),
+    ).toThrow();
   });
 
   it("encodeState is deterministic and distinguishes gamesPlayed", () => {

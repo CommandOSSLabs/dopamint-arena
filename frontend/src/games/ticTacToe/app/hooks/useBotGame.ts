@@ -537,7 +537,10 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
                 crypto.getRandomValues(salt);
                 move = { cell: 0, salt };
               } else {
-                move = botBySeat[by].plan(tunnel.state) ?? { cell: 0, salt: crypto.getRandomValues(new Uint8Array(16)) };
+                move = botBySeat[by].plan(tunnel.state) ?? {
+                  cell: 0,
+                  salt: crypto.getRandomValues(new Uint8Array(16)),
+                };
               }
               // Sign each update with the on-chain created_at (a validator timestamp,
               // always >= created_at and <= now) so the final co-signed state passes

@@ -1,6 +1,6 @@
 use tunnel_caro::{
-    Caro, CaroSeries, CaroSeriesState, CaroSeriesStrategy, CaroState, CaroStrategy,
-    CaroStrength, MARK_A,
+    Caro, CaroSeries, CaroSeriesState, CaroSeriesStrategy, CaroState, CaroStrategy, CaroStrength,
+    MARK_A,
 };
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
@@ -63,8 +63,16 @@ async fn plan_move_is_idempotent_for_replayed_state() {
         .await;
 
     assert!(a.is_some(), "expected a move");
-    assert_eq!(a.as_ref().map(|m| &m.salt), b.as_ref().map(|m| &m.salt), "salt must be idempotent");
-    assert_eq!(a.as_ref().map(|m| &m.salt), c.as_ref().map(|m| &m.salt), "salt must be idempotent");
+    assert_eq!(
+        a.as_ref().map(|m| &m.salt),
+        b.as_ref().map(|m| &m.salt),
+        "salt must be idempotent"
+    );
+    assert_eq!(
+        a.as_ref().map(|m| &m.salt),
+        c.as_ref().map(|m| &m.salt),
+        "salt must be idempotent"
+    );
 }
 
 #[tokio::test]
@@ -76,7 +84,10 @@ async fn strategy_opens_at_center_and_waits_off_turn() {
     let mv = strategy
         .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
         .await;
-    assert!(mv.is_some_and(|m| m.cell == 112), "expected center cell 112");
+    assert!(
+        mv.is_some_and(|m| m.cell == 112),
+        "expected center cell 112"
+    );
     assert!(strategy
         .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
         .await
@@ -108,13 +119,14 @@ async fn series_delegates_mid_game_and_only_a_rolls_between_games() {
     let mut b = CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 2).unwrap();
 
     let mv = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await;
-    assert!(mv.is_some_and(|m| m.cell == 112), "expected center cell 112");
+    assert!(
+        mv.is_some_and(|m| m.cell == 112),
+        "expected center cell 112"
+    );
 
     state.inner.winner = MARK_A;
     state.inner.moves_count = 5;
-    let mv_a = a
-        .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
-        .await;
+    let mv_a = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await;
     assert!(mv_a.is_some_and(|m| m.cell == 0), "expected kickoff cell 0");
     assert!(b
         .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
@@ -126,7 +138,10 @@ async fn series_delegates_mid_game_and_only_a_rolls_between_games() {
         .await
         .unwrap();
     // Rollover move must have a valid salt so apply_move accepts it.
-    assert!(rollover.salt.len() >= 16, "rollover move must have >= 16-byte salt");
+    assert!(
+        rollover.salt.len() >= 16,
+        "rollover move must have >= 16-byte salt"
+    );
     let next = protocol.apply_move(&state, &rollover, Seat::A).unwrap();
 
     assert_eq!(next.games_played, 1);

@@ -94,7 +94,9 @@ function playOut(variant: "ttt" | "caro", maxGames: number) {
   const e = endpoints(tunnelId);
   const balances = { a: 1000n, b: 1000n };
   let ts = 1n;
-  const moveCodec = (variant === "caro" ? caroMoveCodec : tttMoveCodec) as unknown as import("sui-tunnel-ts/core/distributedFrame").MoveCodec<CellMove>;
+  const moveCodec = (variant === "caro"
+    ? caroMoveCodec
+    : tttMoveCodec) as unknown as import("sui-tunnel-ts/core/distributedFrame").MoveCodec<CellMove>;
   const A = new core.DistributedTunnel<AnyState, CellMove>(
     proto,
     { tunnelId, self: e.selfA, opponent: e.oppB, selfParty: "A", moveCodec },
@@ -114,7 +116,10 @@ function playOut(variant: "ttt" | "caro", maxGames: number) {
   };
   const pick = (s: AnyState, by: "A" | "B"): CellMove =>
     variant === "caro"
-      ? { cell: pickCaroMove(s.inner as any, by, () => 0.5, "strong"), salt: mkSalt() }
+      ? {
+          cell: pickCaroMove(s.inner as any, by, () => 0.5, "strong"),
+          salt: mkSalt(),
+        }
       : { cell: tttBestCell(s.inner, by), salt: mkSalt() };
 
   // Loop until the *session* is terminal. The seat whose turn it is proposes; A drives advances.

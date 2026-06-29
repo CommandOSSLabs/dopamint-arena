@@ -27,8 +27,17 @@ describe("pickCaroMove", () => {
     // A at row 7 cols 3..6 (open four); B harmless on row 9. A to move.
     let i = 0;
     for (let k = 0; k < 4; k++) {
-      s = proto.applyMove(s, { cell: idx(15, 7, 3 + k), salt: testSalt(i++) }, "A");
-      if (k < 3) s = proto.applyMove(s, { cell: idx(15, 9, k), salt: testSalt(i++) }, "B");
+      s = proto.applyMove(
+        s,
+        { cell: idx(15, 7, 3 + k), salt: testSalt(i++) },
+        "A",
+      );
+      if (k < 3)
+        s = proto.applyMove(
+          s,
+          { cell: idx(15, 9, k), salt: testSalt(i++) },
+          "B",
+        );
     }
     // Now it's B's turn after 4 A-moves + 3 B-moves -> make it A's turn:
     s = proto.applyMove(s, { cell: idx(15, 9, 3), salt: testSalt(i++) }, "B");

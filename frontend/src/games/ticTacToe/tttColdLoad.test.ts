@@ -148,10 +148,20 @@ test("ttt adapter: pending move salt round-trips through JSON without data loss"
 
   const serialized = adapter.serializeMove!(original as never);
   const jsonRoundTripped = JSON.parse(JSON.stringify(serialized));
-  const restored = adapter.deserializeMove!(jsonRoundTripped) as { cell: number; salt: Uint8Array };
+  const restored = adapter.deserializeMove!(jsonRoundTripped) as {
+    cell: number;
+    salt: Uint8Array;
+  };
 
   assert.equal(restored.cell, cell, "cell survives round-trip");
-  assert.ok(restored.salt instanceof Uint8Array, "salt is reconstructed as Uint8Array");
+  assert.ok(
+    restored.salt instanceof Uint8Array,
+    "salt is reconstructed as Uint8Array",
+  );
   assert.equal(restored.salt.length, 16, "salt length is 16");
-  assert.deepEqual(restored.salt, salt, "salt bytes are byte-equal to original");
+  assert.deepEqual(
+    restored.salt,
+    salt,
+    "salt bytes are byte-equal to original",
+  );
 });

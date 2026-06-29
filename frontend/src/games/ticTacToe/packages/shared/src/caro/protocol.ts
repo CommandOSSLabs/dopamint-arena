@@ -67,7 +67,9 @@ function lp(x: Uint8Array): Uint8Array[] {
 
 /** Initial accumulator value seeded from the v2 protocol domain. */
 function initialAccumulator(): Uint8Array {
-  return core.blake2b256(core.concatBytes([core.DOMAIN_COMMIT_REVEAL, ...lp(DOMAIN)]));
+  return core.blake2b256(
+    core.concatBytes([core.DOMAIN_COMMIT_REVEAL, ...lp(DOMAIN)]),
+  );
 }
 
 /** Fold one commitment into the running accumulator. */
@@ -76,7 +78,11 @@ function advanceAccumulator(
   commitment: Uint8Array,
 ): Uint8Array {
   return core.blake2b256(
-    core.concatBytes([core.DOMAIN_COMMIT_REVEAL, ...lp(prevAcc), ...lp(commitment)]),
+    core.concatBytes([
+      core.DOMAIN_COMMIT_REVEAL,
+      ...lp(prevAcc),
+      ...lp(commitment),
+    ]),
   );
 }
 
@@ -172,7 +178,10 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
       core.u64ToBeBytes(cell),
     ]);
     const commitment = core.computeCommitment(value, salt);
-    const moveAccumulator = advanceAccumulator(state.moveAccumulator, commitment);
+    const moveAccumulator = advanceAccumulator(
+      state.moveAccumulator,
+      commitment,
+    );
 
     return {
       ...state,
@@ -305,7 +314,9 @@ export class MultiGameCaroProtocol implements Protocol<
   isTerminal(state: MultiGameCaroState): boolean {
     if (!this.inner.isTerminal(state.inner)) return false;
     // Terminal when the max games count is reached OR neither side can fund the next stake.
-    return state.gamesPlayed + 1 >= state.maxGames || !this.canFundNextGame(state);
+    return (
+      state.gamesPlayed + 1 >= state.maxGames || !this.canFundNextGame(state)
+    );
   }
 
   randomMove(

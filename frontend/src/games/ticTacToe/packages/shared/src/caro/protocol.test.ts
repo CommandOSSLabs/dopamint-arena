@@ -51,15 +51,21 @@ describe("CaroProtocol", () => {
     expect(() => proto.applyMove(s0, { cell: 225, salt }, "A")).toThrow();
     expect(() => proto.applyMove(s0, { cell: 0, salt }, "B")).toThrow(); // A starts
     const s1 = proto.applyMove(s0, { cell: 0, salt: testSalt(0) }, "A");
-    expect(() => proto.applyMove(s1, { cell: 0, salt: testSalt(1) }, "B")).toThrow(); // occupied
-    expect(() => proto.applyMove(s1, { cell: 1, salt: testSalt(1) }, "A")).toThrow(); // not A's turn
+    expect(() =>
+      proto.applyMove(s1, { cell: 0, salt: testSalt(1) }, "B"),
+    ).toThrow(); // occupied
+    expect(() =>
+      proto.applyMove(s1, { cell: 1, salt: testSalt(1) }, "A"),
+    ).toThrow(); // not A's turn
   });
 
   it("rejects a salt shorter than 16 bytes", () => {
     const proto = new CaroProtocol(15);
     const s = proto.initialState(ctx(1n, 1n));
     const shortSalt = new Uint8Array(15);
-    expect(() => proto.applyMove(s, { cell: 0, salt: shortSalt }, "A")).toThrow(/salt/);
+    expect(() => proto.applyMove(s, { cell: 0, salt: shortSalt }, "A")).toThrow(
+      /salt/,
+    );
   });
 
   it("a winning move sets winner and makes the state terminal", () => {
@@ -67,7 +73,9 @@ describe("CaroProtocol", () => {
     const s = playAFive(proto, proto.initialState(ctx(1n, 1n)));
     expect(s.winner).toBe(1);
     expect(proto.isTerminal(s)).toBe(true);
-    expect(() => proto.applyMove(s, { cell: 100, salt: testSalt(0) }, "B")).toThrow(); // game over
+    expect(() =>
+      proto.applyMove(s, { cell: 100, salt: testSalt(0) }, "B"),
+    ).toThrow(); // game over
   });
 
   it("declares a draw when the board fills with no five", () => {

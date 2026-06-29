@@ -445,7 +445,10 @@ export function usePvpTicTacToe(
           if (info.role === "A" && autoRef.current)
             setTimeout(() => {
               try {
-                t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
+                t.propose(
+                  { cell: 0, salt: generateSalt(16) },
+                  BigInt(Date.now()),
+                );
               } catch {
                 /* raced */
               }
@@ -773,7 +776,10 @@ export function usePvpTicTacToe(
             ),
             selfParty: m.role,
             // Encode salt (Uint8Array) as hex so it survives JSON frame round-trip.
-            moveCodec: variant === "caro" ? (caroMoveCodec as never) : (tttMoveCodec as never),
+            moveCodec:
+              variant === "caro"
+                ? (caroMoveCodec as never)
+                : (tttMoveCodec as never),
           },
           channel.transport,
           { a: bankroll, b: bankroll },
@@ -854,7 +860,10 @@ export function usePvpTicTacToe(
         if (roleRef.current === "A")
           setTimeout(() => {
             try {
-              t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
+              t.propose(
+                { cell: 0, salt: generateSalt(16) },
+                BigInt(Date.now()),
+              );
             } catch {
               /* ignore */
             }

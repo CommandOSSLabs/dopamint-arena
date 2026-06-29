@@ -25,7 +25,11 @@ function playAWin(
   start: MultiGameTicTacToeState,
   saltOffset: number = 0,
 ): MultiGameTicTacToeState {
-  let s = proto.applyMove(start, { cell: 0, salt: testSalt(saltOffset + 0) }, "A");
+  let s = proto.applyMove(
+    start,
+    { cell: 0, salt: testSalt(saltOffset + 0) },
+    "A",
+  );
   s = proto.applyMove(s, { cell: 1, salt: testSalt(saltOffset + 1) }, "B");
   s = proto.applyMove(s, { cell: 3, salt: testSalt(saltOffset + 2) }, "A");
   s = proto.applyMove(s, { cell: 4, salt: testSalt(saltOffset + 3) }, "B");
@@ -81,15 +85,21 @@ describe("MultiGameTicTacToeProtocol", () => {
     const proto = new MultiGameTicTacToeProtocol(1, 10n);
     const s = playAWin(proto, proto.initialState(ctx(100n, 100n)));
     expect(proto.isTerminal(s)).toBe(true);
-    expect(() => proto.applyMove(s, { cell: 0, salt: testSalt(10) }, "A")).toThrow();
+    expect(() =>
+      proto.applyMove(s, { cell: 0, salt: testSalt(10) }, "A"),
+    ).toThrow();
   });
 
   it("delegates illegal mid-game moves to the inner protocol (throws)", () => {
     const proto = new MultiGameTicTacToeProtocol(3, 10n);
     const s0 = proto.initialState(ctx(100n, 100n));
     const s1 = proto.applyMove(s0, { cell: 0, salt: testSalt(0) }, "A");
-    expect(() => proto.applyMove(s1, { cell: 0, salt: testSalt(1) }, "B")).toThrow(); // occupied
-    expect(() => proto.applyMove(s1, { cell: 1, salt: testSalt(1) }, "A")).toThrow(); // not A's turn
+    expect(() =>
+      proto.applyMove(s1, { cell: 0, salt: testSalt(1) }, "B"),
+    ).toThrow(); // occupied
+    expect(() =>
+      proto.applyMove(s1, { cell: 1, salt: testSalt(1) }, "A"),
+    ).toThrow(); // not A's turn
   });
 
   it("becomes terminal early when a side can no longer cover the stake", () => {
