@@ -29,7 +29,7 @@ fn runtime(
     opponent_pk: [u8; 32],
 ) -> PartyRuntime<CaroSeries, LocalSigner> {
     PartyRuntime::new(
-        CaroSeries::new(2, 15).unwrap(),
+        CaroSeries::new(2, 15, 0).unwrap(),
         LocalSigner::from_secret(secret),
         opponent_pk,
         TunnelContext {
@@ -42,7 +42,7 @@ fn runtime(
 
 #[tokio::test]
 async fn strategy_opens_at_center_and_waits_off_turn() {
-    let protocol = Caro::new(15).unwrap();
+    let protocol = Caro::new(15, 0).unwrap();
     let state = protocol.initial_state(&ctx());
     let mut strategy = CaroStrategy::with_seed(15, CaroStrength::Strong, 7).unwrap();
 
@@ -60,7 +60,7 @@ async fn strategy_opens_at_center_and_waits_off_turn() {
 
 #[tokio::test]
 async fn strategy_blocks_immediate_opponent_win() {
-    let protocol = Caro::new(15).unwrap();
+    let protocol = Caro::new(15, 0).unwrap();
     let mut state = protocol.initial_state(&ctx());
     for cell in [0, 1, 2, 3] {
         state.board[cell] = 2;
@@ -79,7 +79,7 @@ async fn strategy_blocks_immediate_opponent_win() {
 
 #[tokio::test]
 async fn series_delegates_mid_game_and_only_a_rolls_between_games() {
-    let protocol = CaroSeries::new(2, 15).unwrap();
+    let protocol = CaroSeries::new(2, 15, 0).unwrap();
     let mut state = protocol.initial_state(&ctx());
     let mut a = CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 1).unwrap();
     let mut b = CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 2).unwrap();

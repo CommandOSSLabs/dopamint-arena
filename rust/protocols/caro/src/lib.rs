@@ -43,22 +43,29 @@ pub struct CaroSeriesState {
 #[derive(Clone, Copy, Debug)]
 pub struct Caro {
     size: usize,
+    default_stake: u64,
 }
 
 impl Caro {
-    pub fn new(size: usize) -> Result<Self, ProtocolError> {
+    pub fn new(size: usize, stake: u64) -> Result<Self, ProtocolError> {
         if size < 3 {
             return Err(ProtocolError(
                 "caro board size must be an integer >= 3".into(),
             ));
         }
-        Ok(Self { size })
+        Ok(Self {
+            size,
+            default_stake: stake,
+        })
     }
 }
 
 impl Default for Caro {
     fn default() -> Self {
-        Self { size: 15 }
+        Self {
+            size: 15,
+            default_stake: 0,
+        }
     }
 }
 
@@ -69,14 +76,18 @@ pub struct CaroSeries {
 }
 
 impl CaroSeries {
-    pub fn new(max_games: u64, size: usize) -> Result<Self, ProtocolError> {
+    pub fn new(max_games: u64, size: usize, stake: u64) -> Result<Self, ProtocolError> {
         if max_games == 0 {
             return Err(ProtocolError("max_games must be positive".into()));
         }
         Ok(Self {
-            inner: Caro::new(size)?,
+            inner: Caro::new(size, stake)?,
             max_games,
         })
+    }
+
+    fn can_fund_next_game(&self, inner: &CaroState) -> bool {
+        inner.stake == 0 || (inner.balance_a >= inner.stake && inner.balance_b >= inner.stake)
     }
 }
 
@@ -162,6 +173,7 @@ impl Protocol for Caro {
     }
 
     fn initial_state(&self, ctx: &TunnelContext) -> Self::State {
+        let stake = self.default_stake.min(ctx.initial.a.min(ctx.initial.b));
         CaroState {
             board: vec![EMPTY; self.size * self.size],
             size: self.size,
@@ -171,7 +183,7 @@ impl Protocol for Caro {
             moves_count: 0,
             balance_a: ctx.initial.a,
             balance_b: ctx.initial.b,
-            stake: 0,
+            stake,
         }
     }
 
@@ -203,12 +215,30 @@ impl Protocol for Caro {
             winner = DRAW;
         }
 
+        let mut balance_a = state.balance_a;
+        let mut balance_b = state.balance_b;
+        match winner {
+            MARK_A => {
+                let shift = state.stake.min(state.balance_b);
+                balance_a += shift;
+                balance_b -= shift;
+            }
+            MARK_B => {
+                let shift = state.stake.min(state.balance_a);
+                balance_a -= shift;
+                balance_b += shift;
+            }
+            _ => {}
+        }
+
         Ok(CaroState {
             board,
             turn: by.other(),
             winner,
             last_move: mv.cell,
             moves_count,
+            balance_a,
+            balance_b,
             ..state.clone()
         })
     }
@@ -309,7 +339,10 @@ impl Protocol for CaroSeries {
     }
 
     fn is_terminal(&self, state: &Self::State) -> bool {
-        self.inner.is_terminal(&state.inner) && state.games_played + 1 >= state.max_games
+        if !self.inner.is_terminal(&state.inner) {
+            return false;
+        }
+        state.games_played + 1 >= state.max_games || !self.can_fund_next_game(&state.inner)
     }
 
     fn sample_move(
@@ -363,7 +396,7 @@ mod tests {
 
     #[test]
     fn initial_state_is_empty_board() {
-        let proto = Caro::new(15).unwrap();
+        let proto = Caro::new(15, 0).unwrap();
         let state = proto.initial_state(&ctx());
         assert_eq!(state.size, 15);
         assert_eq!(state.board.len(), 225);
@@ -376,7 +409,7 @@ mod tests {
 
     #[test]
     fn rejects_illegal_moves() {
-        let proto = Caro::new(15).unwrap();
+        let proto = Caro::new(15, 0).unwrap();
         let state = proto.initial_state(&ctx());
         assert!(proto
             .apply_move(&state, &CaroMove { cell: -1 }, Seat::A)
@@ -400,7 +433,7 @@ mod tests {
 
     #[test]
     fn winning_move_sets_terminal_winner() {
-        let proto = Caro::new(15).unwrap();
+        let proto = Caro::new(15, 0).unwrap();
         let state = play_a_five(&proto, proto.initial_state(&ctx()));
         assert_eq!(state.winner, MARK_A);
         assert!(proto.is_terminal(&state));
@@ -411,7 +444,7 @@ mod tests {
 
     #[test]
     fn three_by_three_can_fill_to_draw() {
-        let proto = Caro::new(3).unwrap();
+        let proto = Caro::new(3, 0).unwrap();
         let mut state = proto.initial_state(&ctx());
         for (cell, seat) in [
             (0, Seat::A),
@@ -432,7 +465,7 @@ mod tests {
 
     #[test]
     fn encode_state_is_deterministic_and_size_scoped() {
-        let p15 = Caro::new(15).unwrap();
+        let p15 = Caro::new(15, 0).unwrap();
         let s15 = p15.initial_state(&ctx());
         assert_eq!(p15.encode_state(&s15), p15.encode_state(&s15.clone()));
         let after = p15
@@ -440,7 +473,7 @@ mod tests {
             .unwrap();
         assert_ne!(p15.encode_state(&after), p15.encode_state(&s15));
 
-        let p19 = Caro::new(19).unwrap();
+        let p19 = Caro::new(19, 0).unwrap();
         assert_ne!(
             p15.encode_state(&s15),
             p19.encode_state(&p19.initial_state(&ctx()))
@@ -449,11 +482,99 @@ mod tests {
 
     #[test]
     fn series_uses_canonical_protocol_id() {
-        let proto = CaroSeries::new(2, 3).unwrap();
+        let proto = CaroSeries::new(2, 3, 0).unwrap();
         let state = proto.initial_state(&ctx());
         assert_eq!(proto.name(), "caro.series.v1");
         assert!(proto
             .encode_state(&state)
             .starts_with(b"sui_tunnel::proto::caro.series.v1"));
+    }
+
+    #[test]
+    fn staked_win_shifts_stake_loser_to_winner() {
+        // Stake 50; each player starts with 1000.
+        // A wins with five-in-a-row: A gains 50, B loses 50.
+        let proto = Caro::new(15, 50).unwrap();
+        let ctx = TunnelContext {
+            tunnel_id: "0xtest".into(),
+            initial: Balances { a: 1000, b: 1000 },
+            seat: Seat::A,
+        };
+        let state = proto.initial_state(&ctx);
+        assert_eq!(state.stake, 50);
+
+        let final_state = play_a_five(&proto, state);
+        assert_eq!(final_state.winner, MARK_A);
+        assert_eq!(final_state.balance_a, 1050);
+        assert_eq!(final_state.balance_b, 950);
+        assert_eq!(final_state.balance_a + final_state.balance_b, 2000);
+    }
+
+    #[test]
+    fn staked_draw_leaves_balances_unchanged() {
+        let proto = Caro::new(3, 100).unwrap();
+        let ctx = TunnelContext {
+            tunnel_id: "0xtest".into(),
+            initial: Balances { a: 500, b: 500 },
+            seat: Seat::A,
+        };
+        let mut state = proto.initial_state(&ctx);
+        assert_eq!(state.stake, 100);
+
+        for (cell, seat) in [
+            (0, Seat::A),
+            (1, Seat::B),
+            (2, Seat::A),
+            (4, Seat::B),
+            (3, Seat::A),
+            (5, Seat::B),
+            (7, Seat::A),
+            (6, Seat::B),
+            (8, Seat::A),
+        ] {
+            state = proto.apply_move(&state, &CaroMove { cell }, seat).unwrap();
+        }
+        assert_eq!(state.winner, DRAW);
+        assert_eq!(state.balance_a, 500);
+        assert_eq!(state.balance_b, 500);
+    }
+
+    #[test]
+    fn stake_clamped_to_minimum_balance() {
+        // Default stake 200, but B only has 80 — clamp to 80.
+        let proto = Caro::new(15, 200).unwrap();
+        let ctx = TunnelContext {
+            tunnel_id: "0xtest".into(),
+            initial: Balances { a: 1000, b: 80 },
+            seat: Seat::A,
+        };
+        let state = proto.initial_state(&ctx);
+        assert_eq!(state.stake, 80);
+
+        let final_state = play_a_five(&proto, state);
+        assert_eq!(final_state.winner, MARK_A);
+        assert_eq!(final_state.balance_a, 1080);
+        assert_eq!(final_state.balance_b, 0);
+    }
+
+    #[test]
+    fn series_terminates_when_loser_cannot_fund_next_game() {
+        // Stake 100; B starts with 50 — after game 1 (A wins), B has 0.
+        // Series should be terminal after game 1 even though max_games = 3.
+        let proto = CaroSeries::new(3, 15, 100).unwrap();
+        let ctx = TunnelContext {
+            tunnel_id: "0xtest".into(),
+            initial: Balances { a: 1000, b: 50 },
+            seat: Seat::A,
+        };
+        let mut state = proto.initial_state(&ctx);
+        // Clamped stake = min(100, 50) = 50.
+        assert_eq!(state.inner.stake, 50);
+
+        state.inner = play_a_five(&proto.inner, state.inner);
+        assert_eq!(state.inner.winner, MARK_A);
+        assert_eq!(state.inner.balance_b, 0);
+        // B cannot fund the next game (balance 0 < stake 50), so series is terminal.
+        assert!(proto.is_terminal(&state));
     }
 }

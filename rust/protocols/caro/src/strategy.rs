@@ -25,7 +25,7 @@ impl CaroStrategy {
         strength: CaroStrength,
         seed: u64,
     ) -> Result<Self, ProtocolError> {
-        Caro::new(size)?;
+        Caro::new(size, 0)?;
         Ok(Self {
             strength,
             rng_state: seed,
@@ -115,7 +115,7 @@ impl CaroSeriesStrategy {
         seed: u64,
     ) -> Result<Self, ProtocolError> {
         Ok(Self {
-            protocol: CaroSeries::new(max_games, size)?,
+            protocol: CaroSeries::new(max_games, size, 0)?,
             inner: CaroStrategy::with_seed(size, strength, seed)?,
         })
     }
