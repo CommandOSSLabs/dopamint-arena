@@ -11,6 +11,7 @@ use base64::Engine as _;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use zeroize::Zeroizing;
 
 /// How an envelope's AES key is derived from the access value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -24,11 +25,11 @@ pub enum AccessMode {
 
 /// scrypt parameters stored alongside a passphrase-sealed envelope.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[allow(non_snake_case)]
 pub struct ScryptKdf {
     pub name: String,
     pub salt: String,
-    pub N: u32,
+    #[serde(rename = "N")]
+    pub n: u32,
     pub r: u32,
     pub p: u32,
 }
@@ -77,7 +78,7 @@ pub fn seal(
             let kdf = ScryptKdf {
                 name: "scrypt".into(),
                 salt: STANDARD.encode(&salt),
-                N: SCRYPT_N,
+                n: SCRYPT_N,
                 r: SCRYPT_R,
                 p: SCRYPT_P,
             };
@@ -85,7 +86,7 @@ pub fn seal(
         }
     };
 
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| Error::WrongAccessValue)?;
+    let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| Error::WrongAccessValue)?;
     let encrypted = cipher
         .encrypt(nonce, Payload { msg: plaintext, aad })
         .map_err(|_| Error::WrongAccessValue)?;
@@ -109,7 +110,7 @@ pub fn unseal(envelope: &SealedEnvelope, access_value: &str, aad: &[u8]) -> Resu
         AccessMode::Generated => derive_generated_key(access_value)?,
         AccessMode::Passphrase => {
             let kdf = envelope.kdf.as_ref().ok_or(Error::WrongAccessValue)?;
-            if kdf.N != SCRYPT_N || kdf.r != SCRYPT_R || kdf.p != SCRYPT_P {
+            if kdf.n != SCRYPT_N || kdf.r != SCRYPT_R || kdf.p != SCRYPT_P {
                 return Err(Error::WrongAccessValue);
             }
             let salt = STANDARD.decode(&kdf.salt).map_err(|_| Error::WrongAccessValue)?;
@@ -131,32 +132,33 @@ pub fn unseal(envelope: &SealedEnvelope, access_value: &str, aad: &[u8]) -> Resu
     }
     ct_with_tag.extend_from_slice(&tag);
 
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| Error::WrongAccessValue)?;
+    let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| Error::WrongAccessValue)?;
     cipher
         .decrypt(nonce, Payload { msg: &ct_with_tag, aad })
         .map_err(|_| Error::WrongAccessValue)
 }
 
-fn derive_generated_key(access_value: &str) -> Result<[u8; KEY_LEN]> {
-    let ikm = URL_SAFE_NO_PAD
-        .decode(access_value)
+fn derive_generated_key(access_value: &str) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    let mut ikm = Zeroizing::new([0u8; KEY_LEN]);
+    let written = URL_SAFE_NO_PAD
+        .decode_slice(access_value, ikm.as_mut_slice())
         .map_err(|_| Error::WrongAccessValue)?;
-    if ikm.len() != KEY_LEN {
+    if written != KEY_LEN {
         return Err(Error::WrongAccessValue);
     }
-    let hkdf = Hkdf::<Sha256>::new(None, &ikm);
-    let mut key = [0u8; KEY_LEN];
-    hkdf.expand(&[], &mut key)
+    let hkdf = Hkdf::<Sha256>::new(None, ikm.as_slice());
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
+    hkdf.expand(&[], key.as_mut_slice())
         .map_err(|_| Error::WrongAccessValue)?;
     Ok(key)
 }
 
-fn derive_passphrase_key(access_value: &str, salt: &[u8]) -> Result<[u8; KEY_LEN]> {
+fn derive_passphrase_key(access_value: &str, salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     let params =
         scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P, KEY_LEN)
             .map_err(|_| Error::WrongAccessValue)?;
-    let mut key = [0u8; KEY_LEN];
-    scrypt::scrypt(access_value.as_bytes(), salt, &params, &mut key)
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
+    scrypt::scrypt(access_value.as_bytes(), salt, &params, key.as_mut_slice())
         .map_err(|_| Error::WrongAccessValue)?;
     Ok(key)
 }
@@ -241,6 +243,48 @@ mod tests {
         assert_eq!(
             unseal(&envelope, &access, aad),
             Err(Error::WrongAccessValue)
+        );
+    }
+
+    #[test]
+    fn tampered_tag_returns_wrong_access_value() {
+        let access = generate_access_value();
+        let plaintext = b"secret";
+        let aad = b"wallet-pool:1:wp_test:testnet";
+
+        let mut envelope = seal(plaintext, &access, AccessMode::Generated, aad).unwrap();
+        let mut tag = STANDARD.decode(&envelope.tag).expect("valid tag");
+        tag[0] ^= 0xff;
+        envelope.tag = STANDARD.encode(&tag);
+
+        assert_eq!(
+            unseal(&envelope, &access, aad),
+            Err(Error::WrongAccessValue)
+        );
+    }
+
+    #[test]
+    fn json_round_trip() {
+        let access = generate_access_value();
+        let plaintext = b"the quick brown fox";
+        let aad = b"wallet-pool:1:wp_test:testnet";
+
+        let envelope = seal(plaintext, &access, AccessMode::Generated, aad).unwrap();
+        let json = serde_json::to_string(&envelope).unwrap();
+        let decoded: SealedEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, envelope);
+        assert_eq!(unseal(&decoded, &access, aad).unwrap(), plaintext.as_slice());
+
+        let passphrase_envelope =
+            seal(plaintext, "a passphrase", AccessMode::Passphrase, aad).unwrap();
+        let json = serde_json::to_string(&passphrase_envelope).unwrap();
+        assert!(json.contains("\"N\":"), "scrypt N must serialize as uppercase N");
+        assert!(!json.contains("\"n\":"), "scrypt N must not serialize as lowercase n");
+        let decoded: SealedEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, passphrase_envelope);
+        assert_eq!(
+            unseal(&decoded, "a passphrase", aad).unwrap(),
+            plaintext.as_slice()
         );
     }
 }
