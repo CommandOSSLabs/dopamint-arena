@@ -1268,6 +1268,7 @@ mod tests {
             pair_hold_ms: 10_000, // long hold — neither expires via the join path
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1422,6 +1423,7 @@ mod tests {
             pair_hold_ms,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
         })
     }
 

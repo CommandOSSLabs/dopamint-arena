@@ -5,6 +5,7 @@ mod chat_store;
 mod config;
 mod enoki;
 mod error;
+mod fleet;
 mod mp;
 mod ollama;
 mod routes;
@@ -132,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
+        fleet: crate::fleet::BotPool::default(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
@@ -174,6 +176,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
+        // Arena one-signature flow (ADR-0023): reserve warm bots, then map opened tunnels back to
+        // each bot so it deposits its seat. `/v1/fleet` is the bot's control socket into the pool.
+        .route("/v1/arena/allocate", post(routes::arena_allocate))
+        .route("/v1/arena/opened", post(routes::arena_opened))
+        .route("/v1/fleet", get(crate::fleet::ws::fleet_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
         .with_state(state);

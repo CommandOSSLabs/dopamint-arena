@@ -53,6 +53,7 @@ pub(crate) mod test_support {
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
         })
     }
 }
@@ -224,6 +225,101 @@ pub(crate) async fn heartbeat(
     // Avoids a per-heartbeat single-key INCRBY hotspot (the relay path already does this).
     state.actions.incr(&rec.game, req.actions_delta);
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ===== Arena one-signature flow (ADR-0023). =====
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaAllocateRequest {
+    user_address: String,
+    games: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaAllocation {
+    game: String,
+    match_id: String,
+    /// The reserved bot's ephemeral pubkey (hex) — the frontend needs it as party B to build the
+    /// open PTB.
+    bot_eph_pubkey: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaAllocateResponse {
+    allocations: Vec<ArenaAllocation>,
+}
+
+/// Reserve one warm bot per requested game and notify each reserved bot that it's matched to this
+/// user. Games with no free bot are omitted, so the frontend opens only what it actually got.
+pub(crate) async fn arena_allocate(
+    State(state): State<SharedState>,
+    Json(req): Json<ArenaAllocateRequest>,
+) -> Json<ArenaAllocateResponse> {
+    let now = now_ms();
+    state.fleet.reclaim_expired(now);
+    let mut allocations = Vec::new();
+    for game in &req.games {
+        let Some(r) = state.fleet.reserve(game, now) else {
+            tracing::debug!(%game, "arena allocate: no free bot");
+            continue;
+        };
+        state.fleet.notify(
+            &r.match_id,
+            crate::fleet::FleetServerMsg::Reserved {
+                match_id: r.match_id.clone(),
+                opponent_wallet: req.user_address.clone(),
+            },
+        );
+        allocations.push(ArenaAllocation {
+            game: r.game,
+            match_id: r.match_id,
+            bot_eph_pubkey: r.eph_pubkey,
+        });
+    }
+    tracing::info!(user = %req.user_address, allocated = allocations.len(), "arena allocate");
+    Json(ArenaAllocateResponse { allocations })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaOpenedRequest {
+    allocations: Vec<ArenaOpenedEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaOpenedEntry {
+    match_id: String,
+    tunnel_id: String,
+}
+
+/// The user opened the batched tunnels: tell each reserved bot its tunnel id so it deposits its
+/// seat. Unknown match ids (a bot that dropped, or an expired reservation) are skipped silently.
+pub(crate) async fn arena_opened(
+    State(state): State<SharedState>,
+    Json(req): Json<ArenaOpenedRequest>,
+) -> StatusCode {
+    for e in &req.allocations {
+        state.fleet.notify(
+            &e.match_id,
+            crate::fleet::FleetServerMsg::Opened {
+                match_id: e.match_id.clone(),
+                tunnel_id: e.tunnel_id.clone(),
+            },
+        );
+    }
+    StatusCode::NO_CONTENT
+}
+
+/// Wall-clock milliseconds since the epoch, for reservation TTLs.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Submit `close_cooperative_with_root` for a tunnel. Authorization is the co-signed settlement
@@ -931,5 +1027,113 @@ mod tests {
 
         let resp = chat_topic(axum::extract::State(state)).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+}
+
+#[cfg(test)]
+mod arena_tests {
+    use super::*;
+    use crate::fleet::{BotHandle, FleetServerMsg};
+    use crate::state::AppState;
+    use tokio::sync::mpsc;
+
+    fn register_bot(
+        state: &SharedState,
+        game: &str,
+        pk: &str,
+    ) -> mpsc::UnboundedReceiver<FleetServerMsg> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        state.fleet.register(
+            game,
+            BotHandle {
+                eph_pubkey: pk.into(),
+                ctrl: tx,
+            },
+        );
+        rx
+    }
+
+    // Allocate reserves one bot per game that has one, omits games with none, and notifies each
+    // reserved bot it's been matched to the user (so the bot starts awaiting the open).
+    #[tokio::test]
+    async fn allocate_reserves_available_games_and_notifies_bots() {
+        let state = AppState::in_memory_for_test();
+        let mut rx_bj = register_bot(&state, "blackjack", "aa");
+
+        let resp = arena_allocate(
+            State(state.clone()),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec!["blackjack".into(), "tictactoe".into()], // no ttt bot registered
+            }),
+        )
+        .await;
+
+        // Only blackjack is allocated; the pubkey is the registered bot's.
+        assert_eq!(resp.0.allocations.len(), 1, "only games with a free bot");
+        let a = &resp.0.allocations[0];
+        assert_eq!(a.game, "blackjack");
+        assert_eq!(a.bot_eph_pubkey, "aa");
+        assert!(!a.match_id.is_empty());
+
+        // The reserved bot was told it's matched to this user.
+        assert_eq!(
+            rx_bj.try_recv().unwrap(),
+            FleetServerMsg::Reserved {
+                match_id: a.match_id.clone(),
+                opponent_wallet: "0xuser".into(),
+            }
+        );
+    }
+
+    // After the user opens, /v1/arena/opened pushes the tunnel id to the matching bot.
+    #[tokio::test]
+    async fn opened_notifies_the_reserved_bot_with_tunnel_id() {
+        let state = AppState::in_memory_for_test();
+        let mut rx = register_bot(&state, "blackjack", "aa");
+        let alloc = arena_allocate(
+            State(state.clone()),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec!["blackjack".into()],
+            }),
+        )
+        .await;
+        let match_id = alloc.0.allocations[0].match_id.clone();
+        let _ = rx.try_recv(); // drop the Reserved
+
+        let status = arena_opened(
+            State(state.clone()),
+            Json(ArenaOpenedRequest {
+                allocations: vec![ArenaOpenedEntry {
+                    match_id: match_id.clone(),
+                    tunnel_id: "0xtunnel".into(),
+                }],
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            FleetServerMsg::Opened {
+                match_id,
+                tunnel_id: "0xtunnel".into(),
+            }
+        );
+    }
+
+    // No bots registered → allocate returns an empty list, never an error.
+    #[tokio::test]
+    async fn allocate_with_no_bots_is_empty() {
+        let state = AppState::in_memory_for_test();
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec!["blackjack".into()],
+            }),
+        )
+        .await;
+        assert!(resp.0.allocations.is_empty());
     }
 }

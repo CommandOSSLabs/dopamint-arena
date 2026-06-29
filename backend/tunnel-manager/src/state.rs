@@ -28,6 +28,8 @@ pub struct AppState {
     pub pairing: crate::stats_counter::MatchPairingMetrics,
     /// Shared transcript for the bot-vs-bot live chat feed, fanned out via SSE.
     pub chat: crate::chat_store::ChatTranscriptStore,
+    /// Warm fleet-bot pool for arena one-signature allocation (ADR-0023). Per-instance, in-memory.
+    pub fleet: crate::fleet::BotPool,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -60,6 +62,7 @@ impl AppState {
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
         })
     }
 }
