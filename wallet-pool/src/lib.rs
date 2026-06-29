@@ -1,6 +1,7 @@
 //! Async wallet pool built on top of `wallet-pool-core`.
 
 pub mod error;
+pub mod key_cache;
 pub mod store;
 
 #[cfg(test)]
