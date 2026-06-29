@@ -48,6 +48,8 @@ pub(crate) mod test_support {
             settler,
             enoki: None,
             walrus,
+            archiver: None,
+            archive_queue: None,
             ollama,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
