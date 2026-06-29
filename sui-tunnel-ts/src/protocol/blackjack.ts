@@ -11,8 +11,8 @@
  * can replay it.
  *
  * Deck: infinite uniform RANK (1..13) with replacement — duplicate ranks are a legal pair,
- * no dedup, no cap on draws. Rules (soft-ace handValue, dealer draws to 17, fixed wager,
- * clamped settlement) are unchanged from v1.
+ * no dedup, no cap on draws. The player chooses a variable bet at the start of each round
+ * (soft-ace handValue, dealer draws to 17, clamped settlement otherwise unchanged from v1).
  */
 
 import { concatBytes } from "../core/bytes";
@@ -22,7 +22,6 @@ import {
   MIN_SALT_LEN,
   verifyCommitment,
 } from "../core/commitment";
-import { randomBytes } from "../core/crypto";
 import { nextU64InRange, seedFromBytes } from "../core/randomness";
 import { u64ToBeBytes } from "../core/wire";
 import {
@@ -45,7 +44,20 @@ export function getDealerParty(round: bigint): Party {
   return getPlayerParty(round) === "A" ? "B" : "A";
 }
 
-export const WAGER = 100n;
+/** Maps a round number to the seat playing the "player" role (the rest is the dealer). */
+export type PlayerPartyFor = (round: bigint) => Party;
+
+/** Pin the player to seat A every round (single-player "vs bot"; the table never inverts). */
+export const FIXED_PLAYER_A: PlayerPartyFor = () => "A";
+
+function dealerPartyForWith(
+  round: bigint,
+  playerPartyFor: PlayerPartyFor,
+): Party {
+  return playerPartyFor(round) === "A" ? "B" : "A";
+}
+
+export const MIN_BET = 25n;
 export const ROUND_CAP = 1000n;
 const DEALER_STANDS_AT = 17;
 const BUST_AT = 21;
@@ -89,11 +101,12 @@ export interface BlackjackState {
   balanceA: bigint;
   balanceB: bigint;
   total: bigint;
-  wager: bigint;
+  /** The current round's wager (chosen by the player at round start). */
+  bet: bigint;
 }
 
 export type BlackjackMove =
-  | { kind: "deal" }
+  | { kind: "bet"; amount: bigint }
   | {
       kind: "commit";
       commitment: Uint8Array;
@@ -152,8 +165,17 @@ function isBust(hand: number[]): boolean {
   return handValue(hand) > BUST_AT;
 }
 
+/**
+ * Largest bet both sides can cover this round (the smaller balance). Betting the full
+ * stack (all-in) is intentionally permitted; the game just turns terminal afterward if a
+ * side drops below MIN_BET.
+ */
+export function maxBet(s: BlackjackState): bigint {
+  return s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
+}
+
 function canStartRound(s: BlackjackState): boolean {
-  return s.balanceA >= s.wager && s.balanceB >= s.wager;
+  return maxBet(s) >= MIN_BET;
 }
 
 /** Exposed for tests/tools: hand total with soft-ace handling. */
@@ -204,13 +226,16 @@ function beginRound(s: BlackjackState): BlackjackState {
 }
 
 /** Compare hands and settle (dealer bust / higher value / push). */
-function resolveShowdown(s: BlackjackState): BlackjackState {
+function resolveShowdown(
+  s: BlackjackState,
+  playerPartyFor: PlayerPartyFor,
+): BlackjackState {
   const pv = handValue(s.playerHand);
   const dv = handValue(s.dealerHand);
   let winner: Party | null;
-  if (isBust(s.dealerHand)) winner = getPlayerParty(s.round);
-  else if (pv > dv) winner = getPlayerParty(s.round);
-  else if (dv > pv) winner = getDealerParty(s.round);
+  if (isBust(s.dealerHand)) winner = playerPartyFor(s.round);
+  else if (pv > dv) winner = playerPartyFor(s.round);
+  else if (dv > pv) winner = dealerPartyForWith(s.round, playerPartyFor);
   else winner = null;
   return settle(s, winner);
 }
@@ -220,11 +245,11 @@ function settle(s: BlackjackState, winner: Party | null): BlackjackState {
   let balanceA = s.balanceA;
   let balanceB = s.balanceB;
   if (winner === "A") {
-    const amt = s.wager <= balanceB ? s.wager : balanceB;
+    const amt = s.bet <= balanceB ? s.bet : balanceB;
     balanceA += amt;
     balanceB -= amt;
   } else if (winner === "B") {
-    const amt = s.wager <= balanceA ? s.wager : balanceA;
+    const amt = s.bet <= balanceA ? s.bet : balanceA;
     balanceB += amt;
     balanceA -= amt;
   }
@@ -244,7 +269,11 @@ function settle(s: BlackjackState, winner: Party | null): BlackjackState {
 }
 
 /** Apply a freshly derived rank to the target hand and run the continuation. */
-function afterDraw(s: BlackjackState, rank: number): BlackjackState {
+function afterDraw(
+  s: BlackjackState,
+  rank: number,
+  playerPartyFor: PlayerPartyFor,
+): BlackjackState {
   const ctx = s.draw!;
   const value = rankValue(rank);
   const playerHand =
@@ -274,13 +303,14 @@ function afterDraw(s: BlackjackState, rank: number): BlackjackState {
       return { ...base, phase: "player" };
     }
     case "hit": {
-      if (isBust(playerHand)) return settle(base, getDealerParty(base.round));
+      if (isBust(playerHand))
+        return settle(base, dealerPartyForWith(base.round, playerPartyFor));
       return { ...base, phase: "player" };
     }
     case "dealer_auto": {
       if (handValue(dealerHand) < DEALER_STANDS_AT)
         return beginDraw(base, { forHand: "dealer", reason: "dealer_auto" });
-      return resolveShowdown(base);
+      return resolveShowdown(base, playerPartyFor);
     }
   }
 }
@@ -319,6 +349,7 @@ function applyReveal(
   s: BlackjackState,
   move: Extract<BlackjackMove, { kind: "reveal" }>,
   by: Party,
+  playerPartyFor: PlayerPartyFor,
 ): BlackjackState {
   const already = by === "A" ? s.pendingRevealA : s.pendingRevealB;
   if (already) throw new Error(`party ${by} already revealed`);
@@ -337,7 +368,7 @@ function applyReveal(
   };
   if (next.pendingRevealA && next.pendingRevealB) {
     const rank = deriveRank(next.pendingRevealA, next.pendingRevealB);
-    return afterDraw(next, rank);
+    return afterDraw(next, rank, playerPartyFor);
   }
   return next;
 }
@@ -361,25 +392,29 @@ function claimForfeit(s: BlackjackState, by: Party): BlackjackState {
   return settle(s, by);
 }
 
-/**
- * NON-cryptographic secret for SIMULATIONS / bots only — seeded by a float `rng` so a
- * (seed, config) run is reproducible. NEVER use for real funds: `Math.random`-style entropy is
- * predictable and the opponent could grind reveals. Real play MUST use {@link secureBlackjackSecret}.
- */
 function randomSecret(rng: () => number): BlackjackSlotSecret {
   const b = () => Math.floor(rng() * 256) & 0xff;
   return {
-    value: Uint8Array.from({ length: 16 }, b),
+    value: Uint8Array.from([b()]),
     salt: Uint8Array.from({ length: MIN_SALT_LEN }, b),
   };
 }
 
-/**
- * Fresh commit-reveal secret from the platform CSPRNG (`crypto.getRandomValues`). Use this for
- * real play: full-width 16-byte value + 16-byte salt, unpredictable and not brute-forceable.
- */
-export function secureBlackjackSecret(): BlackjackSlotSecret {
-  return { value: randomBytes(16), salt: randomBytes(MIN_SALT_LEN) };
+/** Which seat owes the next move in the current phase (null if none/terminal-ish). */
+export function actorFor(
+  s: BlackjackState,
+  playerPartyFor: PlayerPartyFor = getPlayerParty,
+): Party | null {
+  switch (s.phase) {
+    case "round_over":
+      return playerPartyFor(s.round + 1n);
+    case "draw_commit":
+      return !s.pendingCommitA ? "A" : !s.pendingCommitB ? "B" : null;
+    case "draw_reveal":
+      return !s.pendingRevealA ? "A" : !s.pendingRevealB ? "B" : null;
+    case "player":
+      return playerPartyFor(s.round);
+  }
 }
 
 // ============================================
@@ -391,8 +426,10 @@ export class BlackjackProtocol implements Protocol<
   BlackjackMove
 > {
   readonly name = "blackjack.v2";
-  /** `commit` moves carry the pre-image — DistributedTunnel must be given a stripping codec. */
-  readonly movesCarrySecrets = true;
+
+  constructor(
+    private readonly playerPartyFor: PlayerPartyFor = getPlayerParty,
+  ) {}
 
   initialState(ctx: ProtocolContext): BlackjackState {
     const base: BlackjackState = {
@@ -411,9 +448,8 @@ export class BlackjackProtocol implements Protocol<
       balanceA: ctx.initialBalances.a,
       balanceB: ctx.initialBalances.b,
       total: ctx.initialBalances.a + ctx.initialBalances.b,
-      wager: WAGER,
+      bet: 0n,
     };
-    if (canStartRound(base)) return beginRound(base);
     return base;
   }
 
@@ -424,11 +460,17 @@ export class BlackjackProtocol implements Protocol<
   ): BlackjackState {
     switch (state.phase) {
       case "round_over": {
-        if (move.kind !== "deal")
-          throw new Error(`expected 'deal' in round_over, got '${move.kind}'`);
+        if (move.kind !== "bet")
+          throw new Error(`expected 'bet' in round_over, got '${move.kind}'`);
         if (this.isTerminal(state))
           throw new Error("game over: no more rounds can be played");
-        return beginRound(state);
+        const nextPlayer = this.playerPartyFor(state.round + 1n);
+        if (by !== nextPlayer)
+          throw new Error(`only the player (${nextPlayer}) sets the bet`);
+        const cap = maxBet(state);
+        if (move.amount < MIN_BET || move.amount > cap)
+          throw new Error(`bet must be in [${MIN_BET}, ${cap}]`);
+        return beginRound({ ...state, bet: move.amount });
       }
       case "draw_commit": {
         if (move.kind === "forfeit") return claimForfeit(state, by);
@@ -444,10 +486,10 @@ export class BlackjackProtocol implements Protocol<
           throw new Error(
             `expected 'reveal' in draw_reveal, got '${move.kind}'`,
           );
-        return applyReveal(state, move, by);
+        return applyReveal(state, move, by, this.playerPartyFor);
       }
       case "player": {
-        const playerParty = getPlayerParty(state.round);
+        const playerParty = this.playerPartyFor(state.round);
         if (by !== playerParty)
           throw new Error(`it is the player's (${playerParty}) turn`);
         if (move.kind === "hit")
@@ -455,7 +497,7 @@ export class BlackjackProtocol implements Protocol<
         if (move.kind === "stand") {
           // Dealer that is already pat (>= 17) draws nothing — settle immediately.
           if (handValue(state.dealerHand) >= DEALER_STANDS_AT)
-            return resolveShowdown(state);
+            return resolveShowdown(state, this.playerPartyFor);
           return beginDraw(state, { forHand: "dealer", reason: "dealer_auto" });
         }
         throw new Error(
@@ -479,6 +521,7 @@ export class BlackjackProtocol implements Protocol<
       Uint8Array.from(s.playerHand),
       u64ToBeBytes(s.dealerHand.length),
       Uint8Array.from(s.dealerHand),
+      u64ToBeBytes(s.bet),
     ];
     if (s.draw === null) parts.push(new Uint8Array([0xff]));
     else
@@ -519,9 +562,10 @@ export class BlackjackProtocol implements Protocol<
     if (this.isTerminal(s)) return null;
     switch (s.phase) {
       case "round_over": {
-        const nextPlayer = getPlayerParty(s.round + 1n);
+        const nextPlayer = this.playerPartyFor(s.round + 1n);
         if (by !== nextPlayer) return null;
-        return { kind: "deal" };
+        if (maxBet(s) < MIN_BET) return null;
+        return { kind: "bet", amount: MIN_BET };
       }
       case "draw_commit": {
         const mine = by === "A" ? s.pendingCommitA : s.pendingCommitB;
@@ -541,7 +585,7 @@ export class BlackjackProtocol implements Protocol<
         return { kind: "reveal", reveal: secret };
       }
       case "player": {
-        if (by !== getPlayerParty(s.round)) return null;
+        if (by !== this.playerPartyFor(s.round)) return null;
         return {
           kind: blackjackHandValue(s.playerHand) < 17 ? "hit" : "stand",
         };

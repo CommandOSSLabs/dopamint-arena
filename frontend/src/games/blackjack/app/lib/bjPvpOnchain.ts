@@ -1,11 +1,11 @@
 process.env.PACKAGE_ID ??= import.meta.env.VITE_TUNNEL_PACKAGE_ID;
 
+import { Transaction } from "@mysten/sui/transactions";
+import { core, onchain } from "sui-tunnel-ts";
 import {
   redeemStakeFromBalance,
   type StakeFromBalance,
 } from "@/onchain/tunnelTx";
-import { Transaction } from "@mysten/sui/transactions";
-import { core, onchain } from "sui-tunnel-ts";
 
 const SUI = "0x2::sui::SUI";
 type SdkTx = Parameters<typeof onchain.buildCreateAndShare>[0];
@@ -78,32 +78,6 @@ export function buildDepositTx(
       amount: stake,
     });
   }
-  return tx;
-}
-
-/**
- * Checkpoint the latest co-signed state on-chain (`update_state`). Submitted right before a
- * cooperative close so the close binds to it: `close_cooperative_with_root` recomputes
- * `final_nonce = state.nonce + 1`, so advancing the on-chain nonce to the latest makes any stale
- * lower-nonce settlement unverifiable (M2). `coinType` defaults to SUI; pass MTPS for a token tunnel.
- */
-export function buildUpdateStateTx(
-  tunnelId: string,
-  u: core.CoSignedUpdate,
-  coinType: string = SUI,
-): Transaction {
-  const tx = new Transaction();
-  onchain.buildUpdateState(tx as unknown as SdkTx, {
-    tunnelId,
-    stateHash: u.update.stateHash,
-    nonce: u.update.nonce,
-    partyABalance: u.update.partyABalance,
-    partyBBalance: u.update.partyBBalance,
-    timestamp: u.update.timestamp,
-    sigA: u.sigA,
-    sigB: u.sigB,
-    coinType,
-  });
   return tx;
 }
 

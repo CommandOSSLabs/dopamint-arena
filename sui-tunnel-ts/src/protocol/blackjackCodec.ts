@@ -1,38 +1,73 @@
 /**
- * Move (de)serializer for the v2 `BlackjackProtocol` over the PvP relay. CRITICAL fairness
- * property: the `commit` move's `localSecret` (the card pre-image) is DROPPED on encode, so the
- * opponent only ever receives the 32-byte commitment until the reveal phase. Without this codec a
- * DistributedTunnel falls back to the identity codec and would relay the pre-image at commit time,
- * letting the opponent pick a card-biasing reveal. `BlackjackProtocol.movesCarrySecrets` makes a
- * DistributedTunnel REFUSE to run without it. Pass this as the tunnel's `moveCodec`.
+ * Blackjack move codec for the relay, mirroring `quantumPokerCodec`. Converts the
+ * `Uint8Array` fields of a `BlackjackMove` (commitment, reveal value/salt) to/from hex JSON.
+ * A `commit` move's `localSecret` is LOCAL-ONLY and is dropped on encode — the counterparty
+ * receives only the commitment.
  */
 import { fromHex, toHex } from "../core/bytes";
 import type { MoveCodec } from "../core/distributedFrame";
 import type { BlackjackMove, BlackjackSlotReveal } from "./blackjack";
 
-function revealToJson(r: BlackjackSlotReveal) {
-  return { value: toHex(r.value), salt: toHex(r.salt) };
+export type BlackjackMoveJson =
+  | { kind: "bet"; amount: string }
+  | { kind: "commit"; commitment: string }
+  | { kind: "reveal"; reveal: { value: string; salt: string } }
+  | { kind: "hit" }
+  | { kind: "stand" }
+  | { kind: "forfeit" };
+
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
-/** Decode a hex field with a clear, attributable error at the trust boundary. A hostile/garbled
- *  peer frame (missing field, non-string, wrong length) is rejected here, not later as a cryptic
- *  `fromHex(undefined)` or a silent zero-length buffer that only fails commitment verification. */
-function bytesFromHex(value: unknown, label: string, length?: number): Uint8Array {
-  if (typeof value !== "string") throw new Error(`${label} must be a hex string`);
-  const bytes = fromHex(value);
-  if (length !== undefined && bytes.length !== length)
-    throw new Error(`${label} must be ${length} bytes, got ${bytes.length}`);
+function expectString(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  return value;
+}
+
+function bytesFromHex(
+  value: unknown,
+  label: string,
+  length?: number,
+): Uint8Array {
+  const bytes = fromHex(expectString(value, label));
+  if (length !== undefined && bytes.length !== length) {
+    throw new Error(`${label} must be ${length} bytes`);
+  }
   return bytes;
 }
 
-export function blackjackMoveToJson(move: BlackjackMove): unknown {
+function hex(bytes: Uint8Array): string {
+  return "0x" + toHex(bytes);
+}
+
+function revealToJson(reveal: BlackjackSlotReveal): {
+  value: string;
+  salt: string;
+} {
+  return { value: hex(reveal.value), salt: hex(reveal.salt) };
+}
+
+function revealFromJson(value: unknown, label: string): BlackjackSlotReveal {
+  const reveal = expectRecord(value, label);
+  return {
+    value: bytesFromHex(reveal.value, `${label}.value`),
+    salt: bytesFromHex(reveal.salt, `${label}.salt`),
+  };
+}
+
+export function blackjackMoveToJson(move: BlackjackMove): BlackjackMoveJson {
   switch (move.kind) {
+    case "bet":
+      return { kind: move.kind, amount: move.amount.toString() };
     case "commit":
-      // localSecret intentionally omitted — only the commitment crosses the wire.
-      return { kind: "commit", commitment: toHex(move.commitment) };
+      // localSecret is intentionally omitted — it never leaves the owning seat.
+      return { kind: move.kind, commitment: hex(move.commitment) };
     case "reveal":
-      return { kind: "reveal", reveal: revealToJson(move.reveal) };
-    case "deal":
+      return { kind: move.kind, reveal: revealToJson(move.reveal) };
     case "hit":
     case "stand":
     case "forfeit":
@@ -41,38 +76,24 @@ export function blackjackMoveToJson(move: BlackjackMove): unknown {
 }
 
 export function blackjackMoveFromJson(value: unknown): BlackjackMove {
-  const o = value as {
-    kind: string;
-    commitment?: string;
-    reveal?: { value?: string; salt?: string };
-  };
-  switch (o.kind) {
+  const move = expectRecord(value, "move");
+  const kind = expectString(move.kind, "move.kind");
+  switch (kind) {
+    case "bet":
+      return { kind, amount: BigInt(expectString(move.amount, "move.amount")) };
     case "commit":
       return {
-        kind: "commit",
-        commitment: bytesFromHex(o.commitment, "commit.commitment", 32),
+        kind,
+        commitment: bytesFromHex(move.commitment, "move.commitment", 32),
       };
-    case "reveal": {
-      if (!o.reveal || typeof o.reveal !== "object")
-        throw new Error("reveal.reveal must be an object");
-      return {
-        kind: "reveal",
-        reveal: {
-          value: bytesFromHex(o.reveal.value, "reveal.value"),
-          salt: bytesFromHex(o.reveal.salt, "reveal.salt"),
-        },
-      };
-    }
-    case "deal":
-      return { kind: "deal" };
+    case "reveal":
+      return { kind, reveal: revealFromJson(move.reveal, "move.reveal") };
     case "hit":
-      return { kind: "hit" };
     case "stand":
-      return { kind: "stand" };
     case "forfeit":
-      return { kind: "forfeit" };
+      return { kind };
     default:
-      throw new Error(`unsupported blackjack move kind ${o.kind}`);
+      throw new Error(`unsupported blackjack move kind ${kind}`);
   }
 }
 
