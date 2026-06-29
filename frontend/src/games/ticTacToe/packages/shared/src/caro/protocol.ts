@@ -5,8 +5,12 @@
  *
  * When `stake > 0`, a decisive win shifts `min(stake, loserBalance)` from the loser to the
  * winner; a draw leaves balances unchanged. Balances always sum to the locked `total`.
- * encodeState uses a distinct `caro.v1` domain and bakes in the board size, so a caro hash
+ * encodeState uses a distinct `caro.v2` domain and bakes in the board size, so a caro hash
  * can never collide with a TicTacToe hash or with a caro game of a different size.
+ *
+ * v2 adds a 32-byte `moveAccumulator` to the co-signed state. Each move folds a
+ * salted commitment (`computeCommitment(mover||moveIndex||cell, salt)`) into the
+ * accumulator so the full move history is unforgeable without replaying every move.
  */
 
 import { core, protocols } from "sui-tunnel-ts";
@@ -30,14 +34,41 @@ export interface CaroState {
   total: bigint;
   /** Amount shifted from loser to winner on a decisive result (0n = money-neutral). */
   stake: bigint;
+  /**
+   * 32-byte running commitment accumulator. Initialized from the v2 protocol domain;
+   * each move folds in `computeCommitment(mover||moveIndex||cell, salt)` so the full
+   * move history is unforgeable and auditable without re-replaying every move.
+   */
+  moveAccumulator: Uint8Array;
 }
 
-export type CaroMove = { cell: number };
+export type CaroMove = { cell: number; salt: Uint8Array };
 
-const DOMAIN = protocols.protocolDomain("caro.v1");
+const DOMAIN = protocols.protocolDomain("caro.v2");
+const MIN_SALT_LEN = 16;
+
+/** `lp(x) = u64be(len(x)) || x` — length-prefixed chunk for the accumulator hash. */
+function lp(x: Uint8Array): Uint8Array[] {
+  return [core.u64ToBeBytes(x.length), x];
+}
+
+/** Initial accumulator value seeded from the v2 protocol domain. */
+function initialAccumulator(): Uint8Array {
+  return core.blake2b256(core.concatBytes([core.DOMAIN_COMMIT_REVEAL, ...lp(DOMAIN)]));
+}
+
+/** Fold one commitment into the running accumulator. */
+function advanceAccumulator(
+  prevAcc: Uint8Array,
+  commitment: Uint8Array,
+): Uint8Array {
+  return core.blake2b256(
+    core.concatBytes([core.DOMAIN_COMMIT_REVEAL, ...lp(prevAcc), ...lp(commitment)]),
+  );
+}
 
 export class CaroProtocol implements Protocol<CaroState, CaroMove> {
-  readonly name = "caro.v1";
+  readonly name = "caro.v2";
   private readonly size: number;
   /** Default stake used when the caller does not configure one. */
   private readonly defaultStake: bigint;
@@ -75,13 +106,14 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
       balanceB: ctx.initialBalances.b,
       total,
       stake,
+      moveAccumulator: initialAccumulator(),
     };
   }
 
   applyMove(state: CaroState, move: CaroMove, by: Party): CaroState {
     if (state.winner !== 0) throw new Error("caro: game already over");
     if (by !== state.turn) throw new Error("caro: not this party's turn");
-    const { cell } = move;
+    const { cell, salt } = move;
     if (
       !Number.isInteger(cell) ||
       cell < 0 ||
@@ -90,6 +122,9 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
       throw new Error("caro: cell out of range");
     }
     if (state.board[cell] !== 0) throw new Error("caro: cell occupied");
+    if (!salt || salt.length < MIN_SALT_LEN) {
+      throw new Error(`caro: salt must be >= ${MIN_SALT_LEN} bytes`);
+    }
 
     const mark = by === "A" ? 1 : 2;
     const board = applyMark(state.board, cell, mark);
@@ -113,6 +148,19 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
     }
     // winner === 3 (draw) or 0 (ongoing): balances unchanged.
 
+    // Fold the salted commitment into the accumulator.
+    // value = u8(mover) || u64be(moveIndex) || u64be(cell)
+    // mover: 1 for A, 2 for B; moveIndex = movesCount (pre-incremented above).
+    // cell is u64be to accommodate large boards (up to 25×25=625 > u8).
+    const moverByte = by === "A" ? 1 : 2;
+    const value = core.concatBytes([
+      Uint8Array.of(moverByte),
+      core.u64ToBeBytes(movesCount),
+      core.u64ToBeBytes(cell),
+    ]);
+    const commitment = core.computeCommitment(value, salt);
+    const moveAccumulator = advanceAccumulator(state.moveAccumulator, commitment);
+
     return {
       ...state,
       board,
@@ -124,12 +172,15 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
       balanceB,
       total: state.total,
       stake: state.stake,
+      moveAccumulator,
     };
   }
 
   encodeState(state: CaroState): Uint8Array {
     // movesCount is intentionally NOT encoded: it is derivable from the board (count of
     // non-empty cells), so two states with the same board are already canonically distinct.
+    // The 32-byte moveAccumulator is appended last so v1 and v2 are distinguishable by
+    // domain and by length.
     return core.concatBytes([
       DOMAIN,
       protocols.lengthPrefixedConcat([
@@ -140,6 +191,7 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
         core.u64ToBeBytes(state.balanceB),
         core.u64ToBeBytes(state.stake),
       ]),
+      state.moveAccumulator,
     ]);
   }
 
@@ -160,14 +212,14 @@ export interface MultiGameCaroState {
 
 export type MultiGameCaroMove = CaroMove;
 
-const MULTI_DOMAIN = protocols.protocolDomain("caro.multi.v1");
+const MULTI_DOMAIN = protocols.protocolDomain("caro.series.v2");
 
 /** Plays `maxGames` Caro games over one tunnel, composing `CaroProtocol`. */
 export class MultiGameCaroProtocol implements Protocol<
   MultiGameCaroState,
   MultiGameCaroMove
 > {
-  readonly name = "caro.multi.v1";
+  readonly name = "caro.series.v2";
   private readonly inner: CaroProtocol;
   private readonly maxGames: number;
 
@@ -246,14 +298,20 @@ export class MultiGameCaroProtocol implements Protocol<
   randomMove(
     state: MultiGameCaroState,
     by: Party,
-    _rng: () => number,
+    rng: () => number,
   ): MultiGameCaroMove | null {
     if (this.isTerminal(state)) return null;
+    // Derive a 16-byte deterministic salt from the rng.
+    const saltBytes = new Uint8Array(16);
+    const saltView = new DataView(saltBytes.buffer);
+    saltView.setFloat64(0, rng(), false);
+    saltView.setFloat64(8, rng(), false);
+    const salt = saltBytes;
     // Between games only A drives the advance (mirrors TTT); mid-game the hook supplies moves.
     if (this.inner.isTerminal(state.inner))
-      return by === "A" ? { cell: 0 } : null;
+      return by === "A" ? { cell: 0, salt } : null;
     // Mid-game fallback: first empty cell (the real bot uses caro/bot.ts instead).
     const i = state.inner.board.findIndex((c) => c === 0);
-    return i >= 0 ? { cell: i } : null;
+    return i >= 0 ? { cell: i, salt } : null;
   }
 }
