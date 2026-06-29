@@ -7,8 +7,8 @@ use std::time::Duration;
 use fleet_serve::{into_serving_unit, DriverUnit, FleetSupervisor, HeartbeatReporter};
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
-    Balances, InMemoryFrameTransport, LocalSigner, PartyDriver, PartyRuntime, RandomMoveStrategy,
-    Seat, TunnelContext,
+    Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, NullTranscriptRecorder,
+    PartyDriver, RandomMoveStrategy, Seat, SeatParts,
 };
 use tunnel_payments::Payments;
 use wiremock::matchers::{method, path};
@@ -29,11 +29,7 @@ async fn serve_unit_attaches_reporter() {
     let pk_b = keypair_from_secret(&sb).public_key();
     let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
-    let ctx = |seat| TunnelContext {
-        tunnel_id: "0xcd".into(),
-        initial: Balances { a: 100, b: 100 },
-        seat,
-    };
+    let anchor = InMemoryAnchor::with_fixed_id("0xcd");
 
     // Seat A owns the session → its reporter is attached via the seam.
     let reporter = HeartbeatReporter::new(
@@ -43,14 +39,17 @@ async fn serve_unit_attaches_reporter() {
         "tok-1".into(),
     );
     let driver_a = PartyDriver::new(
-        PartyRuntime::new(
-            Payments { max_transfers: 20 },
-            LocalSigner::from_secret(&sa),
-            pk_b,
-            ctx(Seat::A),
-        ),
+        SeatParts {
+            protocol: Payments { max_transfers: 20 },
+            signer: LocalSigner::from_secret(&sa),
+            opponent_pk: pk_b,
+            initial: Balances { a: 100, b: 100 },
+            seat: Seat::A,
+        },
         RandomMoveStrategy::new(Arc::new(Payments { max_transfers: 20 }), 1),
         ch_a,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
     let mut ca = 0u64;
     let unit_a = into_serving_unit(driver_a, reporter, 1000, move || {
@@ -60,20 +59,28 @@ async fn serve_unit_attaches_reporter() {
 
     // Seat B is the plain opponent — no reporter (it does not own the session).
     let driver_b = PartyDriver::new(
-        PartyRuntime::new(
-            Payments { max_transfers: 20 },
-            LocalSigner::from_secret(&sb),
-            pk_a,
-            ctx(Seat::B),
-        ),
+        SeatParts {
+            protocol: Payments { max_transfers: 20 },
+            signer: LocalSigner::from_secret(&sb),
+            opponent_pk: pk_a,
+            initial: Balances { a: 100, b: 100 },
+            seat: Seat::B,
+        },
         RandomMoveStrategy::new(Arc::new(Payments { max_transfers: 20 }), 2),
         ch_b,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
     let mut cb = 0u64;
-    let unit_b: DriverUnit = Box::pin(driver_b.run(1000, move || {
-        cb += 1;
-        cb
-    }));
+    let unit_b: DriverUnit = Box::pin(async move {
+        driver_b
+            .run(1000, move || {
+                cb += 1;
+                cb
+            })
+            .await
+            .map(|(outcome, _recorder)| outcome)
+    });
 
     let metrics = FleetSupervisor::run_drivers(vec![unit_a, unit_b]).await;
     assert_eq!(metrics.tunnels, 2);
