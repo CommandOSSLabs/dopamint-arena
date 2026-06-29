@@ -1,5 +1,5 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, SuiAnchorOpts, TranscriptRecorderMode};
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_payments::{Payments, PaymentsStrategy};
 
@@ -9,6 +9,7 @@ pub(crate) fn play(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let payment_amount = 5;
@@ -20,6 +21,7 @@ pub(crate) fn play(
         PaymentsStrategy::new(payment_amount).expect("valid payments strategy"),
         codec,
         anchor_mode,
+        sui_anchor,
         transcript_recorder,
         card_seed.unwrap_or(0),
         kit,

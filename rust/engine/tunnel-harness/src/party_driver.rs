@@ -1,16 +1,16 @@
 //! Drives one party asynchronously, bracketed by chain IO: `open` resolves the
 //! tunnel and yields the `tunnel_id` the seat is built from; the move loop runs;
-//! `settle` submits the co-signed v1 close. A `TranscriptRecorder` taps each
+//! `settle` submits the co-signed close. A `TranscriptRecorder` taps each
 //! committed transition in the loop's effects band, independent of the anchor.
 
 use crate::{
     Balances, DriverObserver, DriverStart, FrameTransport, FrameTransportError, HarnessError,
-    MoveCommitted, MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol, Seat, Signer,
-    TranscriptRecorder, TunnelAnchor, TunnelAnchorError, TunnelContext, TunnelOpenRequest,
-    TunnelSettleRequest,
+    MoveCommitted, MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol, Seat, SettlementMode,
+    Signer, TranscriptRecorder, TranscriptSettleEntry, TunnelAnchor, TunnelAnchorError,
+    TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
 };
 use tunnel_core::protocol_id::ProtocolId;
-use tunnel_core::wire::{serialize_settlement, Settlement};
+use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Settlement};
 
 #[derive(Debug)]
 pub struct DriverOutcome {
@@ -252,7 +252,31 @@ where
             final_nonce,
             timestamp,
         };
-        let signature = seat.sign(&serialize_settlement(&settlement));
+        let (signature, transcript_root, transcript_entries) = match anchor.settlement_mode() {
+            SettlementMode::Rootless => (
+                seat.sign(&serialize_settlement(&settlement)),
+                None,
+                Vec::new(),
+            ),
+            SettlementMode::TranscriptRoot => {
+                if !recorder.records_transcript() {
+                    return Err(HarnessError::Verification(
+                        "anchor requires transcript recorder".into(),
+                    ));
+                }
+                let transcript = recorder.snapshot();
+                let root = transcript.canonical_root_for_tunnel(seat.tunnel_id())?;
+                let msg = serialize_settlement_with_root(&settlement, &root);
+                let entries = transcript
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        TranscriptSettleEntry::from_transcript_entry(seat.tunnel_id(), entry)
+                    })
+                    .collect();
+                (seat.sign(&msg), Some(root), entries)
+            }
+        };
         anchor
             .settle(TunnelSettleRequest {
                 by: our_seat,
@@ -262,6 +286,8 @@ where
                 final_nonce,
                 timestamp,
                 signature,
+                transcript_root,
+                transcript_entries,
             })
             .await?;
 
@@ -587,6 +613,7 @@ mod tests {
     struct CapturingAnchor {
         tunnel_id: String,
         onchain_nonce: u64,
+        settlement_mode: SettlementMode,
         settled: Arc<AtomicU64>,
         requests: Arc<Mutex<Vec<TunnelSettleRequest>>>,
     }
@@ -601,13 +628,23 @@ mod tests {
             Self {
                 tunnel_id: tunnel_id.into(),
                 onchain_nonce,
+                settlement_mode: SettlementMode::Rootless,
                 settled,
                 requests,
             }
         }
+
+        fn with_settlement_mode(mut self, settlement_mode: SettlementMode) -> Self {
+            self.settlement_mode = settlement_mode;
+            self
+        }
     }
 
     impl TunnelAnchor for CapturingAnchor {
+        fn settlement_mode(&self) -> SettlementMode {
+            self.settlement_mode
+        }
+
         async fn open(
             &self,
             _request: TunnelOpenRequest,
@@ -616,6 +653,7 @@ mod tests {
                 tunnel_id: self.tunnel_id.clone(),
                 created: true,
                 onchain_nonce: self.onchain_nonce,
+                created_at_ms: None,
             })
         }
 
@@ -675,6 +713,56 @@ mod tests {
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|r| r.final_nonce == 42));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transcript_root_anchor_requires_recording_recorder() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests))
+            .with_settlement_mode(SettlementMode::TranscriptRoot);
+
+        let driver_a = PartyDriver::new(
+            parts(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::A,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        );
+        let driver_b = PartyDriver::new(
+            parts(Seat::B, &secret_b, pk_a),
+            TrackingStrategy::new(
+                Seat::B,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        );
+
+        let (out_a, out_b) = tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1));
+        assert_eq!(
+            out_a.unwrap_err(),
+            HarnessError::Verification("anchor requires transcript recorder".into())
+        );
+        assert_eq!(
+            out_b.unwrap_err(),
+            HarnessError::Verification("anchor requires transcript recorder".into())
+        );
+        assert_eq!(settled.load(Ordering::Relaxed), 0);
+        assert!(requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,5 +1,5 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, SuiAnchorOpts, TranscriptRecorderMode};
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_caro::{Caro, CaroSeries, CaroSeriesStrategy, CaroStrategy, CaroStrength};
 
@@ -9,6 +9,7 @@ pub(crate) fn play_single(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -20,6 +21,7 @@ pub(crate) fn play_single(
             .expect("valid caro strategy"),
         codec,
         anchor_mode,
+        sui_anchor,
         transcript_recorder,
         seed,
         kit,
@@ -36,6 +38,7 @@ pub(crate) fn play_series(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -47,6 +50,7 @@ pub(crate) fn play_series(
             .expect("valid caro series strategy"),
         codec,
         anchor_mode,
+        sui_anchor,
         transcript_recorder,
         seed,
         kit,

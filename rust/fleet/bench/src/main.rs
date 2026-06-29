@@ -30,6 +30,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
+                opts.sui_anchor.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
@@ -44,6 +45,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
+                opts.sui_anchor.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
@@ -61,6 +63,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
+                opts.sui_anchor.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
@@ -72,6 +75,7 @@ fn main() {
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
+                opts.sui_anchor.as_ref(),
                 opts.transcript_recorder,
                 opts.protocol_id,
             );

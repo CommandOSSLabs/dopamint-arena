@@ -140,6 +140,7 @@ mod tests {
             frame_codec: crate::cli::FrameCodecKind::Json,
             anchor_mode: AnchorMode::Memory,
             transcript_recorder: TranscriptRecorderMode::None,
+            sui_anchor: None,
         }
     }
 

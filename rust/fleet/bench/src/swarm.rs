@@ -6,7 +6,7 @@
 //! (143*N moves), which is the golden regression gate; `--duration` is
 //! the time-bounded throughput mode.
 
-use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode, SuiAnchorOpts, TranscriptRecorderMode};
 use crate::party_driver::SeatKit;
 use crate::protocols::play_match_for;
 use crate::stats::{summarize, Distribution};
@@ -147,6 +147,7 @@ pub fn run_simple(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -160,6 +161,7 @@ pub fn run_simple(
             &kit,
             &tunnel_id_for(idx),
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         );
         MatchSample {
@@ -186,6 +188,7 @@ pub fn run_fresh_keys(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -203,6 +206,7 @@ pub fn run_fresh_keys(
             &kit,
             &tunnel_id_for(idx),
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         );
         MatchSample {
@@ -232,6 +236,7 @@ pub fn run_preinitialized_signers(
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
@@ -246,6 +251,7 @@ pub fn run_preinitialized_signers(
             kit,
             &tunnel_id_for(idx),
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         );
         MatchSample {
@@ -274,6 +280,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -292,6 +299,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -302,6 +310,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -327,6 +336,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -345,6 +355,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -362,6 +373,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -380,6 +392,7 @@ mod tests {
             ScenarioMode::Varied,
             FrameCodecKind::Bcs,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -407,6 +420,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -424,6 +438,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -434,6 +449,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Bcs,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -444,6 +460,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Postcard,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
@@ -464,6 +481,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             tunnel_core::protocol_id::BLACKJACK_V2,
         );
@@ -482,6 +500,7 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
+            None,
             TranscriptRecorderMode::None,
             tunnel_core::protocol_id::PAYMENTS_V1,
         );

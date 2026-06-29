@@ -1,5 +1,5 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, SuiAnchorOpts, TranscriptRecorderMode};
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_chat::{Chat, ChatStrategy};
 
@@ -9,6 +9,7 @@ pub(crate) fn play(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
@@ -18,6 +19,7 @@ pub(crate) fn play(
         ChatStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,
         anchor_mode,
+        sui_anchor,
         transcript_recorder,
         seed,
         kit,

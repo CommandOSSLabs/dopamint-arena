@@ -43,6 +43,6 @@ pub use transcript::{
 
 pub mod anchor;
 pub use anchor::{
-    InMemoryAnchor, OpenedTunnel, SettledTunnel, TunnelAnchor, TunnelOpenRequest,
-    TunnelSettleRequest,
+    InMemoryAnchor, OpenedTunnel, SettledTunnel, SettlementMode, TranscriptSettleEntry,
+    TunnelAnchor, TunnelOpenRequest, TunnelSettleRequest,
 };

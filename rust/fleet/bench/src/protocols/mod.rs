@@ -1,4 +1,4 @@
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind, SuiAnchorOpts, TranscriptRecorderMode};
 use crate::party_driver::{play_protocol_match_with_strategies, MatchResult, SeatKit};
 use tunnel_core::protocol_id::{
     API_CREDITS_V1, BATTLESHIP_SERIES_V1, BATTLESHIP_V1, BLACKJACK_BET_V1, BLACKJACK_DUEL_V1,
@@ -33,6 +33,7 @@ pub(crate) fn play_with_strategies<P, StrategyA, StrategyB>(
     strategy_b: StrategyB,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
     move_seed: u64,
     kit: &SeatKit,
@@ -59,6 +60,7 @@ where
             balance_b,
             max_moves,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         FrameCodecKind::Bcs => play_with_codec::<P, BcsFrameCodec, StrategyA, StrategyB>(
@@ -72,6 +74,7 @@ where
             balance_b,
             max_moves,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         FrameCodecKind::Postcard => play_with_codec::<P, PostcardFrameCodec, StrategyA, StrategyB>(
@@ -85,6 +88,7 @@ where
             balance_b,
             max_moves,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
     }
@@ -102,6 +106,7 @@ fn play_with_codec<P, C, StrategyA, StrategyB>(
     balance_b: u64,
     max_moves: u64,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult
 where
@@ -122,6 +127,7 @@ where
         CREATED_AT,
         max_moves,
         anchor_mode,
+        sui_anchor,
         transcript_recorder,
         |_, _| {},
     )
@@ -134,6 +140,7 @@ pub(crate) fn play_match_for(
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
+    sui_anchor: Option<&SuiAnchorOpts>,
     transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     match protocol_id {
@@ -143,6 +150,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BATTLESHIP_V1 => battleship::play_single(
@@ -151,6 +159,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BATTLESHIP_SERIES_V1 => battleship::play_series(
@@ -159,6 +168,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BLACKJACK_BET_V1 => blackjack::play_bet(
@@ -167,6 +177,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BLACKJACK_DUEL_V1 => blackjack::play_duel(
@@ -175,6 +186,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BLACKJACK_V2 => blackjack::play_v2(
@@ -183,6 +195,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BOMB_IT_V1 => bomb_it::play_single(
@@ -191,6 +204,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         BOMB_IT_SERIES_V1 => bomb_it::play_series(
@@ -199,6 +213,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         CARO_V1 => caro::play_single(
@@ -207,6 +222,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         CARO_SERIES_V1 => caro::play_series(
@@ -215,6 +231,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         CHAT_V1 => chat::play(
@@ -223,6 +240,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         CROSS_V1 => cross::play_single(
@@ -231,6 +249,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         CROSS_SERIES_V1 => cross::play_series(
@@ -239,6 +258,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         PAYMENTS_V1 => payments::play(
@@ -247,6 +267,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         QUANTUM_POKER_V2 => quantum_poker::play(
@@ -255,6 +276,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         TIC_TAC_TOE_V1 => tic_tac_toe::play_single(
@@ -263,6 +285,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         TIC_TAC_TOE_SERIES_V1 => tic_tac_toe::play_series(
@@ -271,6 +294,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         WORLD_CANVAS_CELL_V1 => world_canvas::play_cell(
@@ -279,6 +303,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         WORLD_CANVAS_STROKE_V1 => world_canvas::play_stroke(
@@ -287,6 +312,7 @@ pub(crate) fn play_match_for(
             kit,
             tunnel_id,
             anchor_mode,
+            sui_anchor,
             transcript_recorder,
         ),
         _ => panic!("unsupported fleet-bench protocol id: {protocol_id}"),

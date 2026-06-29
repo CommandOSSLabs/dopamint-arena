@@ -22,6 +22,7 @@ pub enum FrameCodecKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AnchorMode {
     Memory,
+    Sui,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +61,18 @@ pub struct BenchOpts {
     pub anchor_mode: AnchorMode,
     /// Transcript recorder implementation (`None` by default).
     pub transcript_recorder: TranscriptRecorderMode,
+    /// Sui anchor configuration, present only when `anchor_mode == Sui`.
+    pub sui_anchor: Option<SuiAnchorOpts>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuiAnchorOpts {
+    pub graphql_url: String,
+    pub backend_url: String,
+    pub package_id: String,
+    pub tunnel_coin_type: String,
+    pub funder_priv_key: String,
+    pub funder_stake_coin_id: String,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -148,6 +161,28 @@ struct Raw {
     /// Protocol ID to execute.
     #[arg(long = "protocol-id", default_value = BLACKJACK_BET_V1, value_name = "ID")]
     protocol_id: String,
+    /// Sui GraphQL endpoint used by --anchor sui.
+    #[arg(long = "sui-graphql-url", value_name = "URL")]
+    sui_graphql_url: Option<String>,
+    /// Dopamint tunnel-manager backend base URL used by --anchor sui.
+    #[arg(long = "sui-backend-url", value_name = "URL")]
+    sui_backend_url: Option<String>,
+    /// Published Sui Tunnel package id used by --anchor sui.
+    #[arg(long = "sui-package-id", value_name = "OBJECT_ID")]
+    sui_package_id: Option<String>,
+    /// Move coin type for the Sui Tunnel<T> object.
+    #[arg(
+        long = "sui-tunnel-coin-type",
+        default_value = "0x2::sui::SUI",
+        value_name = "TYPE"
+    )]
+    sui_tunnel_coin_type: String,
+    /// Sui bech32 private key for the funder wallet used by --anchor sui.
+    #[arg(long = "sui-funder-priv-key", value_name = "BECH32")]
+    sui_funder_priv_key: Option<String>,
+    /// Funder-owned stake coin object used by --anchor sui.
+    #[arg(long = "sui-funder-stake-coin-id", value_name = "OBJECT_ID")]
+    sui_funder_stake_coin_id: Option<String>,
 }
 
 pub fn help_text() -> String {
@@ -239,7 +274,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
 
     let anchor_mode = match raw.anchor.as_str() {
         "memory" => AnchorMode::Memory,
-        other => return Err(format!("--anchor must be memory, got {other}")),
+        "sui" => AnchorMode::Sui,
+        other => return Err(format!("--anchor must be memory|sui, got {other}")),
     };
 
     let transcript_recorder = match raw.transcript_recorder.as_str() {
@@ -252,6 +288,41 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         }
     };
 
+    let sui_anchor = if anchor_mode == AnchorMode::Sui {
+        if transcript_recorder != TranscriptRecorderMode::Memory {
+            return Err("--anchor sui requires --transcript-recorder memory".to_string());
+        }
+        let mut missing = Vec::new();
+        if raw.sui_graphql_url.is_none() {
+            missing.push("--sui-graphql-url");
+        }
+        if raw.sui_backend_url.is_none() {
+            missing.push("--sui-backend-url");
+        }
+        if raw.sui_package_id.is_none() {
+            missing.push("--sui-package-id");
+        }
+        if raw.sui_funder_priv_key.is_none() {
+            missing.push("--sui-funder-priv-key");
+        }
+        if raw.sui_funder_stake_coin_id.is_none() {
+            missing.push("--sui-funder-stake-coin-id");
+        }
+        if !missing.is_empty() {
+            return Err(format!("--anchor sui requires {}", missing.join(", ")));
+        }
+        Some(SuiAnchorOpts {
+            graphql_url: raw.sui_graphql_url.unwrap(),
+            backend_url: raw.sui_backend_url.unwrap(),
+            package_id: raw.sui_package_id.unwrap(),
+            tunnel_coin_type: raw.sui_tunnel_coin_type,
+            funder_priv_key: raw.sui_funder_priv_key.unwrap(),
+            funder_stake_coin_id: raw.sui_funder_stake_coin_id.unwrap(),
+        })
+    } else {
+        None
+    };
+
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
@@ -262,6 +333,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         frame_codec,
         anchor_mode,
         transcript_recorder,
+        sui_anchor,
     })
 }
 
@@ -398,6 +470,50 @@ mod tests {
             parse_v(&["--anchor", "memory"]).unwrap().anchor_mode,
             AnchorMode::Memory
         );
+    }
+
+    #[test]
+    fn anchor_sui_requires_transcript_recorder_and_config() {
+        let err = parse_v(&["--anchor", "sui"]).unwrap_err();
+        assert!(err.contains("transcript-recorder"), "{err}");
+
+        let err = parse_v(&["--anchor", "sui", "--transcript-recorder", "memory"]).unwrap_err();
+        assert!(err.contains("sui-graphql-url"), "{err}");
+        assert!(err.contains("sui-funder-priv-key"), "{err}");
+        assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
+    }
+
+    #[test]
+    fn anchor_sui_parses_graphql_and_funder_options() {
+        let o = parse_v(&[
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "memory",
+            "--sui-graphql-url",
+            "https://sui.example/graphql",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-funder-stake-coin-id",
+            "0xcoin",
+        ])
+        .unwrap();
+
+        assert_eq!(o.anchor_mode, AnchorMode::Sui);
+        let sui = o.sui_anchor.expect("sui config");
+        assert_eq!(sui.graphql_url, "https://sui.example/graphql");
+        assert_eq!(sui.backend_url, "https://backend.example");
+        assert_eq!(sui.package_id, "0xabc");
+        assert_eq!(sui.tunnel_coin_type, "0x2::sui::SUI");
+        assert_eq!(
+            sui.funder_priv_key,
+            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        );
+        assert_eq!(sui.funder_stake_coin_id, "0xcoin");
     }
 
     #[test]

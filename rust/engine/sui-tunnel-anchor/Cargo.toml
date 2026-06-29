@@ -1,0 +1,24 @@
+[package]
+name = "sui-tunnel-anchor"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bcs.workspace = true
+bech32.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sui-crypto.workspace = true
+sui-graphql.workspace = true
+sui-sdk-types.workspace = true
+tokio.workspace = true
+tunnel-core = { path = "../tunnel-core" }
+tunnel-harness = { path = "../tunnel-harness" }

@@ -226,6 +226,12 @@ impl TranscriptCodec for PostcardTranscriptCodec {
 /// never `dyn` (the typed entry makes the trait non-object-safe). `record` takes
 /// `&self` plus interior mutability so one instance can be shared.
 pub trait TranscriptRecorder<M> {
+    /// `false` for sinks that intentionally discard entries. Anchors that require
+    /// a transcript root must fail closed instead of silently settling an empty root.
+    fn records_transcript(&self) -> bool {
+        true
+    }
+
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError>;
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>>;
 
@@ -299,6 +305,10 @@ impl<M: Clone> TranscriptRecorder<M> for InMemoryTranscriptRecorder<M> {
 pub struct NullTranscriptRecorder;
 
 impl<M> TranscriptRecorder<M> for NullTranscriptRecorder {
+    fn records_transcript(&self) -> bool {
+        false
+    }
+
     fn record(&self, _entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
         Ok(())
     }

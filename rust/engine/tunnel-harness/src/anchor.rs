@@ -12,14 +12,23 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-use crate::{Balances, Seat, TunnelAnchorError};
+use crate::{Balances, Seat, TranscriptEntry, TunnelAnchorError};
 use tunnel_core::crypto::{blake2b256, verify};
 use tunnel_core::protocol_id::ProtocolId;
-use tunnel_core::wire::{serialize_settlement, Settlement};
+use tunnel_core::wire::{
+    serialize_settlement, serialize_settlement_with_root, serialize_state_update, Settlement,
+    StateUpdate,
+};
 
 /// Brackets a match with chain IO. Both methods are async and `Send` so the driver
 /// can await them in its loop and be spawned on a multi-thread runtime.
 pub trait TunnelAnchor {
+    /// Settlement bytes this anchor requires. Production Sui settlement uses
+    /// `settlement_v2` with a transcript root; local memory defaults to v1.
+    fn settlement_mode(&self) -> SettlementMode {
+        SettlementMode::Rootless
+    }
+
     /// Create or resolve the tunnel object. Must be idempotent on
     /// `(protocol, party_a, party_b)`: the first caller creates, the second
     /// resolves the same `tunnel_id`.
@@ -36,6 +45,12 @@ pub trait TunnelAnchor {
     ) -> impl Future<Output = Result<SettledTunnel, TunnelAnchorError>> + Send;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettlementMode {
+    Rootless,
+    TranscriptRoot,
+}
+
 /// Open inputs. `(protocol, party_a, party_b)` is the idempotency key.
 pub struct TunnelOpenRequest {
     pub protocol: ProtocolId,
@@ -49,6 +64,8 @@ pub struct OpenedTunnel {
     pub tunnel_id: String,
     /// Current on-chain state nonce. Cooperative close signs `state.nonce + 1`.
     pub onchain_nonce: u64,
+    /// On-chain tunnel creation time in milliseconds, when the anchor can prove it.
+    pub created_at_ms: Option<u64>,
     /// `true` if this call created the tunnel; `false` if it resolved an existing one.
     pub created: bool,
 }
@@ -65,6 +82,39 @@ pub struct TunnelSettleRequest {
     pub timestamp: u64,
     /// Our half over `serialize_settlement` (v1).
     pub signature: [u8; 64],
+    /// Transcript root signed into `settlement_v2`. `None` means rootless v1.
+    pub transcript_root: Option<[u8; 32]>,
+    /// Raw transcript entries for settlement submitters that archive/verify full history.
+    pub transcript_entries: Vec<TranscriptSettleEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TranscriptSettleEntry {
+    pub message: Vec<u8>,
+    pub sig_a: [u8; 64],
+    pub sig_b: [u8; 64],
+}
+
+impl TranscriptSettleEntry {
+    pub fn from_transcript_entry<M>(tunnel_id: &str, entry: &TranscriptEntry<M>) -> Self {
+        let message = serialize_state_update(&StateUpdate {
+            tunnel_id: tunnel_id.to_string(),
+            state_hash: entry.state_hash,
+            nonce: entry.nonce,
+            timestamp: entry.timestamp,
+            party_a_balance: entry.party_a_balance,
+            party_b_balance: entry.party_b_balance,
+        });
+        let (sig_a, sig_b) = match entry.by {
+            Seat::A => (entry.sig_proposer, entry.sig_responder),
+            Seat::B => (entry.sig_responder, entry.sig_proposer),
+        };
+        Self {
+            message,
+            sig_a,
+            sig_b,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,18 +209,23 @@ fn pair_and_verify(
         || first.party_b_balance != second.party_b_balance
         || first.final_nonce != second.final_nonce
         || first.timestamp != second.timestamp
+        || first.transcript_root != second.transcript_root
     {
         return Err(TunnelAnchorError::Mismatch(
             "settlement halves disagree".into(),
         ));
     }
-    let bytes = serialize_settlement(&Settlement {
+    let settlement = Settlement {
         tunnel_id: first.tunnel_id.clone(),
         party_a_balance: first.party_a_balance,
         party_b_balance: first.party_b_balance,
         final_nonce: first.final_nonce,
         timestamp: first.timestamp,
-    });
+    };
+    let bytes = match first.transcript_root {
+        Some(root) => serialize_settlement_with_root(&settlement, &root),
+        None => serialize_settlement(&settlement),
+    };
     let verify_half = |r: &TunnelSettleRequest| {
         let pk = match r.by {
             Seat::A => pk_a,
@@ -204,6 +259,7 @@ impl TunnelAnchor for InMemoryAnchor {
             return Ok(OpenedTunnel {
                 tunnel_id: rec.tunnel_id.clone(),
                 onchain_nonce: 0,
+                created_at_ms: None,
                 created: false,
             });
         }
@@ -225,6 +281,7 @@ impl TunnelAnchor for InMemoryAnchor {
         Ok(OpenedTunnel {
             tunnel_id,
             onchain_nonce: 0,
+            created_at_ms: None,
             created: true,
         })
     }
@@ -306,7 +363,7 @@ mod tests {
     use crate::Signer;
     use std::time::Duration;
     use tunnel_core::crypto::keypair_from_secret;
-    use tunnel_core::wire::{serialize_settlement, Settlement};
+    use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Settlement};
 
     fn keys(seed: u8) -> ([u8; 32], [u8; 32]) {
         let secret: [u8; 32] = std::array::from_fn(|i| i as u8 + seed);
@@ -330,6 +387,47 @@ mod tests {
             timestamp: ts,
         });
         crate::LocalSigner::from_secret(secret).sign(&bytes)
+    }
+
+    fn sign_half_with_root(
+        secret: &[u8; 32],
+        tunnel_id: &str,
+        a: u64,
+        b: u64,
+        nonce: u64,
+        ts: u64,
+        root: &[u8; 32],
+    ) -> [u8; 64] {
+        let settlement = Settlement {
+            tunnel_id: tunnel_id.into(),
+            party_a_balance: a,
+            party_b_balance: b,
+            final_nonce: nonce,
+            timestamp: ts,
+        };
+        crate::LocalSigner::from_secret(secret)
+            .sign(&serialize_settlement_with_root(&settlement, root))
+    }
+
+    fn settle_req(by: Seat, signature: [u8; 64]) -> TunnelSettleRequest {
+        TunnelSettleRequest {
+            tunnel_id: "0xab".into(),
+            by,
+            party_a_balance: 120,
+            party_b_balance: 80,
+            final_nonce: 4,
+            timestamp: 9,
+            signature,
+            transcript_root: None,
+            transcript_entries: Vec::new(),
+        }
+    }
+
+    fn settle_req_with_root(by: Seat, signature: [u8; 64], root: [u8; 32]) -> TunnelSettleRequest {
+        TunnelSettleRequest {
+            transcript_root: Some(root),
+            ..settle_req(by, signature)
+        }
     }
 
     #[test]
@@ -386,6 +484,8 @@ mod tests {
             final_nonce: 4,
             timestamp: 9,
             signature: sig,
+            transcript_root: None,
+            transcript_entries: Vec::new(),
         };
         let sig_a = sign_half(&sa, "0xab", 120, 80, 4, 9);
         let sig_b = sign_half(&sb, "0xab", 120, 80, 4, 9);
@@ -401,6 +501,62 @@ mod tests {
 
         let resettle = anchor.settle(mk(Seat::A, sig_a)).await;
         assert_eq!(resettle, Err(TunnelAnchorError::AlreadySettled));
+    }
+
+    #[tokio::test]
+    async fn settle_pairs_two_valid_root_halves() {
+        let (sa, pk_a) = keys(1);
+        let (sb, pk_b) = keys(40);
+        let anchor = InMemoryAnchor::with_fixed_id("0xab");
+        anchor
+            .open(TunnelOpenRequest {
+                protocol: ProtocolId::parse("payments.v1").unwrap(),
+                party_a: pk_a,
+                party_b: pk_b,
+                initial: Balances { a: 100, b: 100 },
+            })
+            .await
+            .unwrap();
+
+        let root = [7u8; 32];
+        let sig_a = sign_half_with_root(&sa, "0xab", 120, 80, 4, 9, &root);
+        let sig_b = sign_half_with_root(&sb, "0xab", 120, 80, 4, 9, &root);
+
+        let (ra, rb) = tokio::join!(
+            anchor.settle(settle_req_with_root(Seat::A, sig_a, root)),
+            anchor.settle(settle_req_with_root(Seat::B, sig_b, root)),
+        );
+        let a = ra.unwrap();
+        let b = rb.unwrap();
+        assert_eq!(a.final_balances, Balances { a: 120, b: 80 });
+        assert_eq!(a.digest, b.digest);
+    }
+
+    #[tokio::test]
+    async fn settle_rejects_mixed_root_and_rootless_halves() {
+        let (sa, pk_a) = keys(1);
+        let (sb, pk_b) = keys(40);
+        let anchor = InMemoryAnchor::with_fixed_id("0xab");
+        anchor
+            .open(TunnelOpenRequest {
+                protocol: ProtocolId::parse("payments.v1").unwrap(),
+                party_a: pk_a,
+                party_b: pk_b,
+                initial: Balances { a: 100, b: 100 },
+            })
+            .await
+            .unwrap();
+
+        let root = [7u8; 32];
+        let sig_a = sign_half_with_root(&sa, "0xab", 120, 80, 4, 9, &root);
+        let sig_b = sign_half(&sb, "0xab", 120, 80, 4, 9);
+
+        let (ra, rb) = tokio::join!(
+            anchor.settle(settle_req_with_root(Seat::A, sig_a, root)),
+            anchor.settle(settle_req(Seat::B, sig_b)),
+        );
+        assert!(matches!(ra, Err(TunnelAnchorError::Mismatch(_))));
+        assert!(matches!(rb, Err(TunnelAnchorError::Mismatch(_))));
     }
 
     #[tokio::test]
@@ -425,6 +581,8 @@ mod tests {
             final_nonce: 4,
             timestamp: 9,
             signature: sign_half(&sa, "0xab", 120, 80, 4, 9),
+            transcript_root: None,
+            transcript_entries: Vec::new(),
         };
         let half_b = TunnelSettleRequest {
             tunnel_id: "0xab".into(),
@@ -434,6 +592,8 @@ mod tests {
             final_nonce: 4,
             timestamp: 9,
             signature: sign_half(&sb, "0xab", 110, 90, 4, 9),
+            transcript_root: None,
+            transcript_entries: Vec::new(),
         };
         let (ra, rb) = tokio::join!(anchor.settle(half_a), anchor.settle(half_b));
         assert!(matches!(ra, Err(TunnelAnchorError::Mismatch(_))));
@@ -465,6 +625,8 @@ mod tests {
                 final_nonce: 4,
                 timestamp: 9,
                 signature: sign_half(&sa, "0xab", 120, 80, 4, 9),
+                transcript_root: None,
+                transcript_entries: Vec::new(),
             })
             .await
             .unwrap_err();
