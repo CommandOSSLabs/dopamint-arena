@@ -2,7 +2,7 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [dev]
+    branches: [dev-raid]
     paths:
       - "backend/**"
       - "infra/**"

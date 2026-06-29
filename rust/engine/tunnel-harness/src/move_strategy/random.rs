@@ -33,7 +33,7 @@ impl<P: Protocol> RandomMoveStrategy<P> {
 
 impl<P: Protocol> MoveStrategy<P> for RandomMoveStrategy<P> {
     async fn plan_move(
-        &self,
+        &mut self,
         state: &P::State,
         seat: Seat,
         _ctx: &MoveStrategyContext,

@@ -4,6 +4,9 @@
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::ApiCreditsStrategy;
+
 const DOMAIN: &[u8] = b"sui_tunnel::proto::api_credits.v1";
 
 #[derive(Clone, Debug)]
@@ -41,6 +44,7 @@ impl<'de> serde::Deserialize<'de> for ApiCreditsMove {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct ApiCredits {
     cost_per_call: u64,
 }

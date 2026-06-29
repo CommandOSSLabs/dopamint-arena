@@ -12,8 +12,11 @@ tunnel-harness = { path = "../../engine/tunnel-harness" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tunnel-blackjack = { path = "../../protocols/blackjack" }
 tunnel-payments = { path = "../../protocols/payments" }
 hex.workspace = true
+wiremock = "0.6"

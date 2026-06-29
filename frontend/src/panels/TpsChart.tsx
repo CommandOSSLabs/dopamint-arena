@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/panel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
+import { useSampledRate } from "@/telemetry/useSampledRate";
+import { fmtTps } from "@/lib/formatTps";
 import { LiveBadge, OfflineBadge } from "./atoms";
 import type { TelemetrySnapshot } from "./types";
 
@@ -37,9 +39,13 @@ export function TpsChart({
   snapshot: TelemetrySnapshot;
   className?: string;
 }) {
-  const { status, backend } = useTelemetry();
+  const { status, backend, getGamesTotal } = useTelemetry();
   const isLive = status === "live" && backend !== null;
   const tps = Math.round(snapshot.rate.updatesPerSec);
+  // Real off-chain local total — the aggregate of every game's measured update rate (same
+  // source the per-window chips sum to). Null until there is genuine self-play, so the panel
+  // shows a real number in the offline demo without ever falling back to the placeholder.
+  const localTps = useSampledRate(getGamesTotal);
   // Latest normalized value for the animation loop. The effect re-runs when `isLive` flips so
   // the canvas (only mounted while live) gets its rAF wired up the moment it appears.
   const valueRef = useRef(0);
@@ -145,9 +151,30 @@ export function TpsChart({
                 tx/sec · live
               </span>
             </div>
+            {localTps != null && (
+              <span className="wal-mono text-[10px] text-muted-foreground">
+                your TPS · {fmtTps(localTps)} tx/s
+              </span>
+            )}
             <div className="mt-1 h-24 w-full">
               <canvas ref={canvasRef} className="block h-full w-full" />
             </div>
+          </>
+        ) : localTps != null ? (
+          // No backend, but real self-play is producing updates: show the measured local
+          // total instead of a skeleton (never the placeholder — localTps is null when idle).
+          <>
+            <div className="flex items-baseline gap-2">
+              <span className="wal-doto text-4xl text-primary">
+                {Math.round(localTps).toLocaleString("en-US")}
+              </span>
+              <span className="wal-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                tx/sec · your TPS
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              Your self-play. Connect the stats backend for the network rate.
+            </p>
           </>
         ) : (
           <>

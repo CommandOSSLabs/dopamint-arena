@@ -9,6 +9,7 @@ export type PokerMoveJson =
   | { kind: "check" }
   | { kind: "call" }
   | { kind: "fold" }
+  | { kind: "forfeit" }
   | { kind: "next_hand" };
 
 export interface SlotRevealJson {
@@ -86,6 +87,7 @@ export function pokerMoveToJson(move: PokerMove): PokerMoveJson {
     case "check":
     case "call":
     case "fold":
+    case "forfeit":
     case "next_hand":
       return { kind: move.kind };
   }
@@ -118,6 +120,7 @@ export function pokerMoveFromJson(value: unknown): PokerMove {
     case "check":
     case "call":
     case "fold":
+    case "forfeit":
     case "next_hand":
       return { kind };
     default:

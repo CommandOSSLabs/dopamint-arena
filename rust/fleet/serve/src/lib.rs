@@ -2,4 +2,7 @@
 //! running `tunnel-harness` party drivers under tokio.
 
 pub mod supervisor;
-pub use supervisor::{DriverUnit, FleetSupervisor, Metrics};
+pub use supervisor::{into_serving_unit, DriverUnit, FleetSupervisor, Metrics};
+
+pub mod heartbeat;
+pub use heartbeat::{HeartbeatPayload, HeartbeatReporter};

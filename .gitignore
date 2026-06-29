@@ -192,5 +192,7 @@ docs/superpowers/
 docs/raki/
 docs/plans/
 
-# transient agent worktrees
-.claude/worktrees/
+# Claude Code local scratch (settings, nested worktrees) — never commit
+.claude/
+
+.serena/memories
