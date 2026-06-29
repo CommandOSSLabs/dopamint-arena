@@ -1,0 +1,22 @@
+[package]
+name = "wallet-pool-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ed25519-dalek = { workspace = true }
+blake2 = { workspace = true }
+getrandom = { workspace = true }
+aes-gcm = "0.10"
+hkdf = "0.12"
+scrypt = { version = "0.11", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+thiserror = "1"
+
+[dev-dependencies]
+hex = { workspace = true }
