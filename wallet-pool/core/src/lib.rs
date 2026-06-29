@@ -5,3 +5,4 @@ pub mod crypto;
 pub mod envelope;
 pub mod error;
 pub mod filter;
+pub mod select;
