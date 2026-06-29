@@ -1,11 +1,15 @@
-//! Drives one party asynchronously: plan -> propose -> send -> await ack, or
-//! recv -> handle -> send. Owns the IO (`FrameTransport`) and the decision
-//! (`MoveStrategy`); protocol transition and verification live in `PartyRuntime`.
+//! Drives one party asynchronously, bracketed by chain IO: `open` resolves the
+//! tunnel and yields the `tunnel_id` the seat is built from; the move loop runs;
+//! `settle` submits the co-signed v1 close. A `TranscriptRecorder` taps each
+//! committed transition in the loop's effects band, independent of the anchor.
 
 use crate::{
-    Balances, FrameTransport, HarnessError, MoveStrategy, MoveStrategyContext, PartyRuntime,
-    Protocol, Signer,
+    Balances, DriverObserver, DriverStart, FrameTransport, HarnessError, MoveCommitted,
+    MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol, Seat, Signer, TranscriptRecorder,
+    TunnelAnchor, TunnelAnchorError, TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
 };
+use tunnel_core::protocol_id::ProtocolId;
+use tunnel_core::wire::{serialize_settlement, Settlement};
 
 #[derive(Debug)]
 pub struct DriverOutcome {
@@ -13,104 +17,188 @@ pub struct DriverOutcome {
     pub final_balances: Balances,
 }
 
-pub struct PartyDriver<P: Protocol, Pol: MoveStrategy<P>, Ch: FrameTransport, S: Signer> {
-    seat: PartyRuntime<P, S>,
-    move_strategy: Pol,
-    frame_transport: Ch,
-    observers: Vec<Box<dyn crate::DriverObserver>>,
+/// Everything needed to build the seat except the `tunnel_id`, which `open`
+/// produces. Held by the driver so the seat is constructed post-open.
+pub struct SeatParts<P: Protocol, S: Signer> {
+    pub protocol: P,
+    pub signer: S,
+    pub opponent_pk: [u8; 32],
+    pub initial: Balances,
+    pub seat: Seat,
 }
 
-impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
-    PartyDriver<P, MoveStrat, Ch, S>
+pub struct PartyDriver<P, Pol, Ch, S, A, R>
+where
+    P: Protocol,
+    Pol: MoveStrategy<P>,
+    Ch: FrameTransport,
+    S: Signer,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<P::Move> + Send + Sync,
 {
-    pub fn new(seat: PartyRuntime<P, S>, move_strategy: MoveStrat, frame_transport: Ch) -> Self {
+    parts: SeatParts<P, S>,
+    move_strategy: Pol,
+    frame_transport: Ch,
+    anchor: A,
+    recorder: R,
+    observers: Vec<Box<dyn DriverObserver>>,
+}
+
+impl<P, Pol, Ch, S, A, R> PartyDriver<P, Pol, Ch, S, A, R>
+where
+    P: Protocol,
+    Pol: MoveStrategy<P>,
+    Ch: FrameTransport,
+    S: Signer,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<P::Move> + Send + Sync,
+{
+    pub fn new(
+        parts: SeatParts<P, S>,
+        move_strategy: Pol,
+        frame_transport: Ch,
+        anchor: A,
+        recorder: R,
+    ) -> Self {
         PartyDriver {
-            seat,
+            parts,
             move_strategy,
             frame_transport,
+            anchor,
+            recorder,
             observers: Vec::new(),
         }
     }
 
-    /// Register a passive lifecycle observer (see `DriverObserver`). Observers
-    /// are notified in registration order; each receives every event read-only.
-    pub fn observe(mut self, observer: Box<dyn crate::DriverObserver>) -> Self {
+    /// Register a passive lifecycle observer. Observers are notified in
+    /// registration order; each receives every event read-only.
+    pub fn observe(mut self, observer: Box<dyn DriverObserver>) -> Self {
         self.observers.push(observer);
         self
     }
 
-    /// Drive until terminal. `now` supplies monotonically increasing timestamps
-    /// (inject a clock in tests).
-    ///
-    /// `max_moves` is a per-party runaway guard, NOT a coordinated stop: the only
-    /// safe termination is `is_terminal`, on which both parties break together. If
-    /// `max_moves` trips mid-match it can leave the peer blocked in `recv`, so set
-    /// it high enough to never trip in normal play and keep it equal across seats.
+    /// Open, drive to terminal while recording each commit, then settle. Returns
+    /// the outcome and the recorder so the caller can export afterwards.
     pub async fn run(
-        mut self,
+        self,
         max_moves: u64,
         mut now: impl FnMut() -> u64 + Send,
-    ) -> Result<DriverOutcome, HarnessError> {
-        let result = self.run_inner(max_moves, &mut now).await;
-        if result.is_err() {
-            self.move_strategy.abort();
-            for o in &mut self.observers {
-                o.on_aborted();
+    ) -> Result<(DriverOutcome, R), HarnessError> {
+        let PartyDriver {
+            parts,
+            mut move_strategy,
+            frame_transport,
+            anchor,
+            recorder,
+            mut observers,
+        } = self;
+
+        let result = Self::drive(
+            parts,
+            &mut move_strategy,
+            &frame_transport,
+            &anchor,
+            &recorder,
+            &mut observers,
+            max_moves,
+            &mut now,
+        )
+        .await;
+
+        match result {
+            Ok(outcome) => Ok((outcome, recorder)),
+            Err(e) => {
+                move_strategy.abort();
+                for o in &mut observers {
+                    o.on_aborted();
+                }
+                Err(e)
             }
         }
-        result
     }
 
-    async fn run_inner(
-        &mut self,
+    #[allow(clippy::too_many_arguments)]
+    async fn drive(
+        parts: SeatParts<P, S>,
+        move_strategy: &mut Pol,
+        frame_transport: &Ch,
+        anchor: &A,
+        recorder: &R,
+        observers: &mut [Box<dyn DriverObserver>],
         max_moves: u64,
         now: &mut (impl FnMut() -> u64 + Send),
     ) -> Result<DriverOutcome, HarnessError> {
-        let our_seat = self.seat.seat();
+        let protocol_id = ProtocolId::parse(parts.protocol.name())
+            .map_err(|e| HarnessError::Anchor(TunnelAnchorError::Rejected(e.to_string())))?;
+        let my_pk = parts.signer.public_key();
+        let (party_a, party_b) = match parts.seat {
+            Seat::A => (my_pk, parts.opponent_pk),
+            Seat::B => (parts.opponent_pk, my_pk),
+        };
+        let opened = anchor
+            .open(TunnelOpenRequest {
+                protocol: protocol_id,
+                party_a,
+                party_b,
+                initial: parts.initial,
+            })
+            .await?;
+
+        let our_seat = parts.seat;
+        let mut seat = PartyRuntime::<P, S>::new(
+            parts.protocol,
+            parts.signer,
+            parts.opponent_pk,
+            TunnelContext {
+                tunnel_id: opened.tunnel_id,
+                initial: parts.initial,
+                seat: our_seat,
+            },
+        );
+
         let ctx = MoveStrategyContext {
-            tunnel_id: String::new(), // generic strategies do not need tunnel_id
+            tunnel_id: String::new(),
             seat: our_seat,
         };
-
-        let start = crate::DriverStart {
-            tunnel_id: self.seat.tunnel_id(),
+        let start = DriverStart {
+            tunnel_id: seat.tunnel_id(),
             our_seat,
         };
-        for o in &mut self.observers {
+        for o in observers.iter_mut() {
             o.on_started(&start);
         }
 
         let mut moves = 0u64;
+        let mut last_timestamp = 0u64;
 
         loop {
-            if self.seat.is_terminal() || moves >= max_moves {
+            if seat.is_terminal() || moves >= max_moves {
                 break;
             }
 
-            // Our turn? The strategy returns Some only when it is.
-            if let Some(mv) = self
-                .move_strategy
-                .plan_move(self.seat.state(), our_seat, &ctx)
-                .await
-            {
-                let frame = self.seat.propose(mv, now())?;
-                self.frame_transport.send(frame).await?;
-                match self.frame_transport.recv().await? {
+            if let Some(mv) = move_strategy.plan_move(seat.state(), our_seat, &ctx).await {
+                let frame = seat.propose(mv, now())?;
+                frame_transport.send(frame).await?;
+                match frame_transport.recv().await? {
                     Some(bytes) => {
-                        let out = self.seat.handle_frame(&bytes)?;
-                        self.move_strategy.confirm_move(self.seat.state());
+                        let out = seat.handle_frame(&bytes)?;
+                        move_strategy.confirm_move(seat.state());
                         for f in out {
-                            self.frame_transport.send(f).await?;
+                            frame_transport.send(f).await?;
                         }
                         moves += 1;
-                        let ev = crate::MoveCommitted {
+                        let ev = MoveCommitted {
                             by: our_seat,
-                            nonce: self.seat.nonce(),
+                            nonce: seat.nonce(),
                             move_index: moves,
                             timestamp_ms: now(),
                         };
-                        for o in &mut self.observers {
+                        for o in observers.iter_mut() {
                             o.on_move_committed(&ev);
+                        }
+                        if let Some(entry) = seat.take_last_committed() {
+                            last_timestamp = entry.timestamp;
+                            recorder.record(entry);
                         }
                     }
                     None => break,
@@ -118,33 +206,63 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
                 continue;
             }
 
-            // Not our turn: receive the opponent's MOVE, verify+apply, send the ACK.
-            match self.frame_transport.recv().await? {
+            match frame_transport.recv().await? {
                 Some(bytes) => {
-                    let out = self.seat.handle_frame(&bytes)?;
+                    let out = seat.handle_frame(&bytes)?;
                     for f in out {
-                        self.frame_transport.send(f).await?;
+                        frame_transport.send(f).await?;
                     }
                     moves += 1;
-                    let ev = crate::MoveCommitted {
+                    let ev = MoveCommitted {
                         by: our_seat.other(),
-                        nonce: self.seat.nonce(),
+                        nonce: seat.nonce(),
                         move_index: moves,
                         timestamp_ms: now(),
                     };
-                    for o in &mut self.observers {
+                    for o in observers.iter_mut() {
                         o.on_move_committed(&ev);
+                    }
+                    if let Some(entry) = seat.take_last_committed() {
+                        last_timestamp = entry.timestamp;
+                        recorder.record(entry);
                     }
                 }
                 None => break,
             }
         }
 
+        let final_balances = seat.balances();
+        let final_nonce = seat.nonce();
+        let timestamp = if moves == 0 { now() } else { last_timestamp };
+        // NOTE: Move recomputes `final_nonce = state.nonce + 1` at
+        // `close_cooperative` (ADR-0007). For the in-memory anchor both seats sign
+        // identical bytes regardless of the exact value; pin this against the real
+        // contract when a chain anchor lands.
+        let settlement = Settlement {
+            tunnel_id: seat.tunnel_id().to_string(),
+            party_a_balance: final_balances.a,
+            party_b_balance: final_balances.b,
+            final_nonce,
+            timestamp,
+        };
+        let signature = seat.sign(&serialize_settlement(&settlement));
+        anchor
+            .settle(TunnelSettleRequest {
+                by: our_seat,
+                tunnel_id: seat.tunnel_id().to_string(),
+                party_a_balance: final_balances.a,
+                party_b_balance: final_balances.b,
+                final_nonce,
+                timestamp,
+                signature,
+            })
+            .await?;
+
         let outcome = DriverOutcome {
             moves,
-            final_balances: self.seat.balances(),
+            final_balances,
         };
-        for o in &mut self.observers {
+        for o in observers.iter_mut() {
             o.on_finished(&outcome);
         }
         Ok(outcome)
@@ -155,7 +273,8 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
 mod tests {
     use super::*;
     use crate::{
-        Balances, FrameTransportError, InMemoryFrameTransport, LocalSigner, Seat, TunnelContext,
+        Balances, FrameTransportError, InMemoryAnchor, InMemoryFrameTransport, LocalSigner,
+        NullTranscriptRecorder, Seat,
     };
     use std::sync::{
         atomic::{AtomicU64, Ordering},
@@ -269,21 +388,18 @@ mod tests {
         }
     }
 
-    fn runtime(
+    fn parts(
         seat: Seat,
         secret: &[u8; 32],
         opponent_pk: [u8; 32],
-    ) -> PartyRuntime<OneMoveProtocol, LocalSigner> {
-        PartyRuntime::new(
-            OneMoveProtocol,
-            LocalSigner::from_secret(secret),
+    ) -> SeatParts<OneMoveProtocol, LocalSigner> {
+        SeatParts {
+            protocol: OneMoveProtocol,
+            signer: LocalSigner::from_secret(secret),
             opponent_pk,
-            TunnelContext {
-                tunnel_id: "0x1".into(),
-                initial: Balances { a: 100, b: 100 },
-                seat,
-            },
-        )
+            initial: Balances { a: 100, b: 100 },
+            seat,
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -297,8 +413,9 @@ mod tests {
         let confirmed = Arc::new(AtomicU64::new(0));
         let aborted = Arc::new(AtomicU64::new(0));
 
+        let anchor = InMemoryAnchor::with_fixed_id("0x1");
         let driver_a = PartyDriver::new(
-            runtime(Seat::A, &secret_a, pk_b),
+            parts(Seat::A, &secret_a, pk_b),
             TrackingStrategy::new(
                 Seat::A,
                 Arc::clone(&planned),
@@ -306,9 +423,11 @@ mod tests {
                 Arc::clone(&aborted),
             ),
             ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
         let driver_b = PartyDriver::new(
-            runtime(Seat::B, &secret_b, pk_a),
+            parts(Seat::B, &secret_b, pk_a),
             TrackingStrategy::new(
                 Seat::B,
                 Arc::clone(&planned),
@@ -316,12 +435,14 @@ mod tests {
                 Arc::clone(&aborted),
             ),
             ch_b,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
 
         let (out_a, out_b) = tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1),);
 
-        assert!(out_a.unwrap().final_balances.sum() == 200);
-        assert!(out_b.unwrap().final_balances.sum() == 200);
+        assert!(out_a.unwrap().0.final_balances.sum() == 200);
+        assert!(out_b.unwrap().0.final_balances.sum() == 200);
         assert_eq!(planned.load(Ordering::Relaxed), 1);
         assert_eq!(confirmed.load(Ordering::Relaxed), 1);
         assert_eq!(aborted.load(Ordering::Relaxed), 0);
@@ -348,7 +469,7 @@ mod tests {
         let confirmed = Arc::new(AtomicU64::new(0));
         let aborted = Arc::new(AtomicU64::new(0));
         let driver = PartyDriver::new(
-            runtime(Seat::A, &secret_a, pk_b),
+            parts(Seat::A, &secret_a, pk_b),
             TrackingStrategy::new(
                 Seat::A,
                 Arc::clone(&planned),
@@ -356,6 +477,8 @@ mod tests {
                 Arc::clone(&aborted),
             ),
             FailingSendTransport,
+            InMemoryAnchor::with_fixed_id("0x1"),
+            NullTranscriptRecorder,
         );
 
         let err = driver.run(10, || 1).await.unwrap_err();
@@ -378,16 +501,20 @@ mod tests {
         finished: u64,
         aborted: u64,
     }
+
     impl DriverObserver for CountingObserver {
         fn on_started(&mut self, s: &DriverStart<'_>) {
             self.started.push((s.tunnel_id.to_string(), s.our_seat));
         }
+
         fn on_move_committed(&mut self, ev: &MoveCommitted) {
             self.moves.push(*ev);
         }
+
         fn on_finished(&mut self, _o: &DriverOutcome) {
             self.finished += 1;
         }
+
         fn on_aborted(&mut self) {
             self.aborted += 1;
         }
@@ -396,16 +523,20 @@ mod tests {
     // A shared recorder so the test can read what the driver fanned out.
     #[derive(Clone, Default)]
     struct SharedObserver(Arc<std::sync::Mutex<CountingObserver>>);
+
     impl DriverObserver for SharedObserver {
         fn on_started(&mut self, s: &DriverStart<'_>) {
             self.0.lock().unwrap().on_started(s);
         }
+
         fn on_move_committed(&mut self, ev: &MoveCommitted) {
             self.0.lock().unwrap().on_move_committed(ev);
         }
+
         fn on_finished(&mut self, o: &DriverOutcome) {
             self.0.lock().unwrap().on_finished(o);
         }
+
         fn on_aborted(&mut self) {
             self.0.lock().unwrap().on_aborted();
         }
@@ -422,17 +553,22 @@ mod tests {
 
         let obs_a = SharedObserver::default();
         let obs_a2 = SharedObserver::default();
+        let anchor = InMemoryAnchor::with_fixed_id("0x1");
         let driver_a = PartyDriver::new(
-            runtime(Seat::A, &secret_a, pk_b),
+            parts(Seat::A, &secret_a, pk_b),
             TrackingStrategy::new(Seat::A, z(), z(), z()),
             ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
         )
         .observe(Box::new(obs_a.clone()))
         .observe(Box::new(obs_a2.clone()));
         let driver_b = PartyDriver::new(
-            runtime(Seat::B, &secret_b, pk_a),
+            parts(Seat::B, &secret_b, pk_a),
             TrackingStrategy::new(Seat::B, z(), z(), z()),
             ch_b,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
 
         let mut ta = 0u64;
@@ -468,9 +604,11 @@ mod tests {
         let z = || Arc::new(AtomicU64::new(0));
         let obs = SharedObserver::default();
         let driver = PartyDriver::new(
-            runtime(Seat::A, &secret_a, pk_b),
+            parts(Seat::A, &secret_a, pk_b),
             TrackingStrategy::new(Seat::A, z(), z(), z()),
             FailingSendTransport,
+            InMemoryAnchor::with_fixed_id("0x1"),
+            NullTranscriptRecorder,
         )
         .observe(Box::new(obs.clone()));
 

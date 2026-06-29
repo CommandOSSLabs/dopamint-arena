@@ -166,7 +166,7 @@ impl<M: Clone> TranscriptRecorder<M> for InMemoryTranscriptRecorder<M> {
 }
 
 /// Records nothing. For drivers that do not need a transcript.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct NullTranscriptRecorder;
 
 impl<M> TranscriptRecorder<M> for NullTranscriptRecorder {
