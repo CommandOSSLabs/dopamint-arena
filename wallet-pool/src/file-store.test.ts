@@ -34,5 +34,8 @@ test("files are owner-only", async () => {
 });
 
 test("rejects invalid pool id", async () => {
-  await assert.rejects(() => tmpStore().write("../escape", new Uint8Array()), StoreError);
+  await assert.rejects(
+    () => tmpStore().write("../escape", new Uint8Array()),
+    StoreError,
+  );
 });

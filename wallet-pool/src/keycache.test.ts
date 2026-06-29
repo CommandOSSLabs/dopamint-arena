@@ -20,8 +20,8 @@ test("lru eviction drops least-recent", () => {
   const c = new KeyCache<string>(2, 10_000);
   c.set("a", "1");
   c.set("b", "2");
-  c.get("a");          // a most-recent
-  c.set("c", "3");     // evicts b
+  c.get("a"); // a most-recent
+  c.set("c", "3"); // evicts b
   assert.equal(c.get("b"), undefined);
   assert.equal(c.get("a"), "1");
   assert.equal(c.get("c"), "3");

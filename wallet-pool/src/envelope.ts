@@ -11,7 +11,7 @@ import { KeyCache } from "./keycache";
 export type AccessMode = "generated" | "passphrase";
 const SCRYPT = { N: 16384, r: 8, p: 1 };
 
-/** Session-scoped cache so passphrase pools only run scrypt once per salt. */
+/** Session-scoped cache so passphrase pools only run scrypt once per (salt, access value). */
 const scryptKeyCache = new KeyCache<Buffer>(64, 300_000);
 
 export interface SealedEnvelope {
@@ -40,7 +40,8 @@ function deriveKey(
   if (!env.kdf)
     throw new WrongAccessValueError("passphrase envelope missing kdf params");
   const { salt, N, r, p } = env.kdf;
-  const cached = scryptKeyCache.get(salt);
+  const cacheKey = `${salt}:${accessValue}`;
+  const cached = scryptKeyCache.get(cacheKey);
   if (cached) return cached;
   return scryptSync(accessValue, Buffer.from(fromB64(salt)), 32, { N, r, p });
 }
@@ -94,7 +95,7 @@ export function unseal(
       ]),
     );
     if (env.mode === "passphrase" && env.kdf) {
-      scryptKeyCache.set(env.kdf.salt, key);
+      scryptKeyCache.set(`${env.kdf.salt}:${accessValue}`, key);
     }
     return plaintext;
   } catch {

@@ -3,8 +3,14 @@ import type { Network, PoolBlob, SealedMembers } from "./types";
 
 export const BLOB_VERSION = 1 as const;
 
-export function aadFor(b: { version: number; walletPoolId: string; network: Network }): Uint8Array {
-  return new TextEncoder().encode(`wallet-pool:${b.version}:${b.walletPoolId}:${b.network}`);
+export function aadFor(b: {
+  version: number;
+  walletPoolId: string;
+  network: Network;
+}): Uint8Array {
+  return new TextEncoder().encode(
+    `wallet-pool:${b.version}:${b.walletPoolId}:${b.network}`,
+  );
 }
 
 export function serializeBlob(blob: PoolBlob): Uint8Array {
@@ -13,7 +19,8 @@ export function serializeBlob(blob: PoolBlob): Uint8Array {
 
 export function parseBlob(bytes: Uint8Array): PoolBlob {
   const blob = JSON.parse(new TextDecoder().decode(bytes)) as PoolBlob;
-  if (blob.version !== BLOB_VERSION) throw new Error(`unsupported blob version ${blob.version}`);
+  if (blob.version !== BLOB_VERSION)
+    throw new Error(`unsupported blob version ${blob.version}`);
   return blob;
 }
 
@@ -23,7 +30,10 @@ export function encodeMembers(
 ): SealedMembers {
   return {
     masterSecret: toB64(masterSecret),
-    members: members.map((m) => ({ ordinal: m.ordinal, secret: toB64(m.secret) })),
+    members: members.map((m) => ({
+      ordinal: m.ordinal,
+      secret: toB64(m.secret),
+    })),
   };
 }
 

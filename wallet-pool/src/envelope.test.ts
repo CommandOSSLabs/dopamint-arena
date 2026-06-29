@@ -45,3 +45,14 @@ test("passphrase unseal succeeds repeatedly", () => {
   assert.deepEqual(unseal(env, access, aad), pt);
   assert.deepEqual(unseal(env, access, aad), pt);
 });
+
+test("wrong passphrase still fails after a correct unseal", () => {
+  const access = "correct horse battery staple";
+  const pt = randomBytes(32);
+  const env = seal(pt, access, "passphrase", aad);
+  assert.deepEqual(unseal(env, access, aad), pt);
+  assert.throws(
+    () => unseal(env, "wrong passphrase", aad),
+    WrongAccessValueError,
+  );
+});

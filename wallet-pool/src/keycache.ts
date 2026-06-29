@@ -1,15 +1,24 @@
-interface Entry<V> { value: V; expiresAt: number; }
+interface Entry<V> {
+  value: V;
+  expiresAt: number;
+}
 
 /** Bounded LRU cache with per-entry TTL. Map insertion order = LRU order. */
 export class KeyCache<V> {
   private map = new Map<string, Entry<V>>();
 
-  constructor(private readonly max: number, private readonly ttlMs: number) {}
+  constructor(
+    private readonly max: number,
+    private readonly ttlMs: number,
+  ) {}
 
   get(key: string): V | undefined {
     const e = this.map.get(key);
     if (!e) return undefined;
-    if (Date.now() > e.expiresAt) { this.map.delete(key); return undefined; }
+    if (Date.now() > e.expiresAt) {
+      this.map.delete(key);
+      return undefined;
+    }
     this.map.delete(key);
     this.map.set(key, e); // move to most-recent
     return e.value;
@@ -25,7 +34,13 @@ export class KeyCache<V> {
     }
   }
 
-  delete(key: string): void { this.map.delete(key); }
-  clear(): void { this.map.clear(); }
-  get size(): number { return this.map.size; }
+  delete(key: string): void {
+    this.map.delete(key);
+  }
+  clear(): void {
+    this.map.clear();
+  }
+  get size(): number {
+    return this.map.size;
+  }
 }
