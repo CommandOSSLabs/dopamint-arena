@@ -1705,7 +1705,10 @@ export function useWorldCanvasOnchain(
     setAgentTemplateState(id);
   }, []);
 
-  // Public: re-center the camera on the live seat bot painting at `painter` (📍).
+  // Public: re-center the camera on the live seat bot painting at `painter` (📍). Jumps at the
+  // WIDEST zoom (ZOOM.min) — same as the auto-follow cam — so you actually SEE the bot and its
+  // art, not nose-to-the-pixels at the default focus zoom (which framed a tiny spot you couldn't
+  // find as the bot wandered off).
   const focusOnAgent = useCallback((painter: string) => {
     for (const st of agentStatesRef.current.values()) {
       if (st.seat === "A" && !autoRef.current) continue; // paused seat-A bot has no marker
@@ -1714,6 +1717,7 @@ export function useWorldCanvasOnchain(
           gx: st.centerGx,
           gy: st.centerGy,
           seq: ++focusSeqRef.current,
+          scale: ZOOM.min,
         });
         return;
       }
