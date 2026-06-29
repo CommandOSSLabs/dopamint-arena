@@ -77,11 +77,12 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     opts.cacheMax ?? 256,
     opts.cacheTtlMs ?? 60_000,
   );
-  const { blob, members } = await loadPool(
+  const { blob, members: loadedMembers } = await loadPool(
     opts.store,
     opts.walletPoolId,
     opts.accessValue,
   );
+  let members = loadedMembers;
   const blobRef = { current: blob };
 
   if (cacheOn) {
@@ -97,6 +98,8 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
     if (!entry) throw new Error(`wallet not found: ${by}`);
     if (entry.role === "master") throw new MasterNotRetrievableError();
     if (!entry.enabled) throw new AccountDisabledError(entry.address);
+    entry.useCount += 1;
+    entry.lastUsedAt = Date.now();
     const key = `${blobRef.current.walletPoolId}:${entry.ordinal}`;
     let kp = cacheOn ? keyCache.get(key) : undefined;
     if (!kp) {
@@ -122,18 +125,23 @@ export async function open(opts: OpenOptions): Promise<OpenedPool> {
       transaction: input.transaction as never,
       options: { showEffects: true },
     });
-    if (input.awaitEffects)
-      await client.waitForTransaction({ digest: res.digest });
+    const awaitEffects = input.awaitEffects ?? true;
+    if (awaitEffects) await client.waitForTransaction({ digest: res.digest });
     return { digest: res.digest };
   };
 
   return {
     walletPoolId: blob.walletPoolId,
     network: blob.network,
+    /** Returns the entry from the point-in-time snapshot loaded by `open()`. */
     entryBy: (by) => findEntry(blobRef.current, by),
     getMemberKey,
     signAndExecute,
-    wipe: () => keyCache.clear(),
+    /** Clears the in-process key cache and drops the sealed member secrets. */
+    wipe: () => {
+      keyCache.clear();
+      members.members = [];
+    },
   };
 }
 
@@ -144,6 +152,8 @@ export async function setEnabled(input: {
   by: string | number;
   enabled: boolean;
 }): Promise<void> {
+  // Note: read-modify-write; concurrent toggles may race. Serialise at the
+  // call site if multiple processes may touch the same pool.
   const bytes = await input.store.read(input.walletPoolId);
   if (!bytes) throw new PoolNotFoundError(input.walletPoolId);
   const blob = parseBlob(bytes);
