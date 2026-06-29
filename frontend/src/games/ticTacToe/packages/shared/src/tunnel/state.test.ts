@@ -9,11 +9,19 @@ import {
 const TID = "0x" + "ab".padStart(64, "0");
 const proto = new protocols.TicTacToeProtocol(0n);
 
+/** A fixed 16-byte salt for deterministic tests. Parameterized by index to vary per move. */
+function testSalt(index: number = 0): Uint8Array {
+  const s = new Uint8Array(16);
+  s[0] = index & 0xff;
+  s[1] = (index >> 8) & 0xff;
+  return s;
+}
+
 describe("tunnel state helpers", () => {
   it("a state-update message round-trips through ed25519", () => {
     const kp = core.keyPairFromSecret(new Uint8Array(32).fill(1));
     const ctx = { tunnelId: TID, initialBalances: { a: 1n, b: 1n } };
-    const s1 = proto.applyMove(proto.initialState(ctx), { cell: 0 }, "A");
+    const s1 = proto.applyMove(proto.initialState(ctx), { cell: 0, salt: testSalt(0) }, "A");
     const msg = buildStateUpdateMsg(TID, encodeStateHash(proto, s1), 1n);
     const sig = core.sign(msg, kp.secretKey);
     expect(core.verify(sig, msg, kp.publicKey)).toBe(true);
@@ -21,7 +29,7 @@ describe("tunnel state helpers", () => {
       TID,
       encodeStateHash(
         proto,
-        proto.applyMove(proto.initialState(ctx), { cell: 1 }, "A"),
+        proto.applyMove(proto.initialState(ctx), { cell: 1, salt: testSalt(1) }, "A"),
       ),
       1n,
     );
@@ -47,14 +55,14 @@ describe("tunnel state helpers", () => {
       a: 1n,
       b: 1n,
     });
-    for (const [cell, by] of [
+    for (const [i, [cell, by]] of ([
       [0, "A"],
       [3, "B"],
       [1, "A"],
       [4, "B"],
       [2, "A"],
-    ] as [number, "A" | "B"][])
-      t.step({ cell }, by, { mode: "full" });
+    ] as [number, "A" | "B"][]).entries())
+      t.step({ cell, salt: testSalt(i) }, by, { mode: "full" });
     const settle = t.buildSettlement(0n);
     expect(
       settle.settlement.partyABalance + settle.settlement.partyBBalance,

@@ -75,11 +75,11 @@ export class MultiGameTicTacToeProtocol implements Protocol<
   MultiGameTicTacToeState,
   MultiGameTicTacToeMove
 > {
-  readonly name = "tic_tac_toe.multi.v1";
+  readonly name = "tic_tac_toe.series.v2";
 
   // Distinct domain tag so a multi-game state hash never collides with a
   // single-game one, even when the inner game state happens to match.
-  private readonly domain = protocols.protocolDomain("tic_tac_toe.multi.v1");
+  private readonly domain = protocols.protocolDomain("tic_tac_toe.series.v2");
   private readonly inner: protocols.TicTacToeProtocol;
   private readonly maxGames: number;
 
@@ -167,16 +167,20 @@ export class MultiGameTicTacToeProtocol implements Protocol<
     by: Party,
     rng: () => number,
   ): MultiGameTicTacToeMove | null {
-    // Mid-game: defer to the inner protocol's legal-move picker.
-    if (!this.inner.isTerminal(state.inner)) {
-      return this.inner.randomMove?.(state.inner, by, rng) ?? null;
-    }
+    if (this.isTerminal(state)) return null;
+    // Derive a 16-byte deterministic salt from the rng.
+    const saltBytes = new Uint8Array(16);
+    const saltView = new DataView(saltBytes.buffer);
+    saltView.setFloat64(0, rng(), false);
+    saltView.setFloat64(8, rng(), false);
+    const salt = saltBytes;
     // Between games: any cell on the fresh board is a legal advance trigger; the
     // reset ignores the cell, so just nominate cell 0 (and only let A drive it,
     // mirroring Blackjack's "A starts the next round" convention).
-    if (this.isTerminal(state)) return null;
-    if (by !== "A") return null;
-    return { cell: 0 };
+    if (this.inner.isTerminal(state.inner))
+      return by === "A" ? { cell: 0, salt } : null;
+    // Mid-game: defer to the inner protocol's legal-move picker.
+    return this.inner.randomMove?.(state.inner, by, rng) ?? null;
   }
 
   /** Whether both sides can still cover the per-game stake for another game. */
