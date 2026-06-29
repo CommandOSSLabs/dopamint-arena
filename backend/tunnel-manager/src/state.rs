@@ -30,6 +30,9 @@ pub struct AppState {
     pub chat: crate::chat_store::ChatTranscriptStore,
     /// Warm fleet-bot pool for arena one-signature allocation (ADR-0023). Per-instance, in-memory.
     pub fleet: crate::fleet::BotPool,
+    /// On-chain tunnel-open seam for the arena 1a flow (ADR-0025): the fleet creates + funds seat B
+    /// at allocate so the user's open is deposit-only. `Noop` until the boss's `SuiAnchor` lands.
+    pub arena_opener: std::sync::Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener>,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -63,6 +66,7 @@ impl AppState {
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
+            arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
         })
     }
 }

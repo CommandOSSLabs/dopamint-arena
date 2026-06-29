@@ -1273,6 +1273,7 @@ mod tests {
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
+            arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1428,6 +1429,7 @@ mod tests {
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
+            arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
         })
     }
 

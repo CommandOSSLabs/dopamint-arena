@@ -54,6 +54,7 @@ pub(crate) mod test_support {
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
+            arena_opener: std::sync::Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
         })
     }
 }
@@ -233,7 +234,16 @@ pub(crate) async fn heartbeat(
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ArenaAllocateRequest {
     user_address: String,
-    games: Vec<String>,
+    games: Vec<ArenaGameRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaGameRequest {
+    id: String,
+    /// The user's per-game ephemeral pubkey (hex) — tunnel party A's `pk`, baked in at create
+    /// (ADR-0025). One keypair per game so a key leak is isolated to a single tunnel.
+    user_eph_pubkey: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -241,6 +251,9 @@ pub(crate) struct ArenaAllocateRequest {
 pub(crate) struct ArenaAllocation {
     game: String,
     match_id: String,
+    /// The on-chain tunnel the fleet pre-created + funded seat B for (ADR-0025). The user's
+    /// deposit-only PTB funds seat A into THIS tunnel; the tunnel activates on that one signature.
+    tunnel_id: String,
     /// The reserved bot's ephemeral pubkey (hex) — tunnel party B's `pk` (verifies move sigs).
     bot_eph_pubkey: String,
     /// The reserved bot's on-chain address — tunnel party B's `address` (funds/receives seat B).
@@ -264,9 +277,29 @@ pub(crate) async fn arena_allocate(
     state.fleet.reclaim_expired(now);
     let mut allocations = Vec::new();
     for game in &req.games {
-        let Some(r) = state.fleet.reserve(game, now) else {
-            tracing::debug!(%game, "arena allocate: no free bot");
+        let Some(r) = state.fleet.reserve(&game.id, now) else {
+            tracing::debug!(game = %game.id, "arena allocate: no free bot");
             continue;
+        };
+        // ADR-0025: the fleet pre-creates the tunnel + funds seat B now, so the user joins with a
+        // deposit-only PTB. On-chain-bound and may fail per game — omit a game whose open errors
+        // (its reserved bot then TTL-reclaims, same as the no-bot case).
+        let tunnel_id = match state
+            .arena_opener
+            .open_and_fund_seat_b(crate::fleet::arena_opener::ArenaOpenRequest {
+                game: &game.id,
+                user_address: &req.user_address,
+                user_eph_pubkey: &game.user_eph_pubkey,
+                bot_address: &r.address,
+                bot_eph_pubkey: &r.eph_pubkey,
+            })
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(game = %game.id, "arena open failed, omitting: {e:#}");
+                continue;
+            }
         };
         state.fleet.notify(
             &r.match_id,
@@ -278,6 +311,7 @@ pub(crate) async fn arena_allocate(
         allocations.push(ArenaAllocation {
             game: r.game,
             match_id: r.match_id,
+            tunnel_id,
             bot_eph_pubkey: r.eph_pubkey,
             bot_address: r.address,
         });
@@ -1057,8 +1091,15 @@ mod arena_tests {
         rx
     }
 
-    // Allocate reserves one bot per game that has one, omits games with none, and notifies each
-    // reserved bot it's been matched to the user (so the bot starts awaiting the open).
+    fn game_req(id: &str) -> ArenaGameRequest {
+        ArenaGameRequest {
+            id: id.into(),
+            user_eph_pubkey: format!("ueph_{id}"),
+        }
+    }
+
+    // Allocate reserves one bot per game that has one, omits games with none, returns the
+    // fleet-opened tunnel id (ADR-0025), and notifies each reserved bot it's matched to the user.
     #[tokio::test]
     async fn allocate_reserves_available_games_and_notifies_bots() {
         let state = AppState::in_memory_for_test();
@@ -1068,7 +1109,7 @@ mod arena_tests {
             State(state.clone()),
             Json(ArenaAllocateRequest {
                 user_address: "0xuser".into(),
-                games: vec!["blackjack".into(), "tictactoe".into()], // no ttt bot registered
+                games: vec![game_req("blackjack"), game_req("tictactoe")], // no ttt bot registered
             }),
         )
         .await;
@@ -1079,6 +1120,11 @@ mod arena_tests {
         assert_eq!(a.game, "blackjack");
         assert_eq!(a.bot_eph_pubkey, "aa");
         assert!(!a.match_id.is_empty());
+        // The fleet pre-opened a tunnel for the user to deposit into (Noop opener id here).
+        assert!(
+            !a.tunnel_id.is_empty(),
+            "allocate returns the pre-opened tunnel id"
+        );
 
         // The reserved bot was told it's matched to this user.
         assert_eq!(
@@ -1099,7 +1145,7 @@ mod arena_tests {
             State(state.clone()),
             Json(ArenaAllocateRequest {
                 user_address: "0xuser".into(),
-                games: vec!["blackjack".into()],
+                games: vec![game_req("blackjack")],
             }),
         )
         .await;
@@ -1134,7 +1180,7 @@ mod arena_tests {
             State(state),
             Json(ArenaAllocateRequest {
                 user_address: "0xuser".into(),
-                games: vec!["blackjack".into()],
+                games: vec![game_req("blackjack")],
             }),
         )
         .await;
