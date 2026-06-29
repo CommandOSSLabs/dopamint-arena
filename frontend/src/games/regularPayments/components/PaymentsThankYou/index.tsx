@@ -39,7 +39,7 @@ export function PaymentsThankYou({ session }: PaymentsThankYouProps) {
             background: "color-mix(in oklab, var(--wal-mint) 18%, transparent)",
           }}
         >
-          <Check className="size-7" style={{ color: "var(--wal-mint)" }} />
+          <Check className="size-7 text-(--wal-mint)" />
         </div>
 
         <div className="flex flex-col gap-2">
