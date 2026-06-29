@@ -11,16 +11,25 @@ pub enum FrameTransportError {
     Transport(String),
 }
 
-/// A failure submitting to or reading from the anchor (chain).
+/// A failure opening or settling a tunnel through the anchor (chain IO).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnchorError(pub String);
+pub enum TunnelAnchorError {
+    /// Sponsor/chain unreachable: retryable.
+    Unavailable(String),
+    /// Chain or verify-before-gas refused (ADR-0007): terminal.
+    Rejected(String),
+    /// The peer's settlement half disagrees: terminal.
+    Mismatch(String),
+    /// Idempotent close: the tunnel was already settled.
+    AlreadySettled,
+}
 
 /// Anything that can end a party driver's run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessError {
     Protocol(ProtocolError),
     FrameTransport(FrameTransportError),
-    Anchor(AnchorError),
+    Anchor(TunnelAnchorError),
     /// A counterparty signature, hash, or balance check failed.
     Verification(String),
 }
@@ -35,8 +44,22 @@ impl From<FrameTransportError> for HarnessError {
         HarnessError::FrameTransport(e)
     }
 }
-impl From<AnchorError> for HarnessError {
-    fn from(e: AnchorError) -> Self {
+impl From<TunnelAnchorError> for HarnessError {
+    fn from(e: TunnelAnchorError) -> Self {
         HarnessError::Anchor(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_anchor_error_maps_into_harness_anchor() {
+        let e: HarnessError = TunnelAnchorError::AlreadySettled.into();
+        assert_eq!(
+            e,
+            HarnessError::Anchor(TunnelAnchorError::AlreadySettled)
+        );
     }
 }

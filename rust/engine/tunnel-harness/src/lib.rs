@@ -4,7 +4,7 @@
 //! harness seams.
 pub mod error;
 pub mod types;
-pub use error::{AnchorError, FrameTransportError, HarnessError, ProtocolError};
+pub use error::{FrameTransportError, HarnessError, ProtocolError, TunnelAnchorError};
 pub use types::{Balances, MoveStrategyContext, Seat, TunnelContext};
 
 pub mod protocol;
@@ -38,4 +38,10 @@ pub mod transcript;
 pub use transcript::{
     BcsTranscriptCodec, InMemoryTranscriptRecorder, JsonTranscriptCodec, NullTranscriptRecorder,
     PostcardTranscriptCodec, Transcript, TranscriptCodec, TranscriptEntry, TranscriptRecorder,
+};
+
+pub mod anchor;
+pub use anchor::{
+    InMemoryAnchor, OpenedTunnel, SettledTunnel, TunnelAnchor, TunnelOpenRequest,
+    TunnelSettleRequest,
 };
