@@ -6,7 +6,7 @@ use crate::cli::BenchOpts;
 use crate::resources::ResourceSummary;
 use crate::swarm::SwarmOutcome;
 
-const PREFIX: &str = "[local/offchain]";
+const PREFIX: &str = "[local/memory]";
 
 pub fn move_tps(moves: u64, elapsed_ms: u128) -> f64 {
     if elapsed_ms == 0 {
@@ -125,7 +125,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{BenchMode, BenchOpts};
+    use crate::cli::{AnchorMode, BenchMode, BenchOpts, TranscriptRecorderMode};
     use crate::resources::ResourceSummary;
     use crate::swarm::SwarmOutcome;
 
@@ -138,6 +138,8 @@ mod tests {
             protocol_id: tunnel_core::protocol_id::BLACKJACK_BET_V1,
             scenario: crate::cli::ScenarioMode::Golden,
             frame_codec: crate::cli::FrameCodecKind::Json,
+            anchor_mode: AnchorMode::Memory,
+            transcript_recorder: TranscriptRecorderMode::None,
         }
     }
 
@@ -191,12 +193,12 @@ mod tests {
             None,
             &res(),
         );
-        assert!(s.contains("[local/offchain] fleet: workers=12\n"));
-        assert!(s.contains("[local/offchain] swarm: 481234 moves over 3366 matches in 15.0s\n"));
-        assert!(s.contains("[local/offchain] tunnels settled: 3366 (224.4/s)\n"));
-        assert!(s.contains("[local/offchain] aggregate move-TPS: 32082.3\n"));
+        assert!(s.contains("[local/memory] fleet: workers=12\n"));
+        assert!(s.contains("[local/memory] swarm: 481234 moves over 3366 matches in 15.0s\n"));
+        assert!(s.contains("[local/memory] tunnels settled: 3366 (224.4/s)\n"));
+        assert!(s.contains("[local/memory] aggregate move-TPS: 32082.3\n"));
         assert!(!s.contains("pre-initialized-signers:"));
-        assert!(s.contains("[local/offchain] resources: cpu avg=11.2 cores"));
+        assert!(s.contains("[local/memory] resources: cpu avg=11.2 cores"));
     }
 
     #[test]
@@ -228,40 +230,37 @@ mod tests {
             play_ns_dist: summarize(&[266_000_000.0, 267_000_000.0, 267_000_000.0]),
         };
         let s = render(&opts(1, BenchMode::PerMatchSigners), &o, None, &res());
+        assert!(s.contains("[local/memory] tunnels opened: 3"), "got:\n{s}");
         assert!(
-            s.contains("[local/offchain] tunnels opened: 3"),
-            "got:\n{s}"
-        );
-        assert!(
-            s.contains("[local/offchain] matches conducted: 3"),
+            s.contains("[local/memory] matches conducted: 3"),
             "got:\n{s}"
         );
         // golden scenario: all matches are 143 moves
         assert!(
-            s.contains("[local/offchain] moves/match: avg=143.0 p50=143.0"),
+            s.contains("[local/memory] moves/match: avg=143.0 p50=143.0"),
             "got:\n{s}"
         );
         // (1e9 - 8e8) / 1e9 * 100 = 20.0%
         assert!(
-            s.contains("[local/offchain] setup overhead: 20.0%"),
+            s.contains("[local/memory] setup overhead: 20.0%"),
             "got:\n{s}"
         );
         // play-only TPS = 429.0 * (1e9 / 8e8) = 429.0 * 1.25 = 536.25
         assert!(
-            s.contains("[local/offchain] play-only move-TPS: 536."),
+            s.contains("[local/memory] play-only move-TPS: 536."),
             "got:\n{s}"
         );
         // avg play-loop: (266e6 + 267e6 + 267e6) / 3 / 1000 ≈ 266666.7 µs
         assert!(
-            s.contains("[local/offchain] play-loop µs: avg=266666."),
+            s.contains("[local/memory] play-loop µs: avg=266666."),
             "got:\n{s}"
         );
         assert!(
-            s.contains("[local/offchain] protocol-id: blackjack.bet.v1"),
+            s.contains("[local/memory] protocol-id: blackjack.bet.v1"),
             "got:\n{s}"
         );
         assert!(
-            s.contains("[local/offchain] frame-codec: json.distributed.v1"),
+            s.contains("[local/memory] frame-codec: json.distributed.v1"),
             "got:\n{s}"
         );
     }

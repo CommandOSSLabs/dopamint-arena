@@ -1,18 +1,20 @@
 //! The synchronous in-process match driver: two `PartyRuntime`s pumped against each
-//! other with no frame transport and no async runtime. Mirrors loadbench's `playMatch`
-//! (basic-strategy bots, then a root-anchored cooperative settlement). `bytes`
+//! other with no frame transport and no async frame loop. Mirrors loadbench's `playMatch`
+//! (basic-strategy bots, then an anchored cooperative settlement). `bytes`
 //! counts MOVE/ACK frame bytes only — the determinism gate (143*N / 75982*N).
 
+use crate::cli::{AnchorMode, TranscriptRecorderMode};
 use std::future::Future;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::Instant;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
 use tunnel_blackjack::{BjMove, Blackjack, BlackjackStrategy};
-use tunnel_core::crypto::blake2b256;
-use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
+use tunnel_core::protocol_id::ProtocolId;
+use tunnel_core::wire::{serialize_settlement, Settlement};
 use tunnel_harness::{
-    Balances, FrameCodec, LocalSigner, MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol,
-    Seat, Signer, TunnelContext,
+    Balances, FrameCodec, InMemoryAnchor, InMemoryTranscriptRecorder, LocalSigner, MoveStrategy,
+    MoveStrategyContext, PartyRuntime, Protocol, Seat, Signer, TranscriptRecorder, TunnelAnchor,
+    TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
 };
 
 type Seats<P, C> = PartyRuntime<P, LocalSigner, C>;
@@ -23,6 +25,7 @@ pub struct MatchResult {
     pub final_balance_a: u64,
     pub final_balance_b: u64,
     pub play_ns: u128,
+    pub transcript_entries: u64,
 }
 
 /// Pre-built signer material for both seats.
@@ -111,6 +114,126 @@ fn block_ready<F: Future>(future: F) -> F::Output {
     }
 }
 
+thread_local! {
+    static ANCHOR_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("anchor runtime");
+}
+
+fn block_anchor<F: Future>(future: F) -> F::Output {
+    ANCHOR_RUNTIME.with(|rt| rt.block_on(future))
+}
+
+enum BenchTranscriptRecorder<M> {
+    None,
+    Memory(InMemoryTranscriptRecorder<M>),
+}
+
+impl<M: Clone> BenchTranscriptRecorder<M> {
+    fn new(mode: TranscriptRecorderMode) -> Self {
+        match mode {
+            TranscriptRecorderMode::None => Self::None,
+            TranscriptRecorderMode::Memory => Self::Memory(InMemoryTranscriptRecorder::new()),
+        }
+    }
+
+    fn record_from<P, C>(&self, seat: &mut Seats<P, C>)
+    where
+        P: Protocol<Move = M>,
+        C: FrameCodec<M>,
+    {
+        if let Some(entry) = seat.take_last_committed() {
+            match self {
+                Self::None => {}
+                Self::Memory(recorder) => recorder.record(entry),
+            }
+        }
+    }
+
+    fn len(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Memory(recorder) => recorder.snapshot().entries().len() as u64,
+        }
+    }
+}
+
+fn open_anchor<P: Protocol>(
+    anchor_mode: AnchorMode,
+    protocol: &P,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    initial: Balances,
+) -> (InMemoryAnchor, String, u64) {
+    match anchor_mode {
+        AnchorMode::Memory => {
+            let anchor = InMemoryAnchor::with_fixed_id(tunnel_id);
+            let protocol =
+                ProtocolId::parse(protocol.name()).expect("bench protocol id is canonical");
+            let opened = block_anchor(anchor.open(TunnelOpenRequest {
+                protocol,
+                party_a: kit.pk_a,
+                party_b: kit.pk_b,
+                initial,
+            }))
+            .expect("memory anchor open");
+            (anchor, opened.tunnel_id, opened.onchain_nonce)
+        }
+    }
+}
+
+fn settle_anchor<P, C>(
+    anchor_mode: AnchorMode,
+    anchor: InMemoryAnchor,
+    tunnel_id: &str,
+    final_nonce: u64,
+    timestamp: u64,
+    a: &Seats<P, C>,
+    b: &Seats<P, C>,
+) where
+    P: Protocol,
+    C: FrameCodec<P::Move>,
+{
+    match anchor_mode {
+        AnchorMode::Memory => {
+            let bals = a.balances();
+            let settlement = Settlement {
+                tunnel_id: tunnel_id.to_string(),
+                party_a_balance: bals.a,
+                party_b_balance: bals.b,
+                final_nonce,
+                timestamp,
+            };
+            let msg = serialize_settlement(&settlement);
+            let half_a = TunnelSettleRequest {
+                tunnel_id: tunnel_id.to_string(),
+                by: Seat::A,
+                party_a_balance: bals.a,
+                party_b_balance: bals.b,
+                final_nonce,
+                timestamp,
+                signature: a.sign(&msg),
+            };
+            let half_b = TunnelSettleRequest {
+                tunnel_id: tunnel_id.to_string(),
+                by: Seat::B,
+                party_a_balance: bals.a,
+                party_b_balance: bals.b,
+                final_nonce,
+                timestamp,
+                signature: b.sign(&msg),
+            };
+            let (settled_a, settled_b) =
+                block_anchor(async { tokio::join!(anchor.settle(half_a), anchor.settle(half_b)) });
+            let settled_a = settled_a.expect("memory anchor settle A");
+            let settled_b = settled_b.expect("memory anchor settle B");
+            assert_eq!(settled_a.final_balances, bals);
+            assert_eq!(settled_b.final_balances, bals);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn play_protocol_match_with_strategies<P, C, StrategyA, StrategyB>(
     protocol: P,
@@ -122,20 +245,26 @@ pub(crate) fn play_protocol_match_with_strategies<P, C, StrategyA, StrategyB>(
     balance_b: u64,
     created_at: u64,
     max_moves: u64,
+    anchor_mode: AnchorMode,
+    transcript_recorder: TranscriptRecorderMode,
     configure: impl FnOnce(&mut Seats<P, C>, &mut Seats<P, C>),
 ) -> MatchResult
 where
     P: Protocol + Clone,
+    P::Move: Clone,
     C: FrameCodec<P::Move> + Default,
     StrategyA: MoveStrategy<P>,
     StrategyB: MoveStrategy<P>,
 {
+    let initial = Balances {
+        a: balance_a,
+        b: balance_b,
+    };
+    let (anchor, tunnel_id, onchain_nonce) =
+        open_anchor(anchor_mode, &protocol, kit, tunnel_id, initial);
     let ctx = |seat| TunnelContext {
-        tunnel_id: tunnel_id.to_string(),
-        initial: Balances {
-            a: balance_a,
-            b: balance_b,
-        },
+        tunnel_id: tunnel_id.clone(),
+        initial,
         seat,
     };
     let mut a: Seats<P, C> = PartyRuntime::new(
@@ -156,12 +285,13 @@ where
     let mut moves = 0u64;
     let mut bytes = 0usize;
     let mut ts = created_at;
+    let recorder = BenchTranscriptRecorder::new(transcript_recorder);
     let strategy_ctx_a = MoveStrategyContext {
-        tunnel_id: tunnel_id.to_string(),
+        tunnel_id: tunnel_id.clone(),
         seat: Seat::A,
     };
     let strategy_ctx_b = MoveStrategyContext {
-        tunnel_id: tunnel_id.to_string(),
+        tunnel_id: tunnel_id.clone(),
         seat: Seat::B,
     };
 
@@ -187,6 +317,8 @@ where
             } else {
                 deliver(&mut b, &mut a, first)
             };
+            recorder.record_from(&mut a);
+            recorder.record_from(&mut b);
             match p {
                 Seat::A => strategy_a.confirm_move(a.state()),
                 Seat::B => strategy_b.confirm_move(b.state()),
@@ -202,19 +334,17 @@ where
         }
     }
 
-    // Root-anchored cooperative settlement (mirrors loadbench; not counted in bytes).
-    let root = blake2b256(format!("dopamint:{tunnel_id}").as_bytes());
+    // Anchor settlement is not counted in frame bytes; the metric tracks MOVE/ACK wire only.
     let bals = a.balances();
-    let settlement = Settlement {
-        tunnel_id: tunnel_id.to_string(),
-        party_a_balance: bals.a,
-        party_b_balance: bals.b,
-        final_nonce: 1,
-        timestamp: created_at,
-    };
-    let msg = serialize_settlement_with_root(&settlement, &root);
-    let _sig_a = a.sign(&msg);
-    let _sig_b = b.sign(&msg);
+    settle_anchor(
+        anchor_mode,
+        anchor,
+        &tunnel_id,
+        onchain_nonce.checked_add(1).expect("anchor nonce closes"),
+        created_at,
+        &a,
+        &b,
+    );
 
     MatchResult {
         moves,
@@ -222,6 +352,7 @@ where
         final_balance_a: bals.a,
         final_balance_b: bals.b,
         play_ns: started.elapsed().as_nanos(),
+        transcript_entries: recorder.len(),
     }
 }
 
@@ -234,6 +365,8 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
     balance_b: u64,
     created_at: u64,
     max_moves: u64,
+    anchor_mode: AnchorMode,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     play_protocol_match_with_strategies::<Blackjack, C, BlackjackStrategy, BlackjackStrategy>(
         Blackjack,
@@ -245,6 +378,8 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
         balance_b,
         created_at,
         max_moves,
+        anchor_mode,
+        transcript_recorder,
         |a, b| {
             seed_cards(a, card_seed);
             seed_cards(b, card_seed);
@@ -261,6 +396,8 @@ pub fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
     balance_b: u64,
     created_at: u64,
     max_moves: u64,
+    anchor_mode: AnchorMode,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     play_protocol_match_with_strategies::<BlackjackV2, C, BlackjackV2Strategy, BlackjackV2Strategy>(
         BlackjackV2,
@@ -272,6 +409,8 @@ pub fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
         balance_b,
         created_at,
         max_moves,
+        anchor_mode,
+        transcript_recorder,
         |_, _| {},
     )
 }
@@ -292,7 +431,17 @@ mod tests {
         let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
         let kit = SeatKit::new(&sa, &sb);
-        play_match_seeded::<C>(None, &kit, "0x1", 200, 200, 1234567890, 1000)
+        play_match_seeded::<C>(
+            None,
+            &kit,
+            "0x1",
+            200,
+            200,
+            1234567890,
+            1000,
+            AnchorMode::Memory,
+            TranscriptRecorderMode::None,
+        )
     }
 
     #[test]
@@ -433,10 +582,42 @@ mod tests {
             100,
             1234567890,
             10,
+            AnchorMode::Memory,
+            TranscriptRecorderMode::None,
             |_, _| {},
         );
 
         assert_eq!(result.moves, 1);
         assert_eq!(result.final_balance_a + result.final_balance_b, 200);
+    }
+
+    #[test]
+    fn memory_transcript_recorder_counts_committed_entries() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let kit = SeatKit::new(&sa, &sb);
+
+        let result = play_protocol_match_with_strategies::<
+            StrategyOnlyProtocol,
+            JsonFrameCodec,
+            StrategyOnlyMoveStrategy,
+            StrategyOnlyMoveStrategy,
+        >(
+            StrategyOnlyProtocol,
+            StrategyOnlyMoveStrategy,
+            StrategyOnlyMoveStrategy,
+            &kit,
+            "0xabc124",
+            100,
+            100,
+            1234567890,
+            10,
+            AnchorMode::Memory,
+            TranscriptRecorderMode::Memory,
+            |_, _| {},
+        );
+
+        assert_eq!(result.moves, 1);
+        assert_eq!(result.transcript_entries, 2);
     }
 }

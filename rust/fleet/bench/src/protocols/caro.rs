@@ -1,5 +1,5 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::FrameCodecKind;
+use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_caro::{Caro, CaroSeries, CaroSeriesStrategy, CaroStrategy, CaroStrength};
 
@@ -8,6 +8,8 @@ pub(crate) fn play_single(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
@@ -17,6 +19,8 @@ pub(crate) fn play_single(
         CaroStrategy::with_seed(15, CaroStrength::Strong, seed ^ 0x5A5A_A5A5_CAFE_BABE)
             .expect("valid caro strategy"),
         codec,
+        anchor_mode,
+        transcript_recorder,
         seed,
         kit,
         tunnel_id,
@@ -31,6 +35,8 @@ pub(crate) fn play_series(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
@@ -40,6 +46,8 @@ pub(crate) fn play_series(
         CaroSeriesStrategy::with_seed(3, 15, CaroStrength::Strong, seed ^ 0x5A5A_A5A5_CAFE_BABE)
             .expect("valid caro series strategy"),
         codec,
+        anchor_mode,
+        transcript_recorder,
         seed,
         kit,
         tunnel_id,

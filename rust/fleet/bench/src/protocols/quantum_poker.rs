@@ -1,5 +1,5 @@
 use super::{play_with_strategies, MAX_MOVES};
-use crate::cli::FrameCodecKind;
+use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
 use crate::party_driver::{MatchResult, SeatKit};
 use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
 
@@ -8,6 +8,8 @@ pub(crate) fn play(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
@@ -15,6 +17,8 @@ pub(crate) fn play(
         QuantumPokerStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
         QuantumPokerStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,
+        anchor_mode,
+        transcript_recorder,
         seed,
         kit,
         tunnel_id,

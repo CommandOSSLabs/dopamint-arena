@@ -20,6 +20,17 @@ pub enum FrameCodecKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AnchorMode {
+    Memory,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TranscriptRecorderMode {
+    None,
+    Memory,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScenarioMode {
     Varied,
     Golden,
@@ -45,6 +56,10 @@ pub struct BenchOpts {
     pub scenario: ScenarioMode,
     /// Wire codec used to serialize tunnel frames (`Json` by default).
     pub frame_codec: FrameCodecKind,
+    /// Tunnel anchor implementation (`Memory` by default).
+    pub anchor_mode: AnchorMode,
+    /// Transcript recorder implementation (`None` by default).
+    pub transcript_recorder: TranscriptRecorderMode,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -52,16 +67,17 @@ pub struct BenchOpts {
 #[command(
     no_binary_name = true,
     disable_help_flag = false,
-    about = "Run the local off-chain tunnel fleet benchmark.",
-    long_about = "Run the local off-chain tunnel fleet benchmark.\n\n\
+    about = "Run the local memory-anchored tunnel fleet benchmark.",
+    long_about = "Run the local memory-anchored tunnel fleet benchmark.\n\n\
 The bench drives two in-process PartyRuntime instances per match and reports \
-throughput, frame bytes, match counts, and resource usage. It is CPU-local: \
-no relay, no chain submission, and no network transport are used.",
+throughput, frame bytes, match counts, and resource usage. It uses the memory \
+anchor by default, runs CPU-local with local frame transport, and submits no \
+chain transactions.",
     after_help = "Examples:\n  \
-fleet-bench --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard\n  \
+fleet-bench --anchor memory --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard\n  \
 fleet-bench --bench-mode compare-signers --matches 1000 --frame-codec json\n  \
 fleet-bench --bench-mode pre-initialized-signers --matches 1000 --frame-codec bcs\n  \
-fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied\n\n\
+fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory\n\n\
 Bench mode values:\n  \
 per-match-signers: create signer material inside each measured match\n  \
 pre-initialized-signers: create all signer material before the timed run\n  \
@@ -76,7 +92,12 @@ world_canvas.cell.v1, world_canvas.stroke.v1\n\n\
 Frame codec values:\n  \
 json: TS-parity wire for bot-vs-user and regression baselines\n  \
 bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
-postcard: compact default candidate for bot-vs-bot"
+postcard: compact default candidate for bot-vs-bot\n\n\
+Anchor values:\n  \
+memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n\
+Transcript recorder values:\n  \
+none: do not retain committed transition transcripts\n  \
+memory: retain committed transitions in memory during each match; useful for measuring recorder overhead"
 )]
 struct Raw {
     /// Number of rayon workers, or `auto` to use available CPU parallelism.
@@ -105,10 +126,16 @@ struct Raw {
     /// Protocol scenario: varied gameplay or the protocol's golden regression case.
     #[arg(long, default_value = "varied", value_name = "varied|golden")]
     scenario: String,
-    /// Accepted and ignored — `--offchain` is the only supported anchor mode.
-    #[allow(dead_code)]
-    #[arg(long)]
-    offchain: bool,
+    /// Tunnel anchor implementation. Only `memory` is implemented.
+    #[arg(long, default_value = "memory", value_name = "memory")]
+    anchor: String,
+    /// Transcript recorder implementation: none or memory.
+    #[arg(
+        long = "transcript-recorder",
+        default_value = "none",
+        value_name = "none|memory"
+    )]
+    transcript_recorder: String,
     #[arg(long, hide = true)]
     onchain: bool,
     /// Frame transport. Only `local` is implemented in this synchronous bench.
@@ -210,6 +237,21 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         other => return Err(format!("--scenario must be varied|golden, got {other}")),
     };
 
+    let anchor_mode = match raw.anchor.as_str() {
+        "memory" => AnchorMode::Memory,
+        other => return Err(format!("--anchor must be memory, got {other}")),
+    };
+
+    let transcript_recorder = match raw.transcript_recorder.as_str() {
+        "none" => TranscriptRecorderMode::None,
+        "memory" => TranscriptRecorderMode::Memory,
+        other => {
+            return Err(format!(
+                "--transcript-recorder must be none|memory, got {other}"
+            ))
+        }
+    };
+
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
@@ -218,6 +260,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         protocol_id,
         scenario,
         frame_codec,
+        anchor_mode,
+        transcript_recorder,
     })
 }
 
@@ -232,7 +276,8 @@ mod tests {
     #[test]
     fn parses_the_headline_bun_command_line() {
         let o = parse_v(&[
-            "--offchain",
+            "--anchor",
+            "memory",
             "--frame-transport",
             "local",
             "--protocol-id",
@@ -348,6 +393,37 @@ mod tests {
     }
 
     #[test]
+    fn anchor_memory_selects_memory_anchor() {
+        assert_eq!(
+            parse_v(&["--anchor", "memory"]).unwrap().anchor_mode,
+            AnchorMode::Memory
+        );
+    }
+
+    #[test]
+    fn offchain_shortcut_is_not_supported() {
+        let err = parse_v(&["--offchain"]).unwrap_err();
+        assert!(
+            err.contains("offchain"),
+            "message should name the removed flag: {err}"
+        );
+    }
+
+    #[test]
+    fn transcript_recorder_defaults_to_none_and_parses_memory() {
+        assert_eq!(
+            parse_v(&[]).unwrap().transcript_recorder,
+            TranscriptRecorderMode::None
+        );
+        assert_eq!(
+            parse_v(&["--transcript-recorder", "memory"])
+                .unwrap()
+                .transcript_recorder,
+            TranscriptRecorderMode::Memory
+        );
+    }
+
+    #[test]
     fn unknown_frame_codec_is_rejected_with_explanation() {
         let err = parse_v(&["--frame-codec", "protobuf"]).unwrap_err();
         assert!(
@@ -360,10 +436,13 @@ mod tests {
     fn help_documents_common_runs_and_value_meanings() {
         let help = help_text();
 
-        assert!(help.contains("Run the local off-chain tunnel fleet benchmark"));
+        assert!(help.contains("Run the local memory-anchored tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
         assert!(help.contains(
-            "fleet-bench --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard"
+            "fleet-bench --anchor memory --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard"
+        ));
+        assert!(help.contains(
+            "fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory"
         ));
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
@@ -372,5 +451,10 @@ mod tests {
         assert!(!help.contains("fleet-bench currently executes"));
         assert!(help.contains("blackjack.bet.v1"));
         assert!(help.contains("json|bcs|postcard"));
+        assert!(
+            help.contains("memory: in-memory tunnel anchor for local throughput runs; no chain IO")
+        );
+        assert!(help.contains("memory: retain committed transitions in memory during each match"));
+        assert!(help.contains("none|memory"));
     }
 }

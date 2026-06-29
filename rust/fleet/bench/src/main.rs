@@ -29,6 +29,8 @@ fn main() {
                 opts.matches,
                 opts.scenario,
                 opts.frame_codec,
+                opts.anchor_mode,
+                opts.transcript_recorder,
                 opts.protocol_id,
             );
             (simple, None, sampler.stop())
@@ -41,6 +43,8 @@ fn main() {
                 opts.matches.expect("validated by cli"),
                 opts.scenario,
                 opts.frame_codec,
+                opts.anchor_mode,
+                opts.transcript_recorder,
                 opts.protocol_id,
             );
             // Report the steady-state window as the headline; no parenthetical.
@@ -56,6 +60,8 @@ fn main() {
                 opts.matches,
                 opts.scenario,
                 opts.frame_codec,
+                opts.anchor_mode,
+                opts.transcript_recorder,
                 opts.protocol_id,
             );
             let res = sampler.stop();
@@ -65,6 +71,8 @@ fn main() {
                 opts.matches.expect("validated by cli"),
                 opts.scenario,
                 opts.frame_codec,
+                opts.anchor_mode,
+                opts.transcript_recorder,
                 opts.protocol_id,
             );
             (simple, Some(preinitialized), res)

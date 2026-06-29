@@ -28,6 +28,7 @@ rayon.workspace = true
 clap = { workspace = true }
 sysinfo.workspace = true
 getrandom.workspace = true
+tokio = { workspace = true }
 
 [dev-dependencies]
 hex.workspace = true
