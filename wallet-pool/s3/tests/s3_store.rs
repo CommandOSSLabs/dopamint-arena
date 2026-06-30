@@ -4,9 +4,17 @@
 //! `WALLET_POOL_S3_BUCKET` is set (with `AWS_*` credentials configured).
 //! `key_rejects_invalid_ids` is pure and runs without credentials.
 
-use aws_sdk_s3::Client;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use wallet_pool::store::WalletPoolStore;
+
+use async_trait::async_trait;
+use aws_sdk_s3::Client;
+use wallet_pool::{
+    error::Result,
+    rpc::{Balance, Coin, ExecuteResponse, SuiRpc},
+    store::WalletPoolStore,
+    AddMembersOptions, CacheMode, CreateOptions, ListOptions, Network, OpenOptions, WalletPool,
+};
 use wallet_pool_s3::S3WalletPoolStore;
 
 /// A client with no region/credentials. Safe because the validation test never
@@ -54,6 +62,42 @@ async fn gated_store() -> Option<S3WalletPoolStore> {
         bucket,
         format!("test-{nanos}/"),
     ))
+}
+
+/// Test-only RPC implementation that returns empty/successful defaults.
+///
+/// `add_members_on_s3` exercises only the S3 store, so a no-op RPC is safe.
+#[derive(Clone, Debug, Default)]
+struct NoOpRpc;
+
+#[async_trait]
+impl SuiRpc for NoOpRpc {
+    async fn get_all_balances(&self, _address: &str) -> Result<Vec<Balance>> {
+        Ok(vec![])
+    }
+
+    async fn get_coins(&self, _owner: &str, _coin_type: &str) -> Result<Vec<Coin>> {
+        Ok(vec![])
+    }
+
+    async fn execute_transaction(
+        &self,
+        _tx_bytes: &[u8],
+        _signatures: Vec<Vec<u8>>,
+    ) -> Result<ExecuteResponse> {
+        Ok(ExecuteResponse {
+            digest: String::new(),
+            effects: None,
+        })
+    }
+
+    async fn wait_for_transaction(&self, _digest: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn faucet_request(&self, _address: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -114,4 +158,59 @@ async fn delete_removes_object() {
     store.write("wp_gone", b"x").await.unwrap();
     store.delete("wp_gone").await.unwrap();
     assert!(store.read("wp_gone").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn add_members_on_s3() {
+    let store = match gated_store().await {
+        Some(s) => s,
+        None => return,
+    };
+    let store = Arc::new(store);
+    let rpc = Arc::new(NoOpRpc);
+    let pool = WalletPool::new(store.clone(), rpc);
+
+    let created = pool
+        .create(CreateOptions {
+            network: Network::Testnet,
+            member_count: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let result = pool
+        .add_members(AddMembersOptions {
+            id: created.wallet_pool_id.clone(),
+            access_value: created.access_value.clone(),
+            additional_count: 2,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(result.total_member_count, 3);
+
+    let handle = pool
+        .open(OpenOptions {
+            id: created.wallet_pool_id.clone(),
+            access_value: created.access_value,
+            network: Network::Testnet,
+            cache_mode: CacheMode::None,
+        })
+        .await
+        .unwrap();
+
+    let entries = pool
+        .list(ListOptions {
+            id: created.wallet_pool_id.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 4); // master + 3 members
+
+    drop(handle);
+
+    // Clean up.
+    pool.delete(&created.wallet_pool_id).await.unwrap();
 }
