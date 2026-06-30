@@ -183,10 +183,23 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Durable settle queue (ADR-0029): `/settle` enqueues here and returns 202; the worker pool
-    // below drains it into batched PTBs. Single-instance in-memory today; a Redis-stream impl
-    // (`RedisSettleQueue`) plugs into this seam for HA durability without touching the handler.
+    // below drains it into batched PTBs. Redis Streams when a cache cluster is configured (durable,
+    // multi-instance), else in-memory (single-instance dev) — same seam, handler unchanged.
     let settle_queue: Arc<dyn settle_queue::SettleQueue> =
-        Arc::new(settle_queue::InMemorySettleQueue::default());
+        if let Some(cache_url) = config.redis_cache_url.clone() {
+            let pool = store::redis::connect(&cache_url).await?;
+            Arc::new(
+                settle_queue::RedisSettleQueue::new(
+                    pool,
+                    "settle:queue".to_owned(),
+                    "settle-workers".to_owned(),
+                    86_400, // body archive TTL (1d): generous retry window for Walrus upload
+                )
+                .await?,
+            )
+        } else {
+            Arc::new(settle_queue::InMemorySettleQueue::default())
+        };
 
     let state: SharedState = Arc::new(AppState {
         control,
