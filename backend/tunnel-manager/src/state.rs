@@ -9,7 +9,12 @@ pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
-    pub settler: crate::sui::SuiSettler,
+    /// Shared (`Arc`) so the async settle-worker pool can hold it as a `BatchSettler` while the
+    /// faucet/sponsor handlers also call it.
+    pub settler: std::sync::Arc<crate::sui::SuiSettler>,
+    /// Durable settle queue (ADR-0029): `/settle` enqueues here and returns 202; the worker pool
+    /// drains it, coalescing many closes into one PTB.
+    pub settle_queue: std::sync::Arc<dyn crate::settle_queue::SettleQueue>,
     /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
     /// `settler` as the fallback. `None` = settler-only.
     pub enoki: Option<crate::enoki::EnokiClient>,
@@ -85,7 +90,8 @@ impl AppState {
             control: Arc::new(InMemoryControlStore::default()),
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
-            settler: crate::sui::SuiSettler::noop(),
+            settler: Arc::new(crate::sui::SuiSettler::noop()),
+            settle_queue: Arc::new(crate::settle_queue::InMemorySettleQueue::default()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(

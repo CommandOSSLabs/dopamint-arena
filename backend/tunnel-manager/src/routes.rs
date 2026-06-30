@@ -28,9 +28,10 @@ pub(crate) mod test_support {
             "http://127.0.0.1:9999".into(),
             crate::sui_rpc::RpcLimits::default(),
         );
-        let settler =
+        let settler = std::sync::Arc::new(
             crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, None)
-                .expect("test settler");
+                .expect("test settler"),
+        );
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
         let ollama = crate::ollama::OllamaClient::new(
             "http://localhost:11434".into(),
@@ -43,6 +44,7 @@ pub(crate) mod test_support {
             mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
             bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
+            settle_queue: std::sync::Arc::new(crate::settle_queue::InMemorySettleQueue::default()),
             enoki: None,
             walrus,
             ollama,
@@ -147,6 +149,24 @@ fn parse_settle_body(b: &[u8]) -> Result<SettleBody, String> {
         sig_a: b[97..161].to_vec(),
         sig_b: b[161..225].to_vec(),
         update_count: u32::from_be_bytes(b[225..229].try_into().unwrap()),
+    })
+}
+
+/// Rebuild `CloseArgs` from the 229-byte settle header (ADR-0029). The async worker re-parses the
+/// header it dequeued to drive the on-chain close — the same fixed-offset layout the handler
+/// validated at ingest, so there is one parser, not two.
+pub(crate) fn close_args_from_settle_header(
+    header: &[u8],
+) -> Result<crate::sui::CloseArgs, String> {
+    let p = parse_settle_body(header)?;
+    Ok(crate::sui::CloseArgs {
+        tunnel_id: p.tunnel_id,
+        party_a_balance: p.party_a_balance,
+        party_b_balance: p.party_b_balance,
+        sig_a: p.sig_a,
+        sig_b: p.sig_b,
+        timestamp: p.timestamp,
+        transcript_root: p.transcript_root,
     })
 }
 
@@ -450,93 +470,25 @@ pub(crate) async fn settle(
         .into_response();
     }
 
-    let a = p.party_a_balance;
-    let b = p.party_b_balance;
-    let ts = p.timestamp;
-    // The explorer row stores the root as `0x`-prefixed hex (verifyTranscript re-checks it).
-    let transcript_root_hex = format!("0x{}", hex::encode(&p.transcript_root));
-
-    let close = crate::sui::CloseArgs {
-        tunnel_id: tunnel_id.clone(),
-        party_a_balance: a,
-        party_b_balance: b,
-        sig_a: p.sig_a,
-        sig_b: p.sig_b,
-        timestamp: ts,
-        transcript_root: p.transcript_root,
-    };
-    match state.settler.submit_close_typed(close).await {
-        Ok(digest) => {
-            // The close landed on-chain: record it in the event-derived registry so a duplicate
-            // /settle is rejected for free by the 409 guard above (no chain dry-run). Without this
-            // the guard is dead in production, since the in-process chain status poller is disabled.
-            state
-                .control
-                .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
-                .await;
-            // Archive the body verbatim — the blob IS the settle body. The in-browser verifier
-            // (verifyTranscript) parses the same fixed-offset bytes and re-checks the
-            // co-signed root against the recomputed Merkle root and the on-chain anchor.
-            let (blob_id, proof_url) = match state.walrus.upload_transcript(body).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::error!(%digest, error = %e, "walrus archival failed");
-                    (String::new(), String::new())
-                }
-            };
-            state
-                .control
-                .push_recent_event(settled_event(
-                    &tunnel_id,
-                    a,
-                    b,
-                    &transcript_root_hex,
-                    &digest,
-                    ts,
-                    &proof_url,
-                ))
-                .await;
-            if !blob_id.is_empty() {
-                let proof_msg = serde_json::json!({
-                    "txDigest": digest,
-                    "walrusBlobId": blob_id,
-                    "proofUrl": proof_url,
-                })
-                .to_string();
-                state.bus.publish_raw("explorer:proofs", proof_msg).await;
-            }
-            Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
-                .into_response()
-        }
+    // Structural checks passed (ADR-0029): durably enqueue and return 202 immediately. No node
+    // RPC on the request path, so a fleet burst is absorbed as queue depth, never a 429. The
+    // worker pool coalesces many settles into one PTB; confirmation arrives via `explorer:proofs`.
+    // The 229-byte header is enough for the PTB; the full body rides along for Walrus archival.
+    let header = body[..SETTLE_BODY_HEADER_LEN].to_vec();
+    match state.settle_queue.enqueue(&tunnel_id, header, body).await {
+        Ok(id) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "status": "accepted", "settlementId": id })),
+        )
+            .into_response(),
         Err(e) => {
-            tracing::warn!(tunnel_id = %tunnel_id, error = %e, "settle close failed");
-            close_error_to_response(e)
-        }
-    }
-}
-
-/// Map a settle outcome to its HTTP response: a transient fullnode rate-limit becomes a
-/// **503 + Retry-After** so the client backs off and retries (the settlement is valid, the
-/// node is just busy); a genuine rejection stays **422** (retrying the same bytes is futile).
-/// Defaults Retry-After to 1s when the node sent none.
-fn close_error_to_response(e: crate::sui::CloseError) -> Response {
-    match e {
-        crate::sui::CloseError::Transient { retry_after, .. } => {
-            let mut resp = ApiError::resp(
+            tracing::error!(%tunnel_id, error = %e, "settle enqueue failed");
+            ApiError::resp(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "settle_unavailable",
-                "fullnode is rate-limiting settlement; retry shortly",
+                "settle_enqueue_failed",
+                "could not queue settlement; retry shortly",
             )
-            .into_response();
-            let secs = retry_after.unwrap_or(1);
-            if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
-                resp.headers_mut()
-                    .insert(axum::http::header::RETRY_AFTER, v);
-            }
-            resp
-        }
-        crate::sui::CloseError::Rejected(msg) => {
-            ApiError::resp(StatusCode::UNPROCESSABLE_ENTITY, "settle_failed", &msg).into_response()
+            .into_response()
         }
     }
 }
@@ -949,7 +901,7 @@ pub(crate) async fn chat_topic(State(state): State<SharedState>) -> Response {
 /// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
 /// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
 /// (Walrus archival failed) degrade to `None`, never a broken link.
-fn settled_event(
+pub(crate) fn settled_event(
     tunnel_id: &str,
     party_a_balance: u64,
     party_b_balance: u64,
@@ -1020,44 +972,6 @@ fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
 mod tests {
     use super::test_support::test_state;
     use super::*;
-
-    // A transient fullnode rate-limit must NOT look like a bad settlement: the client needs a
-    // retry signal (503 + Retry-After), not a terminal 422 that makes it drop a valid settle.
-    #[test]
-    fn transient_close_error_maps_to_503_with_retry_after() {
-        let r = close_error_to_response(crate::sui::CloseError::Transient {
-            msg: "429".into(),
-            retry_after: Some(2),
-        });
-        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            r.headers().get(axum::http::header::RETRY_AFTER).unwrap(),
-            "2"
-        );
-    }
-
-    // A transient error with no server Retry-After still tells the client to retry (default 1s).
-    #[test]
-    fn transient_without_retry_after_defaults_to_one_second() {
-        let r = close_error_to_response(crate::sui::CloseError::Transient {
-            msg: "timeout".into(),
-            retry_after: None,
-        });
-        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            r.headers().get(axum::http::header::RETRY_AFTER).unwrap(),
-            "1"
-        );
-    }
-
-    // A genuine rejection (bad sig, already closed, balance mismatch) stays 422 — retrying the
-    // same bytes is futile, so do not hand the client a retry signal.
-    #[test]
-    fn rejected_close_error_maps_to_422() {
-        let r = close_error_to_response(crate::sui::CloseError::Rejected("bad sig".into()));
-        assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(r.headers().get(axum::http::header::RETRY_AFTER).is_none());
-    }
 
     // The binary /settle body the SDK codec (`encodeSettleBody`) emits — byte-identical to
     // the TS golden vector (settleBinary.test.ts). Pasting it here pins TS↔Rust wire parity: a
@@ -1193,6 +1107,26 @@ mod tests {
         assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
     }
 
+    // ADR-0029: a valid settle is durably enqueued and answered 202 immediately — no node RPC on
+    // the request path. The worker pool (tested separately) drains it. This is what lets a fleet
+    // burst be absorbed as queue depth instead of tripping the fullnode 429.
+    #[tokio::test]
+    async fn settle_enqueues_and_returns_202() {
+        let state = test_state();
+        let resp = settle(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(golden_tunnel_id()),
+            sample_settle_body(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+        assert_eq!(
+            state.settle_queue.depth().await.unwrap(),
+            1,
+            "the settlement is on the queue"
+        );
+    }
+
     // /health/ready reflects ControlStore::ready(); in-memory is always ready.
     #[tokio::test]
     async fn health_ready_reflects_control_store() {
@@ -1271,13 +1205,15 @@ mod tests {
 
     // A settler whose faucet is configured (admin cap set) but whose RPC is unreachable — so the
     // config guards pass while any actual mint fails fast (connection refused).
-    fn settler_with_admin_cap(rpc_url: &str) -> crate::sui::SuiSettler {
+    fn settler_with_admin_cap(rpc_url: &str) -> std::sync::Arc<crate::sui::SuiSettler> {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
         let rpc =
             crate::sui_rpc::GovernedRpc::new(rpc_url.into(), crate::sui_rpc::RpcLimits::default());
-        crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, Some("0x5"))
-            .expect("settler with admin cap")
+        std::sync::Arc::new(
+            crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, Some("0x5"))
+                .expect("settler with admin cap"),
+        )
     }
 
     // The public faucet is 503 when the on-chain faucet is unconfigured (no AdminCap) — it never
