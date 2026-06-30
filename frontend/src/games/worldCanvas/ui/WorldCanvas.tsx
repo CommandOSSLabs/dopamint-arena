@@ -4,7 +4,7 @@ import {
   type PaintedCell,
   type AgentMarker,
   type CanvasFocus,
-} from "../useWorldCanvasOnchain";
+} from "../canvasShared";
 import {
   CHUNK_SIZE,
   PALETTE,

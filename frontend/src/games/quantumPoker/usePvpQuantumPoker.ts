@@ -26,6 +26,7 @@ import {
   type PvpChannel,
   type Role,
 } from "../../pvp/mpClient";
+import { defaultAuto, rememberAuto } from "../../pvp/autoPreference";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
@@ -249,7 +250,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [error, setError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [endRequested, setEndRequested] = useState(false);
-  const [auto, setAutoState] = useState(false);
+  // Auto is ON for your first match this session (watch a persona bot play your seat), then sticky
+  // to your last toggle — tick it off and new hands stay human-driven. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto(GAME_ID));
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -261,7 +264,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // Auto mode: a persona bot drives this seat's BETTING. `autoRef` mirrors `auto` for use inside
   // the imperative move loop (closures that read it after toggles); `autoBotRef` is the stateless
   // kit bot built once per match.
-  const autoRef = useRef(false);
+  const autoRef = useRef(defaultAuto(GAME_ID));
   const autoBotRef = useRef<PokerSeatBot | null>(null);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
@@ -297,9 +300,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     driverRef.current = null;
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
-    autoRef.current = false;
+    // Reset Auto to the session default (ON the first time, else your last toggle).
+    autoRef.current = defaultAuto(GAME_ID);
     autoBotRef.current = null;
-    setAutoState(false);
+    setAutoState(autoRef.current);
     transcriptRef.current = null;
     channelRef.current = null;
     endRef.current = false;
@@ -378,6 +382,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
+      rememberAuto(GAME_ID, on);
       if (on) maybeAutoPropose(); // act now if it's already our betting turn
     },
     [maybeAutoPropose],

@@ -184,11 +184,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
-        // Settlement carries the off-chain transcript as a v2 binary body (one fixed ~248 B entry
+        // Settlement carries the off-chain transcript as a v2 binary body (one fixed 250 B entry
         // per co-signed move), archived to Walrus verbatim. Maximizing moves/tunnel amortizes the
         // on-chain close and Walrus per-blob cost, so a long self-play game ships tens of thousands
-        // of moves. 16 MB for /settle only (≈67k moves) caps tunnel length; the body is raw bytes,
-        // so it stays ~1× in memory (the canonical MAX_MOVES_PER_TUNNEL=50k sits well inside this).
+        // of moves. 32 MB for /settle only (≈134k moves) caps tunnel length; the body streams to
+        // Walrus by reference (Bytes), so it stays 1× in memory (canonical MAX_MOVES_PER_TUNNEL=100k
+        // ≈ 25 MB sits well inside this).
         .route(
             "/v1/tunnels/:tunnel_id/settle",
             // One ServiceBuilder (not two chained `.layer()`s, which leaves axum's error type
@@ -199,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
                     .layer(GlobalConcurrencyLimitLayer::new(
                         config.settle_max_concurrency,
                     ))
-                    .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+                    .layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))

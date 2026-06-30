@@ -78,6 +78,38 @@ if (cfg.settlerKey) {
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
+// Internal-faucet bearer token + Enoki private key follow the settler-key path: secret config
+// => Secrets Manager => ECS `secrets`, never inlined into the task definition. Created only
+// when the stack configures them; absent => the backend disables that feature (faucet/internal
+// 503, Enoki off) rather than booting with a plaintext secret.
+let faucetAdminTokenSecretArn: pulumi.Output<string> | undefined;
+if (cfg.faucetAdminToken) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-faucet-admin-token`,
+    {
+      description: `Internal MTPS faucet bearer token for dopamint-${cfg.environment}`,
+    },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-faucet-admin-token-version`,
+    { secretId: secret.id, secretString: cfg.faucetAdminToken },
+  );
+  faucetAdminTokenSecretArn = secret.arn;
+}
+
+let enokiApiKeySecretArn: pulumi.Output<string> | undefined;
+if (cfg.enokiApiKey) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-enoki-api-key`,
+    { description: `Enoki private API key for dopamint-${cfg.environment}` },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-enoki-api-key-version`,
+    { secretId: secret.id, secretString: cfg.enokiApiKey },
+  );
+  enokiApiKeySecretArn = secret.arn;
+}
+
 const ecr = createEcr(`dopamint-${cfg.environment}`);
 const ecs = createEcs(`dopamint-${cfg.environment}`);
 
@@ -121,6 +153,8 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
     database.dbPasswordSecretArn,
     databaseUrlSecret.arn,
     ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
+    ...(faucetAdminTokenSecretArn ? [faucetAdminTokenSecretArn] : []),
+    ...(enokiApiKeySecretArn ? [enokiApiKeySecretArn] : []),
   ],
   taskRoleTranscriptsBucketArn: transcriptsBucket.bucketArn,
 });
@@ -136,6 +170,8 @@ const backend = createBackend({
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
   s3TranscriptsBucket: transcriptsBucket.bucketName,
+  faucetAdminTokenSecretArn,
+  enokiApiKeySecretArn,
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,
   ollamaImageTag: cfg.ollamaImageTag,

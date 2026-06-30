@@ -11,6 +11,7 @@ import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
@@ -165,7 +166,7 @@ class PvpSession {
     view: null,
     opponentWallet: null,
     error: null,
-    auto: false,
+    auto: defaultAuto("battleship"),
   };
   private listeners = new Set<() => void>();
 
@@ -178,7 +179,7 @@ class PvpSession {
   private lastEnemyShot: number | null = null;
   // Client-side autopilot: when on, fire YOUR shots automatically (one tunnel = one
   // game in PvP, so the loop doesn't rematch — it just plays this game out).
-  private auto = false;
+  private auto = defaultAuto("battleship");
   // Monotonic id for "My Activity" rows pushed per finished match.
   private txnId = 0;
 
@@ -229,6 +230,7 @@ class PvpSession {
   setAuto = (on: boolean) => {
     if (this.auto === on) return;
     this.auto = on;
+    rememberAuto("battleship", on);
     this.emit();
     // Flipping autopilot on while it's your turn: fire now.
     if (on) this.autoFireIfDue();

@@ -13,7 +13,7 @@ import { makeEndpoint, OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { generateKeyPair } from "sui-tunnel-ts/core/crypto";
 import { toHex } from "sui-tunnel-ts/core/bytes";
-import { MultiGameTicTacToeProtocol } from "@ttt/shared";
+import { MultiGameTicTacToeProtocol, tttMoveCodec } from "@ttt/shared";
 import { makeTttResumeAdapter } from "./app/lib/tttResumeAdapter";
 
 // localStorage/window fakes. The resume modules touch storage lazily (only inside the calls
@@ -53,8 +53,10 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
     "0xB",
     { a: 1000n, b: 1000n },
   );
-  sp.step({ cell: 0 }, "A");
-  sp.step({ cell: 1 }, "B");
+  const s0 = new Uint8Array(16).fill(0xaa);
+  const s1 = new Uint8Array(16).fill(0xbb);
+  sp.step({ cell: 0, salt: s0 }, "A");
+  sp.step({ cell: 1, salt: s1 }, "B");
   const record = {
     matchId: "match-ttt",
     tunnelId: tid,
@@ -90,13 +92,17 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
         false,
       ),
       selfParty: "A",
+      moveCodec: tttMoveCodec as never,
     },
     { send: (b) => refSent.push(b), onFrame() {} },
     { a: 1000n, b: 1000n },
   );
   restoreInto(ref as never, readResumeRecord(tid)!, adapter as never);
+  // Both the reference tunnel and the rebuilt tunnel must propose the SAME move
+  // (including salt) to produce byte-identical signed frames.
+  const proposeMove = { cell: 2, salt: new Uint8Array(16).fill(0xcc) };
   (ref as never as { propose(m: unknown, ts: bigint): void }).propose(
-    { cell: 2 },
+    proposeMove,
     9n,
   );
 
@@ -115,18 +121,129 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
   const { tunnel } = rebuildTunnel(
     mp,
     readResumeRecord(tid)!,
-    { proto, adapter } as never,
+    { proto, adapter, moveCodec: tttMoveCodec } as never,
     { selfWallet: "0xA" },
   );
   assert.equal(tunnel.nonce, 2n);
   (tunnel as never as { propose(m: unknown, ts: bigint): void }).propose(
-    { cell: 2 },
+    proposeMove,
     9n,
   );
   assert.deepEqual(
     Uint8Array.from(sent[0]),
     Uint8Array.from(refSent[0]),
     "rebuilt ttt tunnel proposes byte-identically to a never-dropped tunnel",
+  );
+  clearResumeRecord(tid);
+});
+
+// Regression: a pending move's Uint8Array salt must survive JSON round-trip via the adapter.
+// Without serializeMove/deserializeMove the salt becomes {"0":...} and tttMoveCodec.encode
+// emits an empty hex string, causing applyMove to reject "salt must be >= 16 bytes".
+test("ttt adapter: pending move salt round-trips through JSON without data loss", () => {
+  const adapter = makeTttResumeAdapter(() => {});
+  const cell = 4;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const original = { cell, salt };
+
+  const serialized = adapter.serializeMove!(original as never);
+  const jsonRoundTripped = JSON.parse(JSON.stringify(serialized));
+  const restored = adapter.deserializeMove!(jsonRoundTripped) as {
+    cell: number;
+    salt: Uint8Array;
+  };
+
+  assert.equal(restored.cell, cell, "cell survives round-trip");
+  assert.ok(
+    restored.salt instanceof Uint8Array,
+    "salt is reconstructed as Uint8Array",
+  );
+  assert.equal(restored.salt.length, 16, "salt length is 16");
+  assert.deepEqual(
+    restored.salt,
+    salt,
+    "salt bytes are byte-equal to original",
+  );
+});
+
+// Regression (PR #122 review by George): the cold-load resume spec MUST carry the variant move
+// codec. usePvpTicTacToe's resumeActiveTunnels call previously passed only { proto, adapter }, so
+// the rebuilt tunnel fell back to identityMoveCodec — which cannot carry the Uint8Array salt — and
+// a reloaded staked match stalled on its first move. A spec WITH the codec reproduces the canonical
+// signed frame; a spec WITHOUT it must not. (The same call site serves ttt and caro identically.)
+test("ttt cold-load: the resume spec must carry the move codec to co-sign correctly", () => {
+  const proto = new MultiGameTicTacToeProtocol(1000, 1n) as never;
+  const adapter = makeTttResumeAdapter(() => {});
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const tid = `0x${"72".repeat(32)}`;
+
+  const sp = OffchainTunnel.selfPlay(
+    proto,
+    tid,
+    ka as never,
+    kb as never,
+    "0xA",
+    "0xB",
+    { a: 1000n, b: 1000n },
+  );
+  sp.step({ cell: 0, salt: new Uint8Array(16).fill(0xaa) }, "A");
+  sp.step({ cell: 1, salt: new Uint8Array(16).fill(0xbb) }, "B");
+  const record = {
+    matchId: "match-ttt-codec",
+    tunnelId: tid,
+    role: "A" as const,
+    game: "ttt",
+    opponentWallet: "0xB",
+    opponentPubkeyHex: toHex(kb.publicKey),
+    selfEphemeralSecretHex: toHex(ka.secretKey),
+    latestCoSigned: toWireCoSigned(sp.latest!),
+    latestState: adapter.serializeState(sp.state as never),
+    updatedAt: Date.now(),
+  };
+  writeResumeRecord(record);
+  flushResumeWrites();
+
+  const proposeMove = { cell: 2, salt: new Uint8Array(16).fill(0xcc) };
+  const mkMp = (sink: Uint8Array[]) =>
+    ({
+      channel: () => ({
+        transport: { send: (b: Uint8Array) => sink.push(b), onFrame() {} },
+        sendPeer() {},
+        onPeer() {},
+        addPeerListener() {},
+        removePeerListener() {},
+      }),
+      markActive() {},
+    }) as never;
+  const proposeOn = (t: unknown) =>
+    (t as { propose(m: unknown, ts: bigint): void }).propose(proposeMove, 9n);
+
+  // WITH the variant codec (what onMatch and the fixed resume path supply): the canonical frame.
+  const goodSent: Uint8Array[] = [];
+  const { tunnel: good } = rebuildTunnel(
+    mkMp(goodSent),
+    readResumeRecord(tid)!,
+    { proto, adapter, moveCodec: tttMoveCodec } as never,
+    { selfWallet: "0xA" },
+  );
+  proposeOn(good);
+
+  // WITHOUT it (the old hook bug): DistributedTunnel falls back to identityMoveCodec, which
+  // serializes the Uint8Array salt to an empty hex string — a different, unusable signed frame.
+  const buggySent: Uint8Array[] = [];
+  const { tunnel: buggy } = rebuildTunnel(
+    mkMp(buggySent),
+    readResumeRecord(tid)!,
+    { proto, adapter } as never,
+    { selfWallet: "0xA" },
+  );
+  proposeOn(buggy);
+
+  assert.notDeepEqual(
+    Uint8Array.from(buggySent[0]),
+    Uint8Array.from(goodSent[0]),
+    "a resume spec without the move codec must not co-sign the same bytes as the codec'd one",
   );
   clearResumeRecord(tid);
 });

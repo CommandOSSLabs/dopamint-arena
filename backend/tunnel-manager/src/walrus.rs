@@ -4,6 +4,7 @@
 //! (the close already succeeded) — see the handler.
 
 use anyhow::{anyhow, Context};
+use axum::body::Bytes;
 
 pub struct WalrusClient {
     http: reqwest::Client,
@@ -30,7 +31,7 @@ impl WalrusClient {
     /// Upload `bytes`, returning `(blob_id, read_url)`. The publisher returns the id under
     /// `newlyCreated.blobObject.blobId` for a fresh blob or `alreadyCertified.blobId` for a
     /// dedup hit; the read URL is `{aggregator}/v1/blobs/<blobId>`.
-    pub async fn upload_transcript(&self, bytes: Vec<u8>) -> anyhow::Result<(String, String)> {
+    pub async fn upload_transcript(&self, bytes: Bytes) -> anyhow::Result<(String, String)> {
         let url = format!("{}/v1/blobs", self.publisher_url.trim_end_matches('/'));
         let resp: serde_json::Value = self
             .http
@@ -75,7 +76,10 @@ mod tests {
             .mount(&server)
             .await;
         let c = WalrusClient::new(server.uri(), "https://agg.example".into());
-        let (id, url) = c.upload_transcript(b"transcript".to_vec()).await.unwrap();
+        let (id, url) = c
+            .upload_transcript(Bytes::from_static(b"transcript"))
+            .await
+            .unwrap();
         assert_eq!(id, "abc123");
         assert_eq!(url, "https://agg.example/v1/blobs/abc123");
     }
@@ -90,7 +94,7 @@ mod tests {
             .mount(&server)
             .await;
         let c = WalrusClient::new(server.uri(), "https://agg.example".into());
-        let (id, _) = c.upload_transcript(b"x".to_vec()).await.unwrap();
+        let (id, _) = c.upload_transcript(Bytes::from_static(b"x")).await.unwrap();
         assert_eq!(id, "dedup99");
     }
 }

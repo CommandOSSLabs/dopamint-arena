@@ -14,7 +14,7 @@ import {
   type PaintedCell,
   type AgentMarker,
   type CanvasFocus,
-} from "../useWorldCanvasOnchain";
+} from "../canvasShared";
 import { WC, ERASER_COLOR, PALETTE } from "./tokens";
 
 const CHUNK = 256;
@@ -43,17 +43,9 @@ const COLLAPSE_WIDTH = 640;
  */
 export function PvpCanvasView({ windowId }: { windowId: string }) {
   const m = usePvpWorldCanvas(windowId);
-  const startedRef = useRef(false);
-  useEffect(() => {
-    if (startedRef.current) return;
-    // The session is module-level and survives remounts/cold-load resume, so it may already hold a
-    // live (or resumed) match — its status would be off "idle". Only auto-join the queue from a
-    // genuinely fresh "idle" session, so a second MpClient never clobbers the live/resumed one.
-    if (m.status !== "idle") return;
-    startedRef.current = true;
-    m.findMatch();
-  }, [m]);
-
+  // No auto-join: the idle screen shows a "Play" button (Status), so the user explicitly joins the
+  // queue. A remount mid-match resumes off the module-level session (status ≠ idle → straight to
+  // the board), so we never clobber a live/resumed match with a second MpClient.
   if (m.status !== "playing" && m.status !== "settling")
     return <Status m={m} />;
   return <Board m={m} />;
@@ -70,8 +62,10 @@ function Status({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
           ? "Match closed."
           : m.status === "error"
             ? (m.error ?? "Something went wrong.")
-            : "Connecting…";
+            : "The World is Your Canvas";
   const busy = m.status === "matching" || m.status === "funding";
+  const canPlay =
+    m.status === "idle" || m.status === "error" || m.status === "settled";
   return (
     <div className="sketch-welcome">
       <div className="sketch-welcome__card sketch-panel sketch-stroke">
@@ -79,16 +73,15 @@ function Status({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
         <div className="sketch-title">{text}</div>
         <p className="sketch-note">
           Online PvP — co-draw one shared canvas with another human over a
-          genuine 2-party tunnel. Open this game in a second browser and pick
-          “Paint vs Player” to match.
+          genuine 2-party tunnel.
         </p>
-        {m.status === "error" && (
+        {canPlay && (
           <button
             type="button"
             className="sketch-btn sketch-btn--go"
             onClick={m.findMatch}
           >
-            Try again
+            {m.status === "error" ? "Try again" : "Play"}
           </button>
         )}
       </div>

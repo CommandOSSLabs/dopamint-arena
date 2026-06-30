@@ -9,6 +9,10 @@ fn ctx() -> TunnelContext {
     }
 }
 
+fn test_salt() -> Vec<u8> {
+    vec![0xAAu8; 16]
+}
+
 fn play(
     protocol: &TicTacToe,
     mut state: tunnel_tic_tac_toe::TicTacToeState,
@@ -17,7 +21,14 @@ fn play(
     for &cell in cells {
         let by = state.turn;
         state = protocol
-            .apply_move(&state, &TicTacToeMove { cell }, by)
+            .apply_move(
+                &state,
+                &TicTacToeMove {
+                    cell,
+                    salt: test_salt(),
+                },
+                by,
+            )
             .unwrap();
     }
     state
@@ -32,7 +43,7 @@ fn initial_state_has_empty_board_turn_and_clamped_stake() {
         seat: Seat::A,
     });
 
-    assert_eq!(protocol.name(), "tic_tac_toe.v1");
+    assert_eq!(protocol.name(), "tic_tac_toe.v2");
     assert_eq!(state.board, [EMPTY; 9]);
     assert_eq!(state.turn, Seat::A);
     assert_eq!(state.moves_count, 0);
@@ -47,23 +58,58 @@ fn moves_place_marks_reject_illegal_cells_and_turns() {
     let state = protocol.initial_state(&ctx());
 
     assert!(protocol
-        .apply_move(&state, &TicTacToeMove { cell: 0 }, Seat::B)
+        .apply_move(
+            &state,
+            &TicTacToeMove {
+                cell: 0,
+                salt: test_salt()
+            },
+            Seat::B
+        )
         .is_err());
     assert!(protocol
-        .apply_move(&state, &TicTacToeMove { cell: 9 }, Seat::A)
+        .apply_move(
+            &state,
+            &TicTacToeMove {
+                cell: 9,
+                salt: test_salt()
+            },
+            Seat::A
+        )
         .is_err());
 
     let after_a = protocol
-        .apply_move(&state, &TicTacToeMove { cell: 0 }, Seat::A)
+        .apply_move(
+            &state,
+            &TicTacToeMove {
+                cell: 0,
+                salt: test_salt(),
+            },
+            Seat::A,
+        )
         .unwrap();
     assert_eq!(after_a.board[0], MARK_A);
     assert_eq!(after_a.turn, Seat::B);
     assert!(protocol
-        .apply_move(&after_a, &TicTacToeMove { cell: 0 }, Seat::B)
+        .apply_move(
+            &after_a,
+            &TicTacToeMove {
+                cell: 0,
+                salt: test_salt()
+            },
+            Seat::B
+        )
         .is_err());
 
     let after_b = protocol
-        .apply_move(&after_a, &TicTacToeMove { cell: 4 }, Seat::B)
+        .apply_move(
+            &after_a,
+            &TicTacToeMove {
+                cell: 4,
+                salt: test_salt(),
+            },
+            Seat::B,
+        )
         .unwrap();
     assert_eq!(after_b.board[4], MARK_B);
     assert_eq!(after_b.turn, Seat::A);
@@ -93,15 +139,13 @@ fn encode_state_matches_domain_and_fixed_layout() {
     let state = protocol.initial_state(&ctx());
     let encoded = protocol.encode_state(&state);
 
-    assert!(encoded.starts_with(b"sui_tunnel::proto::tic_tac_toe.v1"));
-    assert_eq!(
-        encoded.len(),
-        b"sui_tunnel::proto::tic_tac_toe.v1".len() + 9 + 3 + 24
-    );
-    assert_eq!(
-        &encoded[b"sui_tunnel::proto::tic_tac_toe.v1".len()..][..9],
-        &[0u8; 9]
-    );
+    // v2 domain, layout: domain + 9B board + 3B flags + 3×8B balances + 32B accumulator
+    assert!(encoded.starts_with(b"sui_tunnel::proto::tic_tac_toe.v2"));
+    let domain_len = b"sui_tunnel::proto::tic_tac_toe.v2".len();
+    assert_eq!(encoded.len(), domain_len + 9 + 3 + 24 + 32);
+    assert_eq!(&encoded[domain_len..][..9], &[0u8; 9]);
+    // Last 32 bytes are the move accumulator.
+    assert_eq!(&encoded[encoded.len() - 32..], &state.move_accumulator);
 }
 
 #[test]
@@ -113,4 +157,6 @@ fn random_move_only_returns_empty_cell_for_active_turn() {
         .sample_move(&state, Seat::A, &mut || 0.999)
         .unwrap();
     assert_eq!(mv.cell, 8);
+    // sample_move must include a valid salt.
+    assert!(mv.salt.len() >= 16);
 }
