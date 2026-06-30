@@ -71,10 +71,10 @@ const MP_URL =
 /** Default buy-in (bankroll) deposited on-chain per seat — whole MTPS (0-decimal; ADR-0023), shown
  *  1:1 as chips. Each player chooses their own before matchmaking; the bet protocol caps each round
  *  at min(both balances). */
-const DEFAULT_STAKE = 1000n;
+const DEFAULT_STAKE = 100n;
 /** Buy-in options offered before "Find match" — whole MTPS (0-decimal), shown 1:1 as chips. Stacks
- *  big enough for many rounds (min-bet 1, options up to 100); each fits a single faucet pull. */
-const FUND_OPTIONS = [500, 1000, 2500] as const;
+ *  big enough for many rounds (min-bet 1, bet options up to 10); each fits a single faucet pull. */
+const FUND_OPTIONS = [100, 250, 500] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const NEXT_MS = 900; // pause before auto-dealing the next round
 const DEFAULT_BET = Number(MIN_BET); // auto's starting bet until the player picks one
