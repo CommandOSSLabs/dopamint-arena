@@ -1343,16 +1343,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "combine"
-version = "4.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
-dependencies = [
- "bytes",
- "memchr",
-]
-
-[[package]]
 name = "compression-codecs"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1669,16 +1659,6 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
-dependencies = [
- "darling_core 0.20.11",
- "darling_macro 0.20.11",
-]
-
-[[package]]
-name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
@@ -1709,20 +1689,6 @@ dependencies = [
  "quote",
  "strsim 0.10.0",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim 0.11.1",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -1761,17 +1727,6 @@ dependencies = [
  "darling_core 0.14.4",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
-dependencies = [
- "darling_core 0.20.11",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -2135,12 +2090,6 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
-
-[[package]]
-name = "edit-distance"
-version = "2.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "324d428080b707bac399325341bd61af5ded1b30f33b7c949792ca464733c2d5"
 
 [[package]]
 name = "either"
@@ -2849,16 +2798,6 @@ dependencies = [
  "rand 0.8.6",
  "smallvec",
  "spinning_top",
-]
-
-[[package]]
-name = "graphql-parser"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a818c0d883d7c0801df27be910917750932be279c7bc82dc541b8769425f409"
-dependencies = [
- "combine",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -6409,40 +6348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sui-graphql"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe1b96a65ca4e68a0923d5cbd0f9269afccb2fe9d825f3a5fb9bcc08c196aaba"
-dependencies = [
- "base64ct",
- "bcs 0.1.6",
- "chrono",
- "futures",
- "reqwest",
- "serde",
- "serde_json",
- "sui-graphql-macros",
- "sui-rpc 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "sui-sdk-types 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "thiserror 1.0.69",
- "url",
-]
-
-[[package]]
-name = "sui-graphql-macros"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd68fd74ae3e7e8d42f6f1275c11b85653b9109fb33423fe55a015389fea5a17"
-dependencies = [
- "darling 0.20.11",
- "edit-distance",
- "graphql-parser",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "sui-http"
 version = "0.0.0"
 source = "git+https://github.com/MystenLabs/sui.git?branch=testnet#ff1fe0ec455153707136cffd0dc77dfb77ba9ad5"
@@ -6748,9 +6653,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sui-crypto 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "sui-graphql",
+ "sui-rpc 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "sui-sdk-types 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio",
+ "tonic",
  "tunnel-core",
  "tunnel-harness",
 ]

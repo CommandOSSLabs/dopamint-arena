@@ -40,7 +40,7 @@ pub fn build_sui_sponsored_bench_context(
 ) -> Result<SuiSponsoredBenchContext, String> {
     let opts = opts.ok_or_else(|| "missing sponsored Sui anchor config".to_string())?;
     let anchor = SuiSponsoredAnchor::new(SuiSponsoredAnchorConfig {
-        graphql_url: opts.graphql_url.clone(),
+        rpc_url: opts.rpc_url.clone(),
         backend_url: opts.backend_url.clone(),
         package_id: opts.package_id.clone(),
         tunnel_coin_type: opts.tunnel_coin_type.clone(),
@@ -799,7 +799,7 @@ mod tests {
     #[test]
     fn shared_sui_anchor_context_reuses_anchor_handle() {
         let anchor = SuiSponsoredAnchor::new(SuiSponsoredAnchorConfig {
-            graphql_url: "http://graphql.invalid".into(),
+            rpc_url: "http://rpc.invalid".into(),
             backend_url: "http://backend.invalid".into(),
             package_id: "0x2".into(),
             tunnel_coin_type: "0x2::sui::SUI".into(),

@@ -11,12 +11,17 @@ use bech32::FromBase32;
 use serde::{Deserialize, Serialize};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
-use sui_graphql::Client as GraphQlClient;
+use sui_rpc::client::Client as GrpcClient;
+use sui_rpc::field::{FieldMask, FieldMaskUtil};
+use sui_rpc::proto::sui::rpc::v2::{
+    ExecuteTransactionRequest, GetObjectRequest, GetTransactionRequest,
+    Transaction as ProtoTransaction, UserSignature as ProtoUserSignature,
+};
 use sui_sdk_types::{
-    Address, Argument, Command, Ed25519PublicKey, ExecutionStatus, FundsWithdrawal, Identifier,
-    Input, MoveCall, Object, ObjectOut, ObjectReference, ObjectType, ProgrammableTransaction,
-    SharedInput, SplitCoins, StructTag, Transaction, TransactionEffects, TransactionKind, TypeTag,
-    UserSignature, WithdrawFrom,
+    Address, Argument, Command, Digest, Ed25519PublicKey, ExecutionStatus, FundsWithdrawal,
+    Identifier, Input, MoveCall, Object, ObjectOut, ObjectReference, ObjectType,
+    ProgrammableTransaction, SharedInput, SplitCoins, StructTag, Transaction, TransactionEffects,
+    TransactionKind, TypeTag, UserSignature, WithdrawFrom,
 };
 use tokio::sync::{mpsc, oneshot};
 use tunnel_core::crypto::verify;
@@ -91,7 +96,7 @@ impl SuiFundingProfile {
 
 #[derive(Clone, Debug)]
 pub struct SuiSponsoredAnchorConfig {
-    pub graphql_url: String,
+    pub rpc_url: String,
     pub backend_url: String,
     pub package_id: String,
     pub tunnel_coin_type: String,
@@ -308,75 +313,95 @@ impl SuiBackendClient for HttpSuiBackendClient {
     }
 }
 
-pub struct GraphQlSuiChainClient {
+/// Chain client backed by the Sui gRPC fullnode API (`sui-rpc`).
+///
+/// The anchor only issues point lookups (object refs, single objects, single
+/// transactions) and transaction execution — no aggregate queries — so the gRPC
+/// `LedgerService`/`TransactionExecutionService` cover every call directly. The
+/// tonic `Client` is cheap to clone (channel is `Arc`-backed), so each `&self`
+/// call clones it to obtain the `&mut` service stub it needs.
+pub struct GrpcSuiChainClient {
     endpoint: String,
-    http: reqwest::Client,
-    client: GraphQlClient,
+    // Built lazily on first call: the anchor is constructed outside any Tokio
+    // runtime (the bench's `main` is sync), but every chain call runs inside one,
+    // and the tonic channel must be created under a runtime. One `OnceCell` keeps
+    // `new` runtime-free while still reusing a single channel across calls.
+    client: tokio::sync::OnceCell<GrpcClient>,
 }
 
-impl GraphQlSuiChainClient {
+impl GrpcSuiChainClient {
     pub fn new(endpoint: &str) -> Result<Self, String> {
         Ok(Self {
             endpoint: endpoint.to_string(),
-            http: reqwest::Client::new(),
-            client: GraphQlClient::new(endpoint).map_err(|e| e.to_string())?,
+            client: tokio::sync::OnceCell::new(),
         })
+    }
+
+    async fn client(&self) -> Result<GrpcClient, String> {
+        self.client
+            .get_or_try_init(|| async {
+                GrpcClient::new(self.endpoint.clone()).map_err(|e| e.to_string())
+            })
+            .await
+            .cloned()
     }
 }
 
 #[async_trait]
-impl SuiChainClient for GraphQlSuiChainClient {
+impl SuiChainClient for GrpcSuiChainClient {
     async fn get_object_ref(&self, object_id: Address) -> Result<ObjectReference, String> {
-        #[derive(Serialize)]
-        struct GraphQlRequest<'a> {
-            query: &'a str,
-            variables: serde_json::Value,
-        }
-        #[derive(Deserialize)]
-        struct GraphQlResponse {
-            data: Option<ObjectData>,
-            errors: Option<serde_json::Value>,
-        }
-        #[derive(Deserialize)]
-        struct ObjectData {
-            object: Option<ObjectRefData>,
-        }
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct ObjectRefData {
-            version: u64,
-            digest: String,
-        }
-
-        let body = GraphQlRequest {
-            query: "query($id: SuiAddress!) { object(address: $id) { version digest } }",
-            variables: serde_json::json!({ "id": object_id }),
-        };
-        let resp = self
-            .http
-            .post(&self.endpoint)
-            .json(&body)
-            .send()
+        // Default read mask is `object_id,version,digest` — exactly an ObjectReference.
+        let response = self
+            .client()
+            .await?
+            .ledger_client()
+            .get_object(GetObjectRequest::new(&object_id))
             .await
-            .map_err(|e| e.to_string())?;
-        let status = resp.status();
-        let json: GraphQlResponse = resp.json().await.map_err(|e| e.to_string())?;
-        if !status.is_success() || json.errors.is_some() {
-            return Err(format!("graphql object ref read failed: {:?}", json.errors));
-        }
-        let object = json
-            .data
-            .and_then(|d| d.object)
+            .map_err(|status| status.to_string())?
+            .into_inner();
+        let object = response
+            .object_opt()
             .ok_or_else(|| format!("object {object_id} not found"))?;
-        let digest = object.digest.parse().map_err(|e| format!("{e}"))?;
-        Ok(ObjectReference::new(object_id, object.version, digest))
+        let version = object
+            .version_opt()
+            .ok_or_else(|| format!("object {object_id} missing version"))?;
+        let digest = object
+            .digest_opt()
+            .ok_or_else(|| format!("object {object_id} missing digest"))?
+            .parse()
+            .map_err(|e| format!("{e}"))?;
+        Ok(ObjectReference::new(object_id, version, digest))
     }
 
     async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String> {
-        self.client
-            .get_object(object_id)
+        let request = GetObjectRequest::new(&object_id).with_read_mask(FieldMask::from_paths([
+            "object_id",
+            "version",
+            "digest",
+            "owner",
+            "object_type",
+            "has_public_transfer",
+            "contents",
+            "previous_transaction",
+            "storage_rebate",
+            "bcs",
+        ]));
+        let response = match self
+            .client()
+            .await?
+            .ledger_client()
+            .get_object(request)
             .await
-            .map_err(|e| e.to_string())
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
+            Err(status) => return Err(status.to_string()),
+        };
+        let Some(object) = response.object_opt() else {
+            return Ok(None);
+        };
+        let object = Object::try_from(object).map_err(|e| format!("{e}"))?;
+        Ok(Some(object))
     }
 
     async fn execute_transaction(
@@ -384,33 +409,84 @@ impl SuiChainClient for GraphQlSuiChainClient {
         transaction: &Transaction,
         signatures: &[UserSignature],
     ) -> Result<TransactionEffects, String> {
-        let result = self
-            .client
-            .execute_transaction(transaction, signatures)
+        let request = ExecuteTransactionRequest::new(ProtoTransaction::from(transaction.clone()))
+            .with_signatures(
+                signatures
+                    .iter()
+                    .cloned()
+                    .map(ProtoUserSignature::from)
+                    .collect::<Vec<_>>(),
+            )
+            .with_read_mask(FieldMask::from_paths(["effects", "checkpoint"]));
+        // Wait for checkpoint inclusion (read-your-writes): the open flow then
+        // reads this tx's checkpoint timestamp and its created objects by id,
+        // which only become visible once the tx is checkpointed on this node.
+        // Mirrors the finality wait the prior GraphQL client performed; raw
+        // `execute_transaction` returns pre-checkpoint and would race those reads.
+        let response = self
+            .client()
+            .await?
+            .execute_transaction_and_wait_for_checkpoint(
+                request,
+                Duration::from_millis(DEFAULT_TIMEOUT_MS),
+            )
             .await
-            .map_err(|e| e.to_string())?;
-        result
-            .effects
-            .ok_or_else(|| "graphql execute returned no effects".to_string())
+            .map_err(|e| e.to_string())?
+            .into_inner();
+        let effects = response
+            .transaction_opt()
+            .and_then(|tx| tx.effects_opt())
+            .ok_or_else(|| "grpc execute returned no effects".to_string())?;
+        TransactionEffects::try_from(effects).map_err(|e| format!("{e}"))
     }
 
     async fn get_transaction_effects(
         &self,
         digest: &str,
     ) -> Result<Option<TransactionEffects>, String> {
-        self.client
-            .get_transaction(digest)
+        let digest: Digest = digest.parse().map_err(|e| format!("{e}"))?;
+        let request =
+            GetTransactionRequest::new(&digest).with_read_mask(FieldMask::from_paths(["effects"]));
+        let response = match self
+            .client()
+            .await?
+            .ledger_client()
+            .get_transaction(request)
             .await
-            .map(|maybe| maybe.map(|tx| tx.effects))
-            .map_err(|e| e.to_string())
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
+            Err(status) => return Err(status.to_string()),
+        };
+        let Some(effects) = response.transaction_opt().and_then(|tx| tx.effects_opt()) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            TransactionEffects::try_from(effects).map_err(|e| format!("{e}"))?,
+        ))
     }
 
     async fn get_transaction_timestamp_ms(&self, digest: &str) -> Result<Option<u64>, String> {
-        self.client
-            .get_transaction(digest)
+        let digest: Digest = digest.parse().map_err(|e| format!("{e}"))?;
+        let request = GetTransactionRequest::new(&digest)
+            .with_read_mask(FieldMask::from_paths(["timestamp"]));
+        let response = match self
+            .client()
+            .await?
+            .ledger_client()
+            .get_transaction(request)
             .await
-            .map(|maybe| maybe.map(|tx| tx.timestamp.timestamp_millis() as u64))
-            .map_err(|e| e.to_string())
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
+            Err(status) => return Err(status.to_string()),
+        };
+        let Some(timestamp) = response.transaction_opt().and_then(|tx| tx.timestamp_opt()) else {
+            return Ok(None);
+        };
+        let millis =
+            timestamp.seconds.max(0) as u64 * 1_000 + (timestamp.nanos.max(0) as u64) / 1_000_000;
+        Ok(Some(millis))
     }
 }
 
@@ -563,8 +639,8 @@ fn clone_open_request(request: &TunnelOpenRequest) -> TunnelOpenRequest {
 
 impl SuiSponsoredAnchor {
     pub fn new(config: SuiSponsoredAnchorConfig) -> Result<Self, TunnelAnchorError> {
-        let chain = GraphQlSuiChainClient::new(&config.graphql_url)
-            .map_err(TunnelAnchorError::Unavailable)?;
+        let chain =
+            GrpcSuiChainClient::new(&config.rpc_url).map_err(TunnelAnchorError::Unavailable)?;
         let backend = HttpSuiBackendClient::new(&config.backend_url);
         Self::with_clients(config, Arc::new(chain), Arc::new(backend))
     }
@@ -2047,7 +2123,7 @@ mod tests {
 
     fn config() -> SuiSponsoredAnchorConfig {
         SuiSponsoredAnchorConfig {
-            graphql_url: "http://graphql.invalid".into(),
+            rpc_url: "http://rpc.invalid".into(),
             backend_url: "http://backend.invalid".into(),
             package_id: "0x2".into(),
             tunnel_coin_type: "0x2::sui::SUI".into(),
@@ -2354,6 +2430,74 @@ mod tests {
         (chain, backend)
     }
 
+    // Plain `#[test]` (no Tokio runtime) on purpose: the bench builds the anchor
+    // from a sync `main`, so the gRPC client must construct without a running
+    // runtime. Eager tonic channel creation here would panic — this guards the
+    // lazy `OnceCell` init that keeps `new` runtime-free.
+    #[test]
+    fn grpc_chain_client_constructs_without_tokio_runtime() {
+        let client = GrpcSuiChainClient::new("http://127.0.0.1:1");
+        assert!(client.is_ok());
+    }
+
+    // Opt-in live integration smoke against a real Sui testnet fullnode. Excluded
+    // from the default suite (network IO, non-deterministic); run explicitly:
+    //   cargo test -p sui-tunnel-anchor --ignored grpc_smoke_reads_live_testnet
+    // Exercises every read path + the proto -> sui_sdk_types conversions and the
+    // read masks that can only be validated against a node.
+    #[tokio::test]
+    #[ignore = "hits the live Sui testnet fullnode; run with --ignored"]
+    async fn grpc_smoke_reads_live_testnet() {
+        let client = GrpcSuiChainClient::new("https://mysten-rpc.testnet.sui.io:443")
+            .expect("construct grpc client");
+        let clock: Address = CLOCK_ADDRESS.parse().expect("clock address");
+
+        // get_object_ref: default read mask (object_id,version,digest) + digest parse.
+        let clock_ref = client.get_object_ref(clock).await.expect("get_object_ref");
+        assert_eq!(clock_ref.object_id(), &clock);
+        assert!(clock_ref.version() > 0, "clock must have a real version");
+
+        // get_object: full read mask + proto -> sui_sdk_types::Object conversion.
+        let clock_obj = client
+            .get_object(clock)
+            .await
+            .expect("get_object")
+            .expect("clock object exists");
+
+        // The clock is touched every checkpoint, so its previous transaction is a
+        // real, recently-checkpointed digest — ideal for the transaction reads.
+        let digest = clock_obj.previous_transaction().to_string();
+
+        // get_transaction_effects: the TryFrom needs effects.bcs in the response,
+        // which the parent "effects" mask path must pull in.
+        client
+            .get_transaction_effects(&digest)
+            .await
+            .expect("get_transaction_effects")
+            .expect("effects for the clock's previous tx");
+
+        // get_transaction_timestamp_ms: checkpoint timestamp present + sane (epoch-ms).
+        let ts = client
+            .get_transaction_timestamp_ms(&digest)
+            .await
+            .expect("get_transaction_timestamp_ms")
+            .expect("timestamp present");
+        assert!(
+            ts > 1_600_000_000_000,
+            "timestamp should be epoch-ms after 2020"
+        );
+
+        // NotFound mapping: a nonexistent object id resolves to Ok(None), not Err.
+        let missing: Address = "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+            .parse()
+            .expect("missing address");
+        assert!(client
+            .get_object(missing)
+            .await
+            .expect("get_object missing")
+            .is_none());
+    }
+
     #[test]
     fn decodes_sui_bech32_ed25519_private_key() {
         let encoded = test_bech32_key();
@@ -2387,7 +2531,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settler_sponsored_open_executes_with_graphql_and_extracts_tunnel_id() {
+    async fn settler_sponsored_open_executes_with_grpc_and_extracts_tunnel_id() {
         let tunnel_id = Address::from_str("0x42").unwrap();
         let (chain, backend) = settler_open_fixture(tunnel_id, 1_770_000_000_123);
 

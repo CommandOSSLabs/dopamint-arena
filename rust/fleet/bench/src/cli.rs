@@ -70,7 +70,7 @@ pub struct BenchOpts {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuiSponsoredAnchorOpts {
-    pub graphql_url: String,
+    pub rpc_url: String,
     pub backend_url: String,
     pub package_id: String,
     pub tunnel_coin_type: String,
@@ -116,7 +116,7 @@ memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n  \
 sui-sponsored: Sui Tunnel anchor for sponsored open and backend settlement\n  \
 sui: backwards-compatible alias for sui-sponsored\n\n\
 Sui sponsored anchor flags:\n  \
---sui-graphql-url: Sui GraphQL endpoint used to execute/read sponsored open transactions\n  \
+--sui-rpc-url: Sui gRPC endpoint used to execute/read sponsored open transactions\n  \
 --sui-backend-url: Dopamint tunnel-manager URL used for sponsor and settlement HTTP calls\n  \
 --sui-package-id: published Sui Tunnel package id containing tunnel::create_and_fund<T>\n  \
 --sui-tunnel-coin-type: Move coin type for Tunnel<T>; defaults to 0x2::sui::SUI\n  \
@@ -183,9 +183,9 @@ struct Raw {
     /// Protocol ID to execute.
     #[arg(long = "protocol-id", default_value = BLACKJACK_BET_V1, value_name = "ID")]
     protocol_id: String,
-    /// Sui GraphQL endpoint used by --anchor sui-sponsored.
-    #[arg(long = "sui-graphql-url", value_name = "URL")]
-    sui_graphql_url: Option<String>,
+    /// Sui gRPC endpoint used by --anchor sui-sponsored.
+    #[arg(long = "sui-rpc-url", value_name = "URL")]
+    sui_rpc_url: Option<String>,
     /// Dopamint tunnel-manager backend base URL used by --anchor sui-sponsored.
     #[arg(long = "sui-backend-url", value_name = "URL")]
     sui_backend_url: Option<String>,
@@ -370,8 +370,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             ));
         }
         let mut missing = Vec::new();
-        if raw.sui_graphql_url.is_none() {
-            missing.push("--sui-graphql-url");
+        if raw.sui_rpc_url.is_none() {
+            missing.push("--sui-rpc-url");
         }
         if raw.sui_backend_url.is_none() {
             missing.push("--sui-backend-url");
@@ -457,7 +457,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             );
         }
         Some(SuiSponsoredAnchorOpts {
-            graphql_url: raw.sui_graphql_url.unwrap(),
+            rpc_url: raw.sui_rpc_url.unwrap(),
             backend_url: raw.sui_backend_url.unwrap(),
             package_id: raw.sui_package_id.unwrap(),
             tunnel_coin_type: raw.sui_tunnel_coin_type,
@@ -631,8 +631,8 @@ mod tests {
             "sui-sponsored",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "https://sui.example/graphql",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
             "--sui-backend-url",
             "https://backend.example",
             "--sui-package-id",
@@ -668,8 +668,8 @@ mod tests {
             "sui",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "https://sui.example/graphql",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
             "--sui-backend-url",
             "https://backend.example",
             "--sui-package-id",
@@ -691,8 +691,8 @@ mod tests {
             "sui-sponsored",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "https://sui.example/graphql",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
             "--sui-backend-url",
             "https://backend.example",
             "--sui-package-id",
@@ -725,7 +725,7 @@ mod tests {
         assert!(err.contains("transcript-recorder"), "{err}");
 
         let err = parse_v(&["--anchor", "sui", "--transcript-recorder", "memory"]).unwrap_err();
-        assert!(err.contains("sui-graphql-url"), "{err}");
+        assert!(err.contains("sui-rpc-url"), "{err}");
         assert!(err.contains("sui-funder-priv-key"), "{err}");
         assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
     }
@@ -737,8 +737,8 @@ mod tests {
             "sui",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "https://sui.example/graphql",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
             "--sui-backend-url",
             "https://backend.example",
             "--sui-package-id",
@@ -769,8 +769,8 @@ mod tests {
             "sui",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "https://sui.example/graphql",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
             "--sui-backend-url",
             "https://backend.example",
             "--sui-package-id",
@@ -786,14 +786,14 @@ mod tests {
     }
 
     #[test]
-    fn anchor_sui_parses_graphql_and_funder_options() {
+    fn anchor_sui_parses_rpc_and_funder_options() {
         let o = parse_v(&[
             "--anchor",
             "sui",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "https://sui.example/graphql",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
             "--sui-backend-url",
             "https://backend.example",
             "--sui-package-id",
@@ -807,7 +807,7 @@ mod tests {
 
         assert_eq!(o.anchor_mode, AnchorMode::SuiSponsored);
         let sui = o.sui_anchor.expect("sui config");
-        assert_eq!(sui.graphql_url, "https://sui.example/graphql");
+        assert_eq!(sui.rpc_url, "https://sui.example/rpc");
         assert_eq!(sui.backend_url, "https://backend.example");
         assert_eq!(sui.package_id, "0xabc");
         assert_eq!(sui.tunnel_coin_type, "0x2::sui::SUI");
@@ -833,8 +833,8 @@ mod tests {
             "sui".into(),
             "--transcript-recorder".into(),
             "memory".into(),
-            "--sui-graphql-url".into(),
-            "http://graphql".into(),
+            "--sui-rpc-url".into(),
+            "http://rpc".into(),
             "--sui-backend-url".into(),
             "http://backend".into(),
             "--sui-package-id".into(),
@@ -859,8 +859,8 @@ mod tests {
             "sui".into(),
             "--transcript-recorder".into(),
             "memory".into(),
-            "--sui-graphql-url".into(),
-            "http://graphql".into(),
+            "--sui-rpc-url".into(),
+            "http://rpc".into(),
             "--sui-backend-url".into(),
             "http://backend".into(),
             "--sui-package-id".into(),
@@ -890,8 +890,8 @@ mod tests {
             "sui",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "http://graphql",
+            "--sui-rpc-url",
+            "http://rpc",
             "--sui-backend-url",
             "http://backend",
             "--sui-package-id",
@@ -914,8 +914,8 @@ mod tests {
             "sui",
             "--transcript-recorder",
             "memory",
-            "--sui-graphql-url",
-            "http://graphql",
+            "--sui-rpc-url",
+            "http://rpc",
             "--sui-backend-url",
             "http://backend",
             "--sui-package-id",
