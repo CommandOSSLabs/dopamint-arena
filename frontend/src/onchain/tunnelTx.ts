@@ -224,7 +224,9 @@ export async function readTunnelPartyB(
     | undefined;
   const hex = byteVectorToHex(fields?.party_b?.fields?.public_key);
   if (!hex) {
-    throw new Error(`tunnel ${tunnelId}: missing party_b.public_key in content`);
+    throw new Error(
+      `tunnel ${tunnelId}: missing party_b.public_key in content`,
+    );
   }
   return hex;
 }
@@ -249,13 +251,12 @@ function isStaleObjectReject(err: unknown): boolean {
     msg.includes("needs to be rebuilt") ||
     msg.includes("objectversionunavailable") ||
     msg.includes("rejected as invalid by more than 1/3") ||
-    msg.includes("equivocat") ||
-    // ADR-0013: a just-deposited address balance settles at the next checkpoint, so a withdrawal
-    // can briefly dry-run against a still-empty balance. The deposit IS landing, so rebuild + retry
-    // until it settles. (`ensureMtpsAddressBalance` waits too, but the sponsor dry-runs on its
-    // own node, which may trail by a checkpoint.)
-    msg.includes("invalid withdraw reservation") ||
-    msg.includes("available amount in account")
+    msg.includes("equivocat")
+    // NOTE: "invalid withdraw reservation" / "available amount in account" are NOT matched. With the
+    // faucet disabled (stake comes straight from the player's address balance), that error means a
+    // genuinely insufficient balance — a permanent failure that must surface FAST, not loop forever
+    // every ~5s (the doc above). `ensureMtpsAddressBalance` already waits for any coin-sweep to settle
+    // before the open fires, so a checkpoint-lag false-negative is not expected here.
   );
 }
 

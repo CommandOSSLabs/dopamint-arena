@@ -293,60 +293,31 @@ async function ensureMtpsAddressBalanceInner(opts: {
       })
     ).data;
 
-  const { addr, total } = await readBalance();
-  if (addr >= opts.need) return; // already funded — nothing to do
+  const { addr } = await readBalance();
+  if (addr >= opts.need) return; // already funded — withdraw straight from the address balance
 
-  // Faucet with retry (429 = rate-limited). The backend allows FAUCET_MAX_PER_WINDOW (5) pulls per
-  // FAUCET_COOLDOWN_SECS (1800s); multiple concurrent solo windows each trigger a pull. Retry with
-  // exponential backoff (3s → 6s → 12s → 24s → 48s) to ride out the cooldown without failing the
-  // entire open. Max 3 retries; the caller's open retry covers anything beyond that.
-  const faucetWithRetry = async (attemptsLeft: number): Promise<void> => {
-    try {
-      await faucetMtps({ recipient: opts.owner, toBalance: true });
-    } catch (e) {
-      const isRateLimited =
-        (e as Error & { status?: number })?.status === 429 ||
-        (e as Error)?.message?.includes("429") ||
-        (e as Error)?.message?.includes("cooldown") ||
-        (e as Error)?.message?.includes("Too Many");
-      if (attemptsLeft > 0 && isRateLimited) {
-        const backoff = 3000 * 2 ** (3 - attemptsLeft); // 3s, 6s, 12s
-        console.warn(
-          `[mtps] faucet 429, retrying in ${backoff}ms (${attemptsLeft} retries left)`,
-        );
-        await sleep(backoff);
-        return faucetWithRetry(attemptsLeft - 1);
-      }
-      throw e;
-    }
-  };
+  // FAUCET DISABLED (by request): the backend faucet was unreliable (admin-cap stale → 502) and its
+  // retries stalled the open / PTB-sign queue. The stake now comes from the CONNECTED wallet's MTPS
+  // address balance — the player funds it directly. We still SWEEP the wallet's owned MTPS COINS into
+  // its address balance (no mint, no retry) so coins it already holds become withdrawable; if there
+  // are none, we return immediately and let the open use whatever the address balance already holds
+  // (it fails fast on-chain if truly insufficient — the player tops up their wallet).
+  const coins = await readCoins();
+  if (coins.length === 0) return;
+  const tx = new Transaction();
+  buildSweepToAddressBalance(
+    tx,
+    opts.owner,
+    coins.map((c) => c.coinObjectId),
+  );
+  await opts.signExec(tx);
 
-  if (total < opts.need) {
-    // Not enough total MTPS: faucet directly into the address balance (admin_mint_to_balance).
-    await faucetWithRetry(3);
-  } else {
-    // Enough as owned coins: sweep into the address balance (no faucet needed).
-    const coins = await readCoins();
-    if (coins.length > 0) {
-      const tx = new Transaction();
-      buildSweepToAddressBalance(
-        tx,
-        opts.owner,
-        coins.map((c) => c.coinObjectId),
-      );
-      await opts.signExec(tx);
-    }
-  }
-
-  // Faucet cooldown: SIP-58 deposits settle at a CHECKPOINT boundary (not in the depositing tx),
-  // so funds aren't withdrawable in the very next transaction. This queue is serial, but each
-  // window's `readBalance()` may still return a stale pre-deposit value on the first poll. Wait
-  // until the deposit settles before returning, so the NEXT window in the queue reads the updated
-  // balance and short-circuits (`addr >= need`) instead of redundantly fauceting and burning a 429.
-  const FAUCET_SETTLE_POLL_MS = 600;
-  const FAUCET_SETTLE_MAX_POLLS = 30; // ~18s total
-  for (let i = 0; i < FAUCET_SETTLE_MAX_POLLS; i++) {
+  // SIP-58 deposits settle at a CHECKPOINT boundary (not in the sweep tx), so briefly wait for the
+  // swept funds to become withdrawable before the open fires — short (≤6s), not the old ~18s faucet poll.
+  const SETTLE_POLL_MS = 600;
+  const SETTLE_MAX_POLLS = 10; // ~6s
+  for (let i = 0; i < SETTLE_MAX_POLLS; i++) {
     if ((await readBalance()).addr >= opts.need) return;
-    await sleep(FAUCET_SETTLE_POLL_MS);
+    await sleep(SETTLE_POLL_MS);
   }
 }
