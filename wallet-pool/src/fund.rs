@@ -32,6 +32,25 @@ pub struct FundOptions {
     pub await_effects: bool,
 }
 
+/// Options for building a batched fund transaction.
+#[derive(Clone, Debug)]
+pub struct FundBatchOptions {
+    /// Fully-qualified coin type to split and transfer.
+    pub coin_type: String,
+
+    /// Amount of `Coin<T>` each recipient receives.
+    pub amount_per_recipient: u64,
+
+    /// Recipient Sui addresses.
+    pub recipients: Vec<String>,
+
+    /// Maximum number of recipients per transaction chunk.
+    pub max_recipients_per_tx: usize,
+
+    /// Whether to poll the RPC until each chunk's effects are available.
+    pub await_effects: bool,
+}
+
 /// Build, sign, and execute a single PTB that funds `opts.recipients` with
 /// `opts.amount_per_recipient` of `opts.coin_type`.
 ///
@@ -142,6 +161,53 @@ pub async fn fund(
     }
 
     Ok(digest)
+}
+
+/// Build, sign, and execute multiple PTBs that fund all `opts.recipients` in
+/// chunks of at most `opts.max_recipients_per_tx`.
+///
+/// Chunks are executed sequentially so each chunk can reuse the master's change
+/// coin(s). Returns one digest per chunk.
+pub async fn fund_batch(
+    rpc: &dyn SuiRpc,
+    master_keypair: &KeyPair,
+    master_address: &str,
+    opts: FundBatchOptions,
+) -> Result<Vec<String>> {
+    if opts.recipients.is_empty() {
+        return Err(Error::InvalidInput(
+            "at least one recipient is required".into(),
+        ));
+    }
+    if opts.amount_per_recipient == 0 {
+        return Err(Error::InvalidInput(
+            "amount_per_recipient must be greater than zero".into(),
+        ));
+    }
+    if opts.max_recipients_per_tx == 0 {
+        return Err(Error::InvalidInput(
+            "max_recipients_per_tx must be greater than zero".into(),
+        ));
+    }
+
+    let mut digests = Vec::new();
+    for chunk in opts.recipients.chunks(opts.max_recipients_per_tx) {
+        let digest = fund(
+            rpc,
+            master_keypair,
+            master_address,
+            FundOptions {
+                coin_type: opts.coin_type.clone(),
+                amount_per_recipient: opts.amount_per_recipient,
+                recipients: chunk.to_vec(),
+                await_effects: opts.await_effects,
+            },
+        )
+        .await?;
+        digests.push(digest);
+    }
+
+    Ok(digests)
 }
 
 /// Select the smallest prefix of coins (sorted descending by balance) whose

@@ -10,8 +10,8 @@ pub mod store;
 
 pub use client::{
     AddMembersOptions, AddMembersResult, BalanceOptions, By, CacheMode, CreateOptions,
-    CreateResult, FundOptions, ListOptions, OpenOptions, PoolSummary, SetEnabledOptions,
-    SignAndExecuteOptions, WalletBalanceMap, WalletPool, WalletPoolHandle,
+    CreateResult, FundBatchOptions, FundOptions, ListOptions, OpenOptions, PoolSummary,
+    SetEnabledOptions, SignAndExecuteOptions, WalletBalanceMap, WalletPool, WalletPoolHandle,
 };
 pub use wallet_pool_core::blob::{Network, WalletEntry, WalletRole};
 pub use wallet_pool_core::filter::{Filter, Pagination, Sort, SortField};

@@ -184,6 +184,21 @@ pub struct FundOptions {
     pub await_effects: bool,
 }
 
+/// Options for funding recipients from the pool master in multiple transactions.
+#[derive(Clone, Debug)]
+pub struct FundBatchOptions {
+    /// Coin type to transfer (defaults to `0x2::sui::SUI`).
+    pub coin_type: Option<String>,
+    /// Amount each recipient receives.
+    pub amount_per_recipient: u64,
+    /// Recipient addresses.
+    pub recipients: Vec<String>,
+    /// Maximum number of recipients per transaction chunk.
+    pub max_recipients_per_tx: usize,
+    /// Whether to poll the RPC until each chunk's effects are available.
+    pub await_effects: bool,
+}
+
 /// Summary of a stored pool for [`WalletPool::list_pools`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolSummary {
@@ -578,6 +593,55 @@ impl WalletPoolHandle {
         let bytes = serialize_blob(&self.blob)?;
         self.store.write(&self.blob.wallet_pool_id, &bytes).await?;
         Ok(digest)
+    }
+
+    /// Fund recipients from the pool master in batched PTBs.
+    ///
+    /// Recipients are split into chunks of `max_recipients_per_tx` and funded
+    /// sequentially so each chunk can reuse the master's change coin(s).
+    pub async fn fund_batch(&mut self, opts: FundBatchOptions) -> Result<Vec<String>> {
+        let master_keypair = self.get_member_key(By::Ordinal(0))?;
+        let master_address = self
+            .blob
+            .index
+            .iter()
+            .find(|e| e.role == WalletRole::Master)
+            .map(|e| e.address.clone())
+            .ok_or(Error::Core(
+                wallet_pool_core::error::Error::MasterNotRetrievable,
+            ))?;
+
+        let coin_type = opts.coin_type.unwrap_or_else(|| "0x2::sui::SUI".into());
+        let recipients = opts.recipients.clone();
+        let digests = crate::fund::fund_batch(
+            self.rpc.as_ref(),
+            &master_keypair,
+            &master_address,
+            crate::fund::FundBatchOptions {
+                coin_type: coin_type.clone(),
+                amount_per_recipient: opts.amount_per_recipient,
+                recipients: opts.recipients,
+                max_recipients_per_tx: opts.max_recipients_per_tx,
+                await_effects: opts.await_effects,
+            },
+        )
+        .await?;
+
+        let now = now_millis();
+        let amount_str = opts.amount_per_recipient.to_string();
+        for recipient in &recipients {
+            if let Some(entry) = self.blob.index.iter_mut().find(|e| &e.address == recipient) {
+                entry.last_funded_at = Some(now);
+                entry
+                    .funded_amounts
+                    .get_or_insert_with(HashMap::new)
+                    .insert(coin_type.clone(), amount_str.clone());
+            }
+        }
+
+        let bytes = serialize_blob(&self.blob)?;
+        self.store.write(&self.blob.wallet_pool_id, &bytes).await?;
+        Ok(digests)
     }
 
     /// Clear the key cache and overwrite decrypted secrets in memory.
