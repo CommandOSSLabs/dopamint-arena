@@ -52,7 +52,12 @@ impl ScenarioMode {
 pub struct BenchOpts {
     pub workers: usize,
     pub duration_secs: u64,
-    pub matches: Option<u64>,
+    /// Number of tunnels to drive simultaneously (replaces the old `--matches` count).
+    pub tunnel_concurrency: u64,
+    /// Collect per-move latency samples (adds one sample per move; off by default).
+    pub per_move_latency: bool,
+    /// Emit coarse-boundary tracing to the console (off by default).
+    pub trace: bool,
     pub signer_init_mode: SignerInitMode,
     /// Protocols to run, in the order the user listed them (or
     /// `PORTED_PROTOCOL_IDS` order for `all`). Always non-empty; runs execute
@@ -94,11 +99,11 @@ throughput, frame bytes, match counts, and resource usage. It uses the memory \
 anchor by default, runs CPU-local with local frame transport, and submits no \
 chain transactions.",
     after_help = "Examples:\n  \
-fleet-bench --anchor memory --signer-init-mode per-match --matches 50 --scenario golden --frame-codec postcard\n  \
-fleet-bench --signer-init-mode pre-initialized --matches 1000 --frame-codec bcs\n  \
-fleet-bench --protocol-ids blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory\n  \
-fleet-bench --protocol-ids caro.v1,blackjack.v2 --matches 100\n  \
-fleet-bench --protocol-ids all --matches 50\n\n\
+fleet-bench --anchor memory --signer-init-mode per-match --tunnel-concurrency 50 --scenario golden --frame-codec postcard\n  \
+fleet-bench --signer-init-mode pre-initialized --tunnel-concurrency 1000 --frame-codec bcs\n  \
+fleet-bench --protocol-ids blackjack.v2 --tunnel-concurrency 100 --scenario varied --transcript-recorder memory\n  \
+fleet-bench --protocol-ids caro.v1,blackjack.v2 --tunnel-concurrency 100\n  \
+fleet-bench --protocol-ids all --tunnel-concurrency 50\n\n\
 Signer init mode values:\n  \
 per-match: create signer material inside each measured match\n  \
 pre-initialized: create all signer material before the timed run\n\n\
@@ -141,12 +146,18 @@ struct Raw {
     /// Number of rayon workers, or `auto` to use available CPU parallelism.
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     workers: String,
-    /// Time-bounded run length in seconds. Ignored once --matches is exhausted.
+    /// Time-bounded run length in seconds. May also be bounded by tunnel completion.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
-    /// Stop after exactly this many matches. Useful for golden regressions.
-    #[arg(long, value_name = "N")]
-    matches: Option<u64>,
+    /// Number of tunnels to run, spawned simultaneously (total == in-flight).
+    #[arg(long = "tunnel-concurrency", default_value_t = 64, value_name = "N")]
+    tunnel_concurrency: u64,
+    /// Collect per-move latency samples (default off; adds a sample per move).
+    #[arg(long = "per-move-latency", default_value_t = false)]
+    per_move_latency: bool,
+    /// Emit coarse-boundary tracing to the console (default off).
+    #[arg(long = "trace", default_value_t = false)]
+    trace: bool,
     /// Signer initialization timing: per-match or pre-initialized.
     #[arg(
         long = "signer-init-mode",
@@ -349,13 +360,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             ))
         }
     };
-    if signer_init_mode == SignerInitMode::PreInitialized && raw.matches.is_none() {
-        return Err(format!(
-            "--signer-init-mode {} requires --matches so the full signer pool can be created before timing",
-            raw.signer_init_mode
-        ));
-    }
-
     let frame_codec = match raw.frame_codec.as_str() {
         "json" => FrameCodecKind::Json,
         "bcs" => FrameCodecKind::Bcs,
@@ -509,7 +513,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
-        matches: raw.matches,
+        tunnel_concurrency: raw.tunnel_concurrency,
+        per_move_latency: raw.per_move_latency,
+        trace: raw.trace,
         signer_init_mode,
         protocol_ids,
         scenario,
@@ -540,7 +546,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(o.duration_secs, 15);
-        assert_eq!(o.matches, None);
+        assert_eq!(o.tunnel_concurrency, 64);
         assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
         assert_eq!(o.protocol_ids, vec!["blackjack.bet.v1"]);
         assert!(o.workers >= 1);
@@ -558,26 +564,36 @@ mod tests {
     }
 
     #[test]
-    fn explicit_workers_matches_and_signer_init_mode() {
+    fn explicit_workers_concurrency_and_signer_init_mode() {
         let o = parse_v(&[
             "--workers",
             "1",
-            "--matches",
+            "--tunnel-concurrency",
             "10",
             "--signer-init-mode",
             "per-match",
         ])
         .unwrap();
         assert_eq!(o.workers, 1);
-        assert_eq!(o.matches, Some(10));
+        assert_eq!(o.tunnel_concurrency, 10);
         assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
     }
 
     #[test]
-    fn pre_initialized_signers_requires_matches() {
-        let err = parse_v(&["--signer-init-mode", "pre-initialized"]).unwrap_err();
-        assert!(err.contains("--matches"), "got: {err}");
-        assert!(parse_v(&["--signer-init-mode", "pre-initialized", "--matches", "4"]).is_ok());
+    fn pre_initialized_signers_uses_tunnel_concurrency_as_pool_size() {
+        // tunnel_concurrency always has a default (64), so pre-initialized no longer
+        // requires an explicit flag — the concurrency count drives the signer pool.
+        let o = parse_v(&["--signer-init-mode", "pre-initialized"]).unwrap();
+        assert_eq!(o.signer_init_mode, SignerInitMode::PreInitialized);
+        assert_eq!(o.tunnel_concurrency, 64);
+        let o = parse_v(&[
+            "--signer-init-mode",
+            "pre-initialized",
+            "--tunnel-concurrency",
+            "4",
+        ])
+        .unwrap();
+        assert_eq!(o.tunnel_concurrency, 4);
     }
 
     #[test]
@@ -1023,6 +1039,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_tunnel_concurrency_and_flags() {
+        let o = parse_v(&[
+            "--tunnel-concurrency",
+            "255",
+            "--per-move-latency",
+            "--trace",
+        ])
+        .unwrap();
+        assert_eq!(o.tunnel_concurrency, 255);
+        assert!(o.per_move_latency);
+        assert!(o.trace);
+    }
+
+    #[test]
+    fn matches_flag_is_gone() {
+        assert!(parse_v(&["--matches", "10"]).is_err());
+    }
+
+    #[test]
     fn offchain_shortcut_is_not_supported() {
         let err = parse_v(&["--offchain"]).unwrap_err();
         assert!(
@@ -1061,17 +1096,18 @@ mod tests {
         assert!(help.contains("Run the local memory-anchored tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
         assert!(help.contains(
-            "fleet-bench --anchor memory --signer-init-mode per-match --matches 50 --scenario golden --frame-codec postcard"
+            "fleet-bench --anchor memory --signer-init-mode per-match --tunnel-concurrency 50 --scenario golden --frame-codec postcard"
         ));
         assert!(help.contains(
-            "fleet-bench --protocol-ids blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory"
+            "fleet-bench --protocol-ids blackjack.v2 --tunnel-concurrency 100 --scenario varied --transcript-recorder memory"
         ));
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
         assert!(help.contains("per-match|pre-initialized"));
         assert!(help.contains("--protocol-ids takes one ID, a comma-separated list, or `all`"));
-        assert!(help.contains("fleet-bench --protocol-ids caro.v1,blackjack.v2 --matches 100"));
-        assert!(help.contains("fleet-bench --protocol-ids all --matches 50"));
+        assert!(help
+            .contains("fleet-bench --protocol-ids caro.v1,blackjack.v2 --tunnel-concurrency 100"));
+        assert!(help.contains("fleet-bench --protocol-ids all --tunnel-concurrency 50"));
         assert!(help.contains("blackjack.bet.v1"));
         assert!(help.contains("json|bcs|postcard"));
         assert!(

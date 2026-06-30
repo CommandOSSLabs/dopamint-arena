@@ -214,7 +214,9 @@ mod tests {
         BenchOpts {
             workers,
             duration_secs: 15,
-            matches: None,
+            tunnel_concurrency: 64,
+            per_move_latency: false,
+            trace: false,
             signer_init_mode,
             protocol_ids: vec![tunnel_core::protocol_id::BLACKJACK_BET_V1],
             scenario: crate::cli::ScenarioMode::Golden,

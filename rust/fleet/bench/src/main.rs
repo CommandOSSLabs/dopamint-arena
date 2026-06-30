@@ -61,7 +61,7 @@ fn run_protocol(
             let outcome = swarm::run_fresh_keys(
                 opts.workers,
                 opts.duration_secs,
-                opts.matches,
+                Some(opts.tunnel_concurrency),
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
@@ -76,7 +76,7 @@ fn run_protocol(
             let outcome = swarm::run_preinitialized_signers(
                 opts.workers,
                 opts.duration_secs,
-                opts.matches.expect("validated by cli"),
+                opts.tunnel_concurrency,
                 opts.scenario,
                 opts.frame_codec,
                 opts.anchor_mode,
