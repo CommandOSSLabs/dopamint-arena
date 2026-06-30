@@ -13,6 +13,7 @@ jobs:
   changes:
     name: Detect changes
     runs-on:
+      group: Default Large Runners
       labels: linux-x64-m
     outputs:
       ci: ${{ steps.filter.outputs.ci }}
@@ -57,6 +58,7 @@ jobs:
   ts-sdk:
     name: TypeScript SDK
     runs-on:
+      group: Default Large Runners
       labels: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.ts_sdk == 'true'
@@ -82,6 +84,7 @@ jobs:
   move:
     name: Move contracts
     runs-on:
+      group: Default Large Runners
       labels: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.move == 'true'
@@ -110,6 +113,7 @@ jobs:
   rust-backend:
     name: Rust backend
     runs-on:
+      group: Default Large Runners
       labels: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.rust_backend == 'true'
@@ -127,6 +131,7 @@ jobs:
   rust-tunnel:
     name: Rust tunnel crates
     runs-on:
+      group: Default Large Runners
       labels: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.rust_tunnel == 'true'
@@ -147,6 +152,7 @@ jobs:
   frontend:
     name: Frontend
     runs-on:
+      group: Default Large Runners
       labels: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.frontend == 'true'
