@@ -2,7 +2,7 @@
 
 - **Status**: Proposed
 - **Date**: 2026-06-27
-- **Refs**: refines [0017](0017-deterministic-seed-vs-commit-reveal.md), [0018](0018-multi-game-self-play-per-game-seed.md), [0020](0020-bot-fleet-topology-shared-core.md)
+- **Refs**: refines [0017](0017-deterministic-seed-vs-commit-reveal.md), [0018](0018-multi-game-self-play-per-game-seed.md), [0020](../../backend/docs/decisions/0020-bot-fleet-topology-shared-core.md)
 
 ## Context
 

@@ -3,8 +3,8 @@
 - **Status**: Proposed
 - **Date**: 2026-06-29
 - **Refs**: realizes the serving-fleet seam of [0020](0020-bot-fleet-topology-shared-core.md);
-  funds the arena flow of [0026](0026-arena-enter-one-sig-genuine-two-party.md); relies on the
-  co-location affinity of [0011](0011-local-first-pairing.md).
+  funds the arena flow of [0026](../../../docs/decisions/0026-arena-enter-one-sig-genuine-two-party.md); relies on the
+  co-location affinity of [0011](../../../docs/decisions/0011-local-first-pairing.md).
 
 ## Context
 

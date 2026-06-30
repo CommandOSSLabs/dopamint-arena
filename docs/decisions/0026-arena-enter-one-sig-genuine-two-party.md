@@ -7,7 +7,7 @@
 - **Date**: 2026-06-29
 - **Refs**: realizes the deferred genuine you-vs-bot of
   [0012](0012-arena-attract-cabinet-seam.md); fills the bot↔user pairing/funding
-  deferred by [0020](0020-bot-fleet-topology-shared-core.md) and the agent-fleet
+  deferred by [0020](../../backend/docs/decisions/0020-bot-fleet-topology-shared-core.md) and the agent-fleet
   pool deferred by [0011](0011-local-first-pairing.md); extends the batched-open
   machinery of [0019](0019-batched-tunnel-open.md); funding via
   [0013](0013-address-balance-stake.md)/[0014](0014-enoki-sponsor-with-settler-fallback.md);

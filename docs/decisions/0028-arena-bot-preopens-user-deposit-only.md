@@ -8,7 +8,7 @@
   steps (warm-pool allocation, genuine auto-play); only **who creates the tunnel**
   changes (user → bot). The on-chain
   create+fund-B is the `SuiAnchor` seam deferred by
-  [0020](0020-bot-fleet-topology-shared-core.md); settle stays seat-agnostic per
+  [0020](../../backend/docs/decisions/0020-bot-fleet-topology-shared-core.md); settle stays seat-agnostic per
   [0007](0007-settle-authorized-by-settlement-not-token.md); extends the batched
   open of [0019](0019-batched-tunnel-open.md).
 
