@@ -304,7 +304,11 @@ fn resolve_protocol_ids(raw: &str) -> Result<Vec<&'static str>, String> {
 
 pub fn help_text() -> String {
     let mut help = Vec::new();
+    // term_width(0) disables wrapping so the curated example lines stay on one
+    // line; without it, a workspace build that enables clap's wrap_help feature
+    // would wrap them to the terminal width.
     Raw::command()
+        .term_width(0)
         .write_long_help(&mut help)
         .expect("help renders");
     String::from_utf8(help).expect("clap help is utf8")
