@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { MAX_MOVES_PER_TUNNEL, shouldRotateTunnel } from "./limits";
 
-test("MAX_MOVES_PER_TUNNEL is the canonical 50k ceiling (binary v2 ~67k capacity)", () => {
-  assert.equal(MAX_MOVES_PER_TUNNEL, 50_000);
+test("MAX_MOVES_PER_TUNNEL is the canonical 100k ceiling (binary v2 ~134k capacity)", () => {
+  assert.equal(MAX_MOVES_PER_TUNNEL, 100_000);
 });
 
 test("shouldRotateTunnel is false below the cap and true at/above it", () => {

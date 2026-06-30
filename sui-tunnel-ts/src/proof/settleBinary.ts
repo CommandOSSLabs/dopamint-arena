@@ -1,5 +1,5 @@
 /**
- * Binary /settle body (octet-stream) — replaces JSON+hex so 16 MB holds ~2× the moves
+ * Binary /settle body (octet-stream) — replaces JSON+hex so 32 MB holds ~2× the moves
  * and the Walrus blob shrinks the same. Fixed-offset header + length-prefixed entries; see
  * docs/superpowers/specs/2026-06-24-settle-binary-transcript-design.md for the layout. The
  * Rust backend parses the SAME bytes (golden-vector-pinned for parity). The single leading

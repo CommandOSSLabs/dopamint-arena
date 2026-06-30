@@ -65,15 +65,14 @@ const FRAME_BUDGET_MS = 8;
  *  of one mode; this is the smartest profile (probability-density targeting). */
 const BOT_SKILL: BotDifficulty = "hard";
 
-// Transcript-size cap (avoids a 413 at settle). The eventual /settle POST ships one
-// ~0.55 KB entry per co-signed move, and the backend rejects bodies over 16 MB. During
-// autopilot we therefore settle the current tunnel and open a fresh one after this many
-// games — or this many entries, whichever comes first — so any single settle stays well
-// under the limit. At "hard", a game is ~160 entries (≤~224 on long ones), so the 24k-entry
-// byte safety (~13 MB) BINDS FIRST around ~150 games: it, not ROLLOVER_GAMES, is the real
-// ceiling under the 16 MB cap. Reaching the full 200-game cap would need a bigger body cap.
+// Transcript-size cap (avoids a 413 at settle). The /settle POST ships one fixed 250 B entry per
+// co-signed move (board state is hashed into the 32-byte stateHash, never in the message), and the
+// backend rejects bodies over 32 MB. During autopilot we settle the current tunnel and open a fresh
+// one after this many games — or this many entries, whichever comes first. At "hard", a game is
+// ~160 entries (≤~224 on long ones), so 200 games is ~32k entries (~8 MB); the 45k-entry backstop
+// (~11 MB) sits above that, so ROLLOVER_GAMES is the real ceiling as intended (it binds first).
 const ROLLOVER_GAMES = 200;
-const ROLLOVER_ENTRIES = 24_000;
+const ROLLOVER_ENTRIES = 45_000;
 
 export type BattleshipStatus =
   | "idle"
@@ -728,7 +727,7 @@ class BotSession {
 
   /** Periodic transcript-size cap (ADR-0002 §settle): during autopilot, after ROLLOVER_GAMES
    *  (or ROLLOVER_ENTRIES) on one tunnel, settle it and open a fresh one so any single /settle
-   *  payload stays well under the backend's 16 MB body limit. The old tunnel is self-contained
+   *  payload stays well under the backend's 32 MB body limit. The old tunnel is self-contained
    *  once its co-signed settlement + transcript are final, so we close it in the BACKGROUND and
    *  start the next tunnel without waiting on the on-chain close. Score + gamesCompletedSession
    *  carry across; only the transcript (and per-tunnel counters) reset. */

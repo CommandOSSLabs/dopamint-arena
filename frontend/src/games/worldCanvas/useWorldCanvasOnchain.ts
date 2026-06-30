@@ -138,7 +138,7 @@ const BOT_ACTIVITY_THROTTLE_MS = 1500;
  *  ("New game, clear canvas") rather than one endless stream. BOTH the on-chain and the
  *  demo tunnel bound at this cap; only the on-chain path also settles + anchors a root. */
 /** Default + hard MAX co-signed-move cap per game (the lobby slider tops out here). */
-export const MOVES_PER_GAME = 50_000;
+export const MOVES_PER_GAME = 100_000;
 /** Floor for the configurable cap — below this a game would settle near-instantly and
  *  re-open in a storm, so the lobby slider bottoms out here (not 0). */
 export const MIN_MOVES_PER_GAME = 1_000;

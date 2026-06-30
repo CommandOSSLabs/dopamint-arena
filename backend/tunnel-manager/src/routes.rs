@@ -311,7 +311,7 @@ pub(crate) async fn settle(
             // Archive the body verbatim — the blob IS the settle body. The in-browser verifier
             // (verifyTranscript) parses the same fixed-offset bytes and re-checks the
             // co-signed root against the recomputed Merkle root and the on-chain anchor.
-            let (blob_id, proof_url) = match state.walrus.upload_transcript(body.to_vec()).await {
+            let (blob_id, proof_url) = match state.walrus.upload_transcript(body).await {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::error!(%digest, error = %e, "walrus archival failed");
