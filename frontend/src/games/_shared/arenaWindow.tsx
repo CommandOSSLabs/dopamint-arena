@@ -9,6 +9,8 @@ interface ArenaPvp {
   view: unknown;
   reset: () => void;
   findMatch: () => void;
+  /** Back/Cancel: settles (publishes a half) when a match is live, else resets. See pvpMatchHook. */
+  leave: () => void;
 }
 
 export interface ArenaWindowSpec<Pvp extends ArenaPvp> {
@@ -38,7 +40,10 @@ export function createArenaWindow<Pvp extends ArenaPvp>(
 ): (props: GameWindowProps) => ReactNode {
   return function ArenaWindow({ windowId }: GameWindowProps): ReactNode {
     const pvp = spec.usePvp(windowId);
-    const backToLobby = () => pvp.reset();
+    // Back/Cancel: `leave` settles first when a match is live (publishes our half, then returns to the
+    // lobby); on the matching/error/settled screens it just resets. So an in-game Back no longer
+    // strands the staked tunnel — it publishes a settlement half on the way out.
+    const backToLobby = () => pvp.leave();
 
     const screen = (
       children: ReactNode,

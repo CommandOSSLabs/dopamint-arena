@@ -16,6 +16,9 @@ tunnel-quantum-poker = { path = "../../protocols/quantum-poker" }
 tunnel-bomb-it = { path = "../../protocols/bomb-it" }
 tunnel-cross = { path = "../../protocols/cross" }
 tunnel-world-canvas = { path = "../../protocols/world-canvas" }
+tunnel-tic-tac-toe = { path = "../../protocols/tic-tac-toe" }
+tunnel-caro = { path = "../../protocols/caro" }
+tunnel-battleship = { path = "../../protocols/battleship" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

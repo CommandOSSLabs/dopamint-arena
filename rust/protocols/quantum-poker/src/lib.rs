@@ -92,9 +92,9 @@ impl ResultReason {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SlotReveal {
-    #[serde(with = "wire_hex0x")]
+    #[serde(with = "tunnel_harness::wire_hex::bytes_0x")]
     pub value: Vec<u8>,
-    #[serde(with = "wire_hex0x")]
+    #[serde(with = "tunnel_harness::wire_hex::bytes_0x")]
     pub salt: Vec<u8>,
 }
 
@@ -151,7 +151,7 @@ pub struct PokerState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PokerMove {
     CommitSlots {
-        #[serde(with = "wire_hex0x_vec32")]
+        #[serde(with = "tunnel_harness::wire_hex::vec_array32_0x")]
         commitments: Vec<[u8; 32]>,
         #[serde(skip_serializing, skip_deserializing, default)]
         local_secrets: Option<Vec<SlotSecret>>,
@@ -161,88 +161,13 @@ pub enum PokerMove {
         reveals: Vec<SlotReveal>,
     },
     Bet {
-        #[serde(with = "wire_dec_u64")]
+        #[serde(with = "tunnel_harness::wire_hex::dec_u64")]
         amount: u64,
     },
     Check,
     Call,
     Fold,
     NextHand,
-}
-
-// Move-wire serde matching the TS `pokerMoveCodec` (sui-tunnel-ts/src/protocol/quantumPokerCodec.ts):
-// in a HUMAN-READABLE format (JSON — the cross-language relay wire), byte fields ride as `0x`-hex
-// strings and amounts as decimal strings, so a Rust bot and a browser co-sign byte-identical relayed
-// moves. In NON-human-readable formats (BCS/Postcard — the Rust-only bench codecs) the helpers fall
-// back to plain serde, so those wires stay byte-identical to the derived default — the bench's
-// codec-size comparison is unaffected. Scoped to the MOVE wire only; the co-signed `encode_state` is
-// a separate manual byte layout and is untouched.
-mod wire_hex0x {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    pub fn serialize<S: Serializer>(bytes: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
-        if s.is_human_readable() {
-            s.serialize_str(&format!("0x{}", hex::encode(bytes)))
-        } else {
-            bytes.serialize(s)
-        }
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        if d.is_human_readable() {
-            let s = String::deserialize(d)?;
-            hex::decode(s.strip_prefix("0x").unwrap_or(&s)).map_err(serde::de::Error::custom)
-        } else {
-            Vec::<u8>::deserialize(d)
-        }
-    }
-}
-
-mod wire_hex0x_vec32 {
-    use serde::ser::SerializeSeq;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    pub fn serialize<S: Serializer>(v: &Vec<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
-        if s.is_human_readable() {
-            let mut seq = s.serialize_seq(Some(v.len()))?;
-            for b in v {
-                seq.serialize_element(&format!("0x{}", hex::encode(b)))?;
-            }
-            seq.end()
-        } else {
-            v.serialize(s)
-        }
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<[u8; 32]>, D::Error> {
-        if d.is_human_readable() {
-            Vec::<String>::deserialize(d)?
-                .into_iter()
-                .map(|s| {
-                    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(&s))
-                        .map_err(serde::de::Error::custom)?;
-                    <[u8; 32]>::try_from(bytes.as_slice())
-                        .map_err(|_| serde::de::Error::custom("commitment must be 32 bytes"))
-                })
-                .collect()
-        } else {
-            Vec::<[u8; 32]>::deserialize(d)
-        }
-    }
-}
-
-mod wire_dec_u64 {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
-        if s.is_human_readable() {
-            s.serialize_str(&v.to_string())
-        } else {
-            v.serialize(s)
-        }
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
-        if d.is_human_readable() {
-            String::deserialize(d)?.parse().map_err(serde::de::Error::custom)
-        } else {
-            u64::deserialize(d)
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]

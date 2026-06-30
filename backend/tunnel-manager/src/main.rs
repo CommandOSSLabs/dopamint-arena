@@ -123,34 +123,14 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(750);
 
-    // Arena opener (ADR-0028): the real `SuiArenaOpener` (bot self-signs create + fund-seat-B) when
-    // a funded bot key + the on-chain package/coin/RPC are all configured; otherwise `Noop` so the
-    // allocate contract + FE deposit path still work for tests/dev without a funded bot. A failed
-    // build (bad key/package) is a hard error — the fleet can't open real tunnels without it.
-    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> =
-        match (&config.fleet_bot_key, &config.sui_rpc_url, &config.package_id) {
-            (Some(key), Some(rpc), Some(pkg)) => Arc::new(
-                crate::fleet::arena_opener::SuiArenaOpener::new(
-                    rpc.clone(),
-                    pkg,
-                    &config.coin_type,
-                    key,
-                )
-                .map_err(|e| anyhow::anyhow!("FLEET_BOT_KEY opener build: {e:#}"))?,
-            ),
-            _ => {
-                tracing::info!(
-                    "arena opener: Noop (set FLEET_BOT_KEY + SUI_RPC_URL + TUNNEL_PACKAGE_ID for real on-chain opens)"
-                );
-                Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
-            }
-        };
-
     // Funded seat-B wallet pool (PR #124): opened once if WALLET_POOL_ID is set, else None (bots use
-    // the placeholder identity). Same RPC + network as the settler; SUI_RPC_URL is already required.
-    let wallet_pool = crate::wallet::build(
+    // the placeholder identity, the off-chain/Noop dev path). Same RPC + network as the settler. A
+    // failed open (bad S3/passphrase/IAM) must NOT take down the whole backend — only arena opens lose
+    // funded seat-B; faucet/settle/stats stay up. Degrade to None (Noop opener) and log loudly.
+    let wallet_pool = match crate::wallet::build(
         config.wallet_pool_id.as_deref(),
         config.wallet_pool_access_value.as_deref(),
+        config.wallet_pool_funded_count,
         config.sui_rpc_url.as_deref().unwrap_or_default(),
         if config.sui_network == "mainnet" {
             wallet_pool::Network::Mainnet
@@ -158,7 +138,36 @@ async fn main() -> anyhow::Result<()> {
             wallet_pool::Network::Testnet
         },
     )
-    .await?;
+    .await
+    {
+        Ok(pool) => pool.map(Arc::new),
+        Err(e) => {
+            tracing::error!("wallet pool open failed — arena opener falls back to Noop/placeholder: {e:#}");
+            None
+        }
+    };
+
+    // Arena opener (ADR-0028): the real `SuiArenaOpener` — each open self-signs create + fund-seat-B as
+    // the checked-out pool member — when the wallet pool + on-chain package/RPC are configured; else
+    // `Noop` so the allocate contract + FE deposit path still work for tests/dev without the pool.
+    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> =
+        match (&wallet_pool, &config.sui_rpc_url, &config.package_id) {
+            (Some(pool), Some(rpc), Some(pkg)) => Arc::new(
+                crate::fleet::arena_opener::SuiArenaOpener::new(
+                    rpc.clone(),
+                    pkg,
+                    &config.coin_type,
+                    pool.clone(),
+                )
+                .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
+            ),
+            _ => {
+                tracing::info!(
+                    "arena opener: Noop (set WALLET_POOL_ID + SUI_RPC_URL + TUNNEL_PACKAGE_ID for real on-chain opens)"
+                );
+                Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
+            }
+        };
 
     let state: SharedState = Arc::new(AppState {
         control,

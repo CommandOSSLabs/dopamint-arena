@@ -12,8 +12,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
 use tunnel_blackjack::{Blackjack, BlackjackStrategy};
+use tunnel_battleship::{Battleship, BattleshipStrategy};
 use tunnel_bomb_it::{BombIt, BombItStrategy};
+use tunnel_caro::{CaroSeries, CaroSeriesStrategy, CaroStrength};
 use tunnel_cross::{Cross, CrossStrategy};
+use tunnel_tic_tac_toe::{TicTacToeDifficulty, TicTacToeSeries, TicTacToeSeriesStrategy};
 use tunnel_harness::{
     Balances, DriverOutcome, MoveStrategy, PartyDriver, Protocol, SeatParts, Signer,
     TranscriptRecorder, TunnelAnchor,
@@ -87,6 +90,34 @@ pub const WORLD_CANVAS: GameProfile = GameProfile {
     stake_each: 1,
 };
 
+/// Tic-Tac-Toe profile: stake 1, matching the FE `MultiGameTicTacToeProtocol` (`tic_tac_toe.series.v2`).
+/// The fleet drives the SERIES wrapper at max_games=1 (the FE const; the Rust series only state-matches
+/// the FE at 1 game — it omits the FE's per-game opener alternation). Move `salt` is bare-hex JSON
+/// (verified golden); encode_state/name match.
+pub const TIC_TAC_TOE: GameProfile = GameProfile {
+    game_id: "tic_tac_toe",
+    stake_each: 1,
+};
+
+/// Caro (gomoku) profile: stake 1, matching the FE `MultiGameCaroProtocol` (`caro.series.v2`), series
+/// max_games=1. Board size is PINNED to the FE canonical 15 in [`play_caro`] (the FE carries size in
+/// its matchmaking key; the arena path joins by match id, so the bot must hardcode the same size).
+pub const CARO: GameProfile = GameProfile {
+    game_id: "caro",
+    stake_each: 1,
+};
+
+/// Battleship profile: stake 1 (FE `STAKE_SHIFT`=1), `battleship.v1` (merkle commit-reveal). Move-wire
+/// fixed to the FE codec (bare-hex root/salt/proof, `isShip`) — verified golden; encode_state matches.
+pub const BATTLESHIP: GameProfile = GameProfile {
+    game_id: "battleship",
+    stake_each: 1,
+};
+
+/// Caro's pinned board size — the FE canonical (`PvpScene` default). The arena path can't negotiate
+/// it (joins by match id), so both the bot and the FE arena consumer must use this exact size.
+const CARO_BOARD_SIZE: usize = 15;
+
 /// Look up the [`GameProfile`] for a game id, or `None` if the fleet has no wired profile for it.
 /// The arena allocate path uses this to find the per-seat stake for the opener (ADR-0028); adding a
 /// game is a new `const` here + an arm in [`play_game`]'s dispatch.
@@ -97,6 +128,9 @@ pub fn profile_for(game: &str) -> Option<GameProfile> {
         "bomb_it" => Some(BOMB_IT),
         "chicken_cross" => Some(CHICKEN_CROSS),
         "world_canvas" => Some(WORLD_CANVAS),
+        "tic_tac_toe" => Some(TIC_TAC_TOE),
+        "caro" => Some(CARO),
+        "battleship" => Some(BATTLESHIP),
         _ => None,
     }
 }
@@ -364,6 +398,98 @@ where
         WorldCanvasStroke,
         WorldCanvasStrokeStrategy::new(fleet_seed(role)),
         &WORLD_CANVAS,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
+    )
+    .await
+}
+
+/// Tic-Tac-Toe: drives the SERIES wrapper at max_games=1 (FE parity) with the `Fast` heuristic bot.
+pub async fn play_tic_tac_toe<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<TicTacToeSeries as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    let protocol = TicTacToeSeries::new(1, TIC_TAC_TOE.stake_each)
+        .map_err(|e| anyhow!("ttt series: {e:?}"))?;
+    let strategy = TicTacToeSeriesStrategy::new(TicTacToeDifficulty::Fast, fleet_seed(role) as u32);
+    play_match(
+        protocol, strategy, &TIC_TAC_TOE, &info, channel, anchor, signer, recorder,
+    )
+    .await
+}
+
+/// Caro (gomoku): series wrapper, max_games=1, board size pinned to [`CARO_BOARD_SIZE`] (FE canonical).
+pub async fn play_caro<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<CaroSeries as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    let protocol = CaroSeries::new(1, CARO_BOARD_SIZE, CARO.stake_each)
+        .map_err(|e| anyhow!("caro series: {e:?}"))?;
+    // Weak = the easiest/most-random caro bot (depth-1 lookahead, 0.85 best-move prob vs Strong's
+    // depth-2/0.95) so a human opponent can actually win.
+    let strategy =
+        CaroSeriesStrategy::with_seed(1, CARO_BOARD_SIZE, CaroStrength::Weak, fleet_seed(role))
+            .map_err(|e| anyhow!("caro strategy: {e:?}"))?;
+    play_match(
+        protocol, strategy, &CARO, &info, channel, anchor, signer, recorder,
+    )
+    .await
+}
+
+/// Battleship: `battleship.v1` merkle commit-reveal, basic-AI deterministic fleet (hunt/target).
+pub async fn play_battleship<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<Battleship as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        Battleship::new(BATTLESHIP.stake_each),
+        BattleshipStrategy::new(fleet_seed(role)),
+        &BATTLESHIP,
         &info,
         channel,
         anchor,

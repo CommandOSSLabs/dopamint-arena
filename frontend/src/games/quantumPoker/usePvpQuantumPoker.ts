@@ -46,8 +46,7 @@ import {
 import { enterArena, type MakeUserParty } from "../../onchain/arenaEnter";
 import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
 import {
-  getArenaEntry,
-  clearArenaEntry,
+  consumeArenaEntry,
   subscribeArena,
 } from "../../onchain/arenaAllocationStore";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
@@ -1117,14 +1116,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // double-entry; only enters from idle (never clobbers a resumed match).
   const arenaEnteredRef = useRef(false);
   useEffect(() => {
-    const tryEnter = () => {
-      if (arenaEnteredRef.current) return;
-      const entry = getArenaEntry(ARENA_GAME_ID);
-      if (!entry || status !== "idle") return;
-      arenaEnteredRef.current = true;
-      clearArenaEntry(ARENA_GAME_ID); // consume so a window remount can't re-enter a closed match
-      enterArenaMatch(entry.allocation, entry.keypair);
-    };
+    const tryEnter = () =>
+      consumeArenaEntry(
+        ARENA_GAME_ID,
+        arenaEnteredRef,
+        () => status === "idle",
+        enterArenaMatch,
+      );
     tryEnter();
     return subscribeArena(tryEnter);
   }, [enterArenaMatch, status]);

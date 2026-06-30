@@ -109,6 +109,21 @@ if (cfg.enokiApiKey) {
   enokiApiKeySecretArn = secret.arn;
 }
 
+// Wallet-pool passphrase (PR #124): same secret-config => Secrets Manager => ECS `secrets` path.
+// Absent => the backend can't open the pool and the arena opener degrades to Noop (no funded seat-B).
+let walletPoolAccessSecretArn: pulumi.Output<string> | undefined;
+if (cfg.walletPoolAccessValue) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-wallet-pool-access`,
+    { description: `Wallet pool passphrase for dopamint-${cfg.environment}` },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-wallet-pool-access-version`,
+    { secretId: secret.id, secretString: cfg.walletPoolAccessValue },
+  );
+  walletPoolAccessSecretArn = secret.arn;
+}
+
 const ecr = createEcr(`dopamint-${cfg.environment}`);
 const ecs = createEcs(`dopamint-${cfg.environment}`);
 
@@ -144,7 +159,10 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
     ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
     ...(faucetAdminTokenSecretArn ? [faucetAdminTokenSecretArn] : []),
     ...(enokiApiKeySecretArn ? [enokiApiKeySecretArn] : []),
+    ...(walletPoolAccessSecretArn ? [walletPoolAccessSecretArn] : []),
   ],
+  // Task role gets s3:GetObject on the wallet-pool bucket (the running container reads the blob).
+  walletPoolS3Bucket: "dev-env-dopamint-wallet-pool",
 });
 
 const cache = createCache(`dopamint-${cfg.environment}`, {
@@ -165,6 +183,7 @@ const backend = createBackend({
   settlerKeySecretArn,
   faucetAdminTokenSecretArn,
   enokiApiKeySecretArn,
+  walletPoolAccessSecretArn,
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,
   ollamaImageTag: cfg.ollamaImageTag,

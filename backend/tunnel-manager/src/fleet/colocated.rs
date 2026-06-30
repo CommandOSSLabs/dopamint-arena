@@ -10,9 +10,10 @@
 //! [`BusRelayTransport`] with the [`crate::fleet::arena_anchor::RelayBridgedAnchor`] to settlement) →
 //! unregister (freeing its in-flight slot).
 //!
-//! The remaining on-chain dependency is the funded bot account pool: [`bot_address`] is a
-//! deterministic placeholder until a durable/KMS key store lands, and the real seat-B funding lives
-//! in the [`crate::fleet::arena_opener`] (still `Noop` by default). The off-chain spine — routing,
+//! The remaining on-chain dependency is seat-B funding: when the wallet pool is configured, a bot
+//! draws a funded address from it ([`reserve_or_spawn`]) and the [`crate::fleet::arena_opener`]
+//! `SuiArenaOpener` creates + funds seat B; unconfigured, [`bot_address`] is a deterministic
+//! placeholder and the opener is `Noop` (the dev/test default). The off-chain spine — routing,
 //! co-signed play, settle-half emission — is complete here.
 
 use std::time::Duration;
@@ -23,7 +24,8 @@ use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
-    play_blackjack_v2, play_bomb_it, play_chicken_cross, play_quantum_poker, play_world_canvas,
+    play_battleship, play_blackjack_v2, play_bomb_it, play_caro, play_chicken_cross,
+    play_quantum_poker, play_tic_tac_toe, play_world_canvas,
 };
 use fleet_core::signer_durable::DurableSigner;
 use fleet_core::Role;
@@ -39,7 +41,8 @@ use crate::state::SharedState;
 const ARENA_JOIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Per-spawn sequence for distinct on-demand bot identities — a fixed index would make every
-/// concurrent match of a game share one seat-B address. A placeholder until the wallet-pool checkout.
+/// concurrent match of a game share one seat-B address. The fallback when no wallet pool is
+/// configured; with a pool, the checked-out address is used instead.
 static ONDEMAND_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// On-demand seat-fill: spawn a bot for `game` and reserve it, if the per-game in-flight count is
@@ -112,9 +115,9 @@ struct OpenedMatch {
     tunnel_id: String,
 }
 
-/// Register one warm bot into the pool with a fresh per-match ephemeral key — the WS-client (warm)
-/// registration path, exercised by the tests that pin the `reserve`/`notify` contract on-demand
-/// seat-fill also relies on. Returns the pool id, the match co-signing key, and the ctrl receiver.
+/// Test-only: register a bot directly into the pool with a fresh per-match ephemeral key, to pin the
+/// `reserve`/`notify` contract that on-demand seat-fill also relies on. Returns the pool id, the match
+/// co-signing key, and the ctrl receiver.
 #[cfg(test)]
 fn register_bot(
     state: &SharedState,
@@ -169,8 +172,8 @@ async fn await_open(ctrl_rx: &mut mpsc::UnboundedReceiver<FleetServerMsg>) -> Op
 /// The connection + transport + anchor are game-agnostic; only the protocol+strategy differ, so the
 /// final step dispatches on `game` ([`play_game`]). `InMemoryTranscriptRecorder` is required (not
 /// `Null`): the anchor settles v2 (`close_cooperative_with_root`), so the driver needs the transcript
-/// to compute the root the FE also signs. Any error re-registers the bot, so a failed match never
-/// drains the warm pool.
+/// to compute the root the FE also signs. On any error the caller ([`run_on_demand`]) unregisters the
+/// bot, freeing its in-flight slot.
 async fn play_arena_match(
     state: &SharedState,
     game: &str,
@@ -238,62 +241,30 @@ async fn play_game(
     match_key: DurableSigner,
     opponent_wallet: &str,
 ) -> anyhow::Result<u64> {
+    // Every game drives the identical party-B seam (Role::B + a fresh transcript recorder); only the
+    // protocol's `play_*` entry differs, so each game is one arm.
+    macro_rules! play {
+        ($play_fn:ident) => {
+            $play_fn(
+                channel,
+                anchor,
+                match_key,
+                Role::B,
+                opponent_wallet,
+                InMemoryTranscriptRecorder::new(),
+            )
+            .await?
+        };
+    }
     let outcome = match game {
-        "blackjack" => {
-            play_blackjack_v2(
-                channel,
-                anchor,
-                match_key,
-                Role::B,
-                opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
-            )
-            .await?
-        }
-        "quantum_poker" => {
-            play_quantum_poker(
-                channel,
-                anchor,
-                match_key,
-                Role::B,
-                opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
-            )
-            .await?
-        }
-        "bomb_it" => {
-            play_bomb_it(
-                channel,
-                anchor,
-                match_key,
-                Role::B,
-                opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
-            )
-            .await?
-        }
-        "chicken_cross" => {
-            play_chicken_cross(
-                channel,
-                anchor,
-                match_key,
-                Role::B,
-                opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
-            )
-            .await?
-        }
-        "world_canvas" => {
-            play_world_canvas(
-                channel,
-                anchor,
-                match_key,
-                Role::B,
-                opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
-            )
-            .await?
-        }
+        "blackjack" => play!(play_blackjack_v2),
+        "quantum_poker" => play!(play_quantum_poker),
+        "bomb_it" => play!(play_bomb_it),
+        "chicken_cross" => play!(play_chicken_cross),
+        "world_canvas" => play!(play_world_canvas),
+        "tic_tac_toe" => play!(play_tic_tac_toe),
+        "caro" => play!(play_caro),
+        "battleship" => play!(play_battleship),
         other => bail!("co-located fleet has no protocol wired for game '{other}'"),
     };
     Ok(outcome.moves)

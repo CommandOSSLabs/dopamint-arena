@@ -42,3 +42,22 @@ export function subscribeArena(cb: () => void): () => void {
     subscribers.delete(cb);
   };
 }
+
+/** Consume this game's pending arena entry and enter the match — once, and only from idle. The shared
+ *  one-shot invariant every PvP hook's auto-enter effect runs: the `entered` ref guards re-entry and
+ *  `clearArenaEntry` consumes the entry so a window remount can't re-enter a closed match. `isIdle` and
+ *  `enter` are read live, so each hook keeps ownership of its own reactivity (when to re-attempt): pass
+ *  a `useRef`'s object, the current idle check, and the hook's `enterArenaMatch` call. */
+export function consumeArenaEntry(
+  arenaGameId: string,
+  entered: { current: boolean },
+  isIdle: () => boolean,
+  enter: (allocation: ArenaAllocation, keypair: KeyPair) => void,
+): void {
+  if (entered.current || !isIdle()) return;
+  const entry = entries.get(arenaGameId);
+  if (!entry) return;
+  entered.current = true;
+  clearArenaEntry(arenaGameId);
+  enter(entry.allocation, entry.keypair);
+}

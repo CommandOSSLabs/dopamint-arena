@@ -1,9 +1,10 @@
-// Centralized batched arena entry (ADR-0028, the "one PTB → all games explode" flow, PR #95 pattern).
+// Centralized batched arena entry (ADR-0028, the "one PTB → games explode" flow, PR #95 pattern).
 // Mounted ONCE inside the wallet provider (renders nothing). On wallet connect it reserves a fleet bot
-// for every arena-wired game and deposits ALL their seat-A stakes in a SINGLE batched PTB (the shared
-// `TunnelOpenBatcher` coalesces them — one wallet popup), then publishes each {allocation, keypair} to
-// the arena store. Each game window's PvP hook reads its entry and auto-`enterArenaMatch`es — so the
-// whole arena comes alive from one signature, no per-game "Play" click.
+// and deposits seat A for each arena game whose window is OPEN (per the persisted desktop layout) in a
+// SINGLE batched PTB (the shared `TunnelOpenBatcher` coalesces them — one wallet popup), then publishes
+// each {allocation, keypair} to the arena store. Each game window's PvP hook reads its entry and
+// auto-`enterArenaMatch`es — so the open floor comes alive from one signature, no per-game "Play" click.
+// Scoping to open windows avoids funding tunnels + reserving bots for games the user isn't showing.
 import { useEffect, useRef } from "react";
 import {
   useCurrentAccount,
@@ -11,7 +12,7 @@ import {
   useSuiClient,
 } from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
-import { list } from "@/games/registry";
+import { list, arenaGameIdForModule } from "@/games/registry";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { configureSharedBatcher } from "@/onchain/sharedTunnelOpenBatcher";
 import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
@@ -20,11 +21,46 @@ import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { resolveBackendUrl } from "@/backend/controlPlane";
 import type { PartyOnchain } from "@/onchain/tunnelTx";
 
-/** Every arena-wired game's backend id (set via `GameModule.arenaGameId`). Empty ⇒ nothing to batch. */
-function arenaGameIds(): string[] {
-  return list()
-    .map((m) => m.arenaGameId)
-    .filter((id): id is string => !!id);
+/** localStorage key the desktop persists its window layout under (`Desktop.tsx`). */
+const LAYOUT_KEY = "mtps.desktop.layouts.v1";
+
+/** Module ids that currently have an open window, read from the persisted desktop layout. Instance
+ *  ids (`module#uuid`, for duplicate windows) are stripped to the base module id. Empty ⇒ unknown
+ *  (e.g. a brand-new load before the desktop persisted) → the caller falls back to all arena games so
+ *  the floor still comes alive. Defensive: any parse error ⇒ empty (treated as unknown). */
+function openModuleIds(): Set<string> {
+  try {
+    if (typeof localStorage === "undefined") return new Set();
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (!raw) return new Set();
+    const layouts = JSON.parse(raw) as Record<string, Array<{ id?: unknown }>>;
+    const ids = new Set<string>();
+    for (const items of Object.values(layouts)) {
+      if (!Array.isArray(items)) continue;
+      for (const it of items) {
+        if (typeof it?.id === "string") ids.add(it.id.split("#")[0]);
+      }
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
+/** Arena ids to deposit at connect: the DEFAULT (first) arena id of each arena-wired module whose
+ *  window is open (per the persisted layout) — so we only fund games the user is actually showing,
+ *  not all 8. A multi-protocol module (tic-tac-toe + caro) lists its default variant FIRST (caro), so
+ *  only that one is funded, not both. When the open set is unknown (empty localStorage) we fall back
+ *  to every arena module's default, so a fresh desktop still comes alive. */
+function arenaGameIdsForOpenWindows(): string[] {
+  const open = openModuleIds();
+  const ids: string[] = [];
+  for (const m of list()) {
+    if (open.size > 0 && !open.has(m.id)) continue; // scope to open windows once we know them
+    const arenaId = arenaGameIdForModule(m.id);
+    if (arenaId) ids.push(arenaId);
+  }
+  return ids;
 }
 
 export function useArenaAutoEnter(): void {
@@ -38,7 +74,7 @@ export function useArenaAutoEnter(): void {
 
   useEffect(() => {
     if (!owner) return;
-    const games = arenaGameIds();
+    const games = arenaGameIdsForOpenWindows();
     if (games.length === 0) return;
     if (entered.current === owner) return;
     entered.current = owner;

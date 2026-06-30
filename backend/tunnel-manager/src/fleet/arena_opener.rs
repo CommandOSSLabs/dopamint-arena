@@ -26,7 +26,7 @@ use sui_sdk_types::{
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
 use crate::sui::{
-    canonical_address, dryrun_effects_ok, load_ed25519, CHAIN_DIGEST_B58, CLOCK_ADDRESS, GAS_BUDGET,
+    canonical_address, dryrun_effects_ok, CHAIN_DIGEST_B58, CLOCK_ADDRESS, GAS_BUDGET,
 };
 
 /// What the fleet puts on-chain before the user joins: a tunnel naming the user party A and the bot
@@ -102,25 +102,25 @@ pub struct SuiArenaOpener {
     rpc_url: String,
     package_id: Address,
     coin_type: TypeTag,
-    signer: Ed25519PrivateKey,
-    sender: Address,
+    /// Funded seat-B wallet pool (PR #124). Each open self-signs as the member whose address is party
+    /// B (`req.bot_address`), so funding + signing spread across the pool instead of one shared key —
+    /// removing the single-account nonce bottleneck at the connect spike. Replaces `FLEET_BOT_KEY`.
+    wallet_pool: std::sync::Arc<crate::wallet::WalletPoolSource>,
     /// Per-open nonce for the `ValidDuring` FundsWithdrawal replay guard. Same seed rationale as
     /// `SuiSettler::sponsor_nonce` (two restarts in one epoch shouldn't collide).
     open_nonce: AtomicU32,
 }
 
 impl SuiArenaOpener {
-    /// Build from the shared tunnel config + a funded bot key. The per-seat stake is passed per
-    /// request (`ArenaOpenRequest::stake_each`), so one opener serves all games. The bot key is the
-    /// funded party-B pool (one key for now; per-game keys are a later hardening).
+    /// Build from the shared tunnel config + the funded wallet pool. The per-seat stake is passed per
+    /// request (`ArenaOpenRequest::stake_each`), so one opener serves all games; the seat-B signer is
+    /// resolved per open from `req.bot_address` (the checked-out pool member).
     pub fn new(
         rpc_url: String,
         package_id: &str,
         coin_type: &str,
-        bot_key_b64: &str,
+        wallet_pool: std::sync::Arc<crate::wallet::WalletPoolSource>,
     ) -> anyhow::Result<Self> {
-        let signer = load_ed25519(bot_key_b64)?;
-        let sender = signer.public_key().derive_address();
         let nonce_seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| (d.as_secs() as u32).wrapping_mul(2_654_435_761).wrapping_add(d.subsec_nanos()))
@@ -130,8 +130,7 @@ impl SuiArenaOpener {
             rpc_url,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
-            signer,
-            sender,
+            wallet_pool,
             open_nonce: AtomicU32::new(nonce_seed),
         })
     }
@@ -221,12 +220,16 @@ impl SuiArenaOpener {
 impl ArenaTunnelOpener for SuiArenaOpener {
     async fn open_and_fund_seat_b(&self, req: ArenaOpenRequest<'_>) -> anyhow::Result<String> {
         let user_addr = Address::from_str(&canonical_address(req.user_address)?).context("bad user address")?;
-        // The bot's on-chain address is THIS opener's signer's address (self.sender) — it signs +
-        // sends the create+deposit PTB, and `deposit_party_b` asserts `ctx.sender() ==
-        // tunnel.party_b.address`. The `bot_address` in the request is the fleet's placeholder
-        // (a deterministic hash, not a real key) until per-bot KMS keys land; override it with the
-        // real funded address so the tunnel's party_b matches the sender.
-        let bot_addr = self.sender;
+        // Seat B is the pool member the fleet checked out (`req.bot_address`). Resolve its key from the
+        // funded pool and self-sign the create+deposit PTB as that member: it is both sender and gas
+        // owner (SIP-58), and `deposit_party_b` asserts `ctx.sender() == tunnel.party_b.address`, so
+        // sender == party_b == this member. Funding thus spreads across the pool, not one shared key.
+        let signer = Ed25519PrivateKey::new(
+            self.wallet_pool
+                .keypair_for_address(req.bot_address)?
+                .secret_key(),
+        );
+        let bot_addr = signer.public_key().derive_address();
         let user_pk = hex::decode(req.user_eph_pubkey.trim_start_matches("0x"))
             .context("user ephemeral pubkey hex")?;
         let bot_pk = hex::decode(req.bot_eph_pubkey.trim_start_matches("0x"))
@@ -241,7 +244,7 @@ impl ArenaTunnelOpener for SuiArenaOpener {
         let tx = build_arena_open_tx(
             self.package_id,
             self.coin_type.clone(),
-            self.sender,
+            bot_addr,
             user_addr,
             user_pk,
             bot_addr,
@@ -256,8 +259,7 @@ impl ArenaTunnelOpener for SuiArenaOpener {
         // Verify-before-execute: a dry-run failure (bad pubkeys, insufficient bot balance, wrong
         // package) surfaces here before the bot pays gas.
         self.dry_run(&tx).await?;
-        let sig = self
-            .signer
+        let sig = signer
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign arena open tx: {e}"))?;
         self.execute_and_read_tunnel(&tx, &sig).await

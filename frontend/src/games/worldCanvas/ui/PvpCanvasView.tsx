@@ -287,6 +287,17 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
           title="Jump to where your opponent is painting"
           onClick={() => viewParticipant("opp")}
         />
+        <span style={ctlDividerStyle} />
+        {/* Leave: publish our settlement half and return to the lobby — the staying seat / grace
+            path submits the close, so leaving the shared canvas settles instead of stranding it. */}
+        <button
+          type="button"
+          onClick={m.leave}
+          title="Publish your half and leave the canvas"
+          style={ctlButtonStyle}
+        >
+          Leave
+        </button>
       </div>
     </div>
   );

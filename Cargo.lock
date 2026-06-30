@@ -2942,12 +2942,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tunnel-battleship",
  "tunnel-blackjack",
  "tunnel-bomb-it",
+ "tunnel-caro",
  "tunnel-core",
  "tunnel-cross",
  "tunnel-harness",
  "tunnel-quantum-poker",
+ "tunnel-tic-tac-toe",
  "tunnel-world-canvas",
 ]
 
@@ -8238,6 +8241,7 @@ name = "tunnel-battleship"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tokio",
  "tunnel-core",
  "tunnel-harness",
@@ -8273,6 +8277,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "tokio",
  "tunnel-core",
  "tunnel-harness",
@@ -8379,7 +8384,6 @@ dependencies = [
 name = "tunnel-quantum-poker"
 version = "0.1.0"
 dependencies = [
- "hex",
  "serde",
  "serde_json",
  "tokio",

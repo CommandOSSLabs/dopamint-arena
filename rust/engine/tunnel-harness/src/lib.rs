@@ -10,6 +10,8 @@ pub use types::{Balances, MoveStrategyContext, Seat, TunnelContext};
 pub mod protocol;
 pub use protocol::Protocol;
 
+pub mod wire_hex;
+
 pub mod frame;
 pub use frame::{
     AckFrame, BcsFrameCodec, CodecError, FrameCodec, JsonFrameCodec, MoveFrame, PostcardFrameCodec,

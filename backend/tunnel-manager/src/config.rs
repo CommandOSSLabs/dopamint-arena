@@ -59,10 +59,6 @@ pub struct Config {
     /// inert; only an explicit `FLEET_COLOCATED_COUNT > 0` (+ `FLEET_COLOCATED_GAMES`) spawns them.
     pub colocated_fleet_count: u32,
     pub colocated_fleet_games: Vec<String>,
-    /// Funded party-B bot key (base64 ed25519), the account that pre-creates + funds seat B at
-    /// allocate (ADR-0028). Unset = `NoopArenaOpener` (the allocate contract works but no real
-    /// tunnel is created — for tests/dev without a funded bot). Required for a real on-chain flow.
-    pub fleet_bot_key: Option<String>,
     /// Funded seat-B wallet pool (PR #124). When `WALLET_POOL_ID` is set, on-demand arena bots draw
     /// their on-chain address from the pool instead of the deterministic placeholder; the S3 bucket +
     /// AWS creds are read straight from the environment by `S3WalletPoolStore::from_env`. Unset =>
@@ -70,6 +66,10 @@ pub struct Config {
     pub wallet_pool_id: Option<String>,
     /// Access value (passphrase) that unlocks the wallet pool. Required when `wallet_pool_id` is set.
     pub wallet_pool_access_value: Option<String>,
+    /// Number of FUNDED members in the pool (`WALLET_POOL_FUNDED_COUNT`). The 1M pool is only partially
+    /// funded as a prefix `1..=N`; seat-B checkout round-robins inside it so a bot never draws an empty
+    /// wallet. Unset => the whole pool (with a warning). Raise it as more members are funded.
+    pub wallet_pool_funded_count: Option<u32>,
 }
 
 impl Config {
@@ -135,9 +135,11 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
-            fleet_bot_key: opt("FLEET_BOT_KEY"),
             wallet_pool_id: opt("WALLET_POOL_ID"),
             wallet_pool_access_value: opt("WALLET_POOL_ACCESS_VALUE"),
+            wallet_pool_funded_count: std::env::var("WALLET_POOL_FUNDED_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok()),
         })
     }
 

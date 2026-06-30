@@ -51,8 +51,7 @@ import {
 import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
 import type { ArenaAllocation } from "@/onchain/arenaEnter";
 import {
-  getArenaEntry,
-  clearArenaEntry,
+  consumeArenaEntry,
   subscribeArena,
 } from "@/onchain/arenaAllocationStore";
 import type { TunnelOpenRequest } from "@/onchain/tunnelOpenBatcher";
@@ -136,6 +135,9 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   setIntent: (intent: Intent) => void;
   toggleAuto: () => void;
   reset: () => void;
+  /** Back / leave mid-match: publish this seat's settlement half, then return to the lobby. Unlike
+   *  `reset` (a bare disconnect), this settles — the staying seat / grace path submits the close. */
+  leave: () => void;
 }
 
 interface PvpDeps {
@@ -215,6 +217,10 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   private detachResume: (() => void) | null = null;
   private proposeTimer: ReturnType<typeof setTimeout> | null = null;
   private intent: Intent;
+  /** Set per live match to `settle(publishOnly)`; lets `leave()` publish a half outside `onConfirmed`. */
+  private settleNow: ((publishOnly: boolean) => void) | null = null;
+  /** True between `leave()` and teardown, so the publish-only settle returns to the lobby once sent. */
+  private leaving = false;
 
   constructor(private readonly spec: PvpMatchSpec<State, Move, Intent, View>) {
     this.intent = spec.idleIntent;
@@ -344,7 +350,25 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.status = "idle";
     this.view = null;
     this.error = null;
+    this.settleNow = null;
+    this.leaving = false;
     this.emit();
+  };
+
+  /** Back / leave: publish our signed settlement half, then return to the lobby. The staying seat (or
+   *  the 1h grace path) submits the cooperative close — so leaving never blocks on a peer that won't
+   *  co-sign an early end (the fleet bot only settles at its own terminal). With no live match
+   *  (idle/funding/settled/error) it just resets. */
+  leave = () => {
+    if (
+      this.settleNow &&
+      (this.status === "playing" || this.status === "settling")
+    ) {
+      this.leaving = true;
+      this.settleNow(true); // publishOnly → emit our half, then reset() to the lobby on resolve
+    } else {
+      this.reset();
+    }
   };
 
   dispose = () => {
@@ -394,35 +418,48 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     const proto = this.spec.makeProtocol();
     const transcript = new Transcript(dt.tunnelId);
     let settling = false;
+    // One cooperative close, guarded to fire once. A natural terminal does the full half-exchange +
+    // submit; `publishOnly` (leaver/Back) publishes our half and returns to the lobby. Stored on
+    // `settleNow` so `leave()` can drive the publish-only path from outside this closure.
+    const triggerSettle = (publishOnly: boolean) => {
+      if (settling) return;
+      settling = true;
+      this.status = "settling";
+      this.emit();
+      void settle(
+        dt,
+        info.role,
+        channel,
+        waitPeer,
+        reads,
+        signExec as never,
+        sponsoredSignExec as never,
+        dt.tunnelId,
+        transcript,
+        getControlPlaneClient(),
+        this.spec.game,
+        coinType,
+        publishOnly,
+      ).then(
+        () => {
+          this.status = "settled";
+          this.emit();
+          // Leaver: our half is on the wire — return to the lobby (the staying seat / grace submits).
+          if (this.leaving) this.reset();
+        },
+        (e) => {
+          // Never trap a leaver on a failed publish — drop to the lobby; grace is the settlement floor.
+          if (this.leaving) this.reset();
+          else this.fail(e);
+        },
+      );
+    };
+    this.settleNow = triggerSettle;
     dt.onConfirmed = (u) => {
       transcript.append(u);
       this.sync();
       this.maybePropose();
-      if (proto.isTerminal(dt.state) && !settling) {
-        settling = true;
-        this.status = "settling";
-        this.emit();
-        void settle(
-          dt,
-          info.role,
-          channel,
-          waitPeer,
-          reads,
-          signExec as never,
-          sponsoredSignExec as never,
-          dt.tunnelId,
-          transcript,
-          getControlPlaneClient(),
-          this.spec.game,
-          coinType,
-        ).then(
-          () => {
-            this.status = "settled";
-            this.emit();
-          },
-          (e) => this.fail(e),
-        );
-      }
+      if (proto.isTerminal(dt.state)) triggerSettle(false);
     };
 
     this.detachResume?.();
@@ -807,23 +844,22 @@ export function createPvpMatchHook<
 
     const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
 
-    // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this game's seat A
-    // in the one batched PTB and published {allocation, keypair} to the arena store. Consume it once
-    // and auto-`enterArenaMatch` — the window comes alive without a "Play" click. Only for arena-wired
-    // games (spec.arenaGameId set), only from idle (never clobbers a resumed match); `clearArenaEntry`
-    // consumes the entry so a window remount can't re-enter a closed match.
+    // Centralized batched entry (ADR-0028): the arena orchestrator deposited this game's seat A (at
+    // connect, or when its window was added) and published {allocation, keypair} to the arena store.
+    // Consume it once and auto-`enterArenaMatch` — the window comes alive without a "Play" click. Only
+    // for arena-wired games (spec.arenaGameId set), only from idle (never clobbers a resumed match);
+    // `clearArenaEntry` consumes the entry so a window remount can't re-enter a closed match.
     const arenaEntered = useRef(false);
     useEffect(() => {
       const arenaGameId = spec.arenaGameId;
       if (!arenaGameId) return;
-      const tryEnter = () => {
-        if (arenaEntered.current) return;
-        const entry = getArenaEntry(arenaGameId);
-        if (!entry || session.getSnapshot().status !== "idle") return;
-        arenaEntered.current = true;
-        clearArenaEntry(arenaGameId);
-        session.enterArenaMatch(entry.allocation, entry.keypair);
-      };
+      const tryEnter = () =>
+        consumeArenaEntry(
+          arenaGameId,
+          arenaEntered,
+          () => session.getSnapshot().status === "idle",
+          (allocation, keypair) => session.enterArenaMatch(allocation, keypair),
+        );
       tryEnter();
       return subscribeArena(tryEnter);
     }, [session, snap.status]);
@@ -840,6 +876,7 @@ export function createPvpMatchHook<
       setIntent: session.setIntent,
       toggleAuto: session.toggleAuto,
       reset: session.reset,
+      leave: session.leave,
     };
   };
 }
@@ -866,6 +903,10 @@ async function settle<State, Move>(
   cp: ReturnType<typeof getControlPlaneClient>,
   game: string,
   coinType: string | undefined,
+  // Leaver (Back): publish our signed half and return WITHOUT waiting on the peer or submitting. The
+  // staying seat collects this half and submits, or the 1h grace path closes — so leaving never blocks
+  // on an opponent who won't co-sign an early end (e.g. the fleet bot, which only settles at terminal).
+  publishOnly = false,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -879,6 +920,7 @@ async function settle<State, Move>(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
+  if (publishOnly) return;
   const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
     "settleHalf",
   );

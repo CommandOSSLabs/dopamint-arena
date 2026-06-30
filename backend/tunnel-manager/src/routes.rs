@@ -282,8 +282,9 @@ pub(crate) struct ArenaAllocateResponse {
     allocations: Vec<ArenaAllocation>,
 }
 
-/// Reserve one warm bot per requested game and notify each reserved bot that it's matched to this
-/// user. Games with no free bot are omitted, so the frontend opens only what it actually got.
+/// Spawn + reserve one on-demand bot per requested game and notify each that it's matched to this
+/// user. Games at the per-game cap (or with no `GameProfile`, or whose open fails) are omitted, so the
+/// frontend opens only what it actually got.
 pub(crate) async fn arena_allocate(
     State(state): State<SharedState>,
     Json(req): Json<ArenaAllocateRequest>,
@@ -292,9 +293,9 @@ pub(crate) async fn arena_allocate(
     state.fleet.reclaim_expired(now);
     let mut allocations = Vec::new();
     for game in &req.games {
-        // On-demand seat-fill (ADR-0027): reserve a warm bot if one is registered (a `/v1/fleet`
-        // WS-client bot), else spawn a co-located bot up to the per-game cap. A game outside the
-        // served set gets cap 0 — the `FLEET_COLOCATED_GAMES` trusted-subset gate.
+        // On-demand seat-fill (ADR-0027): spawn a co-located bot for this game and reserve it, up to
+        // the per-game cap. A game outside the served set gets cap 0 — the `FLEET_COLOCATED_GAMES`
+        // trusted-subset gate.
         let cap = if state.arena_fleet_games.contains(&game.id) {
             state.arena_fleet_count
         } else {
@@ -302,7 +303,7 @@ pub(crate) async fn arena_allocate(
         };
         let Some(r) = crate::fleet::colocated::reserve_or_spawn(&state, &game.id, now, cap).await
         else {
-            tracing::debug!(game = %game.id, "arena allocate: no bot (warm pool empty, at/over cap)");
+            tracing::debug!(game = %game.id, "arena allocate: no bot (at/over per-game cap)");
             continue;
         };
         // ADR-0028: the fleet pre-creates the tunnel + funds seat B now, so the user joins with a

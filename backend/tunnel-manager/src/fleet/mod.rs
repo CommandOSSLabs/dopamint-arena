@@ -1,16 +1,15 @@
-//! Warm server-side bot pool for arena allocation (ADR-0023).
+//! Server-side arena bot pool (ADR-0023). Per-instance and in-memory; allocation is local to one
+//! backend instance, mirroring ADR-0011's deferred queue sharding (cross-instance HA is deferred).
 //!
-//! Per-instance and in-memory: a fleet bot holds a `/v1/fleet` WebSocket to ONE backend
-//! instance, so allocation is local to that instance. Cross-instance (HA) allocation is
-//! deferred, mirroring ADR-0011's deferred queue sharding — the demo runs the fleet against a
-//! single instance.
+//! Production seat-fill is **pure on-demand and co-located** ([`crate::fleet::colocated`]):
+//! `arena_allocate` spawns one bot per allocated seat and reserves it via [`BotPool::reserve_under_cap`]
+//! (the per-game in-flight count is the admission ceiling). The bot awaits `Opened`, deposits its seat,
+//! plays over the relay bus, then unregisters — one match per spawn. An unclaimed reservation (user
+//! never opened) is reclaimed after `RESERVATION_TTL_MS`.
 //!
-//! Reservation is O(1) pop-from-free, never FIFO: a bot is always available, so the arena has no
-//! matchmaking hold (unlike the human `/v1/mp` path). Lifecycle: a bot `register`s (free) → is
-//! `reserve`d for a user (notified `Reserved`) → the user opens the tunnel and the backend pushes
-//! `Opened` → the bot deposits its seat and plays. **One match per registration**: the bot
-//! disconnects when the match ends, which `unregister`s it; an unclaimed reservation (user never
-//! opened) is reclaimed after `RESERVATION_TTL_MS`.
+//! The warm-pool path ([`BotPool::register`]/[`BotPool::reserve`] over a `/v1/fleet` WebSocket) is
+//! retained only for the reserve/notify contract tests; its production caller was removed with the WS
+//! fleet. Reservation is O(1), never FIFO, so the arena has no matchmaking hold (unlike `/v1/mp`).
 
 pub mod arena_anchor;
 pub mod arena_opener;

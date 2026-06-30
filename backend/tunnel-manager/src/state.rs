@@ -28,24 +28,27 @@ pub struct AppState {
     pub pairing: crate::stats_counter::MatchPairingMetrics,
     /// Shared transcript for the bot-vs-bot live chat feed, fanned out via SSE.
     pub chat: crate::chat_store::ChatTranscriptStore,
-    /// Warm fleet-bot pool for arena one-signature allocation (ADR-0026). Per-instance, in-memory.
+    /// Arena bot pool for one-signature allocation (ADR-0026), backing on-demand co-located seat-fill.
+    /// Per-instance, in-memory.
     pub fleet: crate::fleet::BotPool,
-    /// On-chain tunnel-open seam for the arena 1a flow (ADR-0028): the fleet creates + funds seat B
-    /// at allocate so the user's open is deposit-only. `Noop` until the boss's `SuiAnchor` lands.
+    /// On-chain tunnel-open seam for the arena 1a flow (ADR-0028): the fleet creates + funds seat B at
+    /// allocate so the user's open is deposit-only. `SuiArenaOpener` when the wallet pool + on-chain
+    /// config are set, else `Noop` (dev/test).
     pub arena_opener: std::sync::Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener>,
     /// Binds the user's WS conn to its co-located bot's bus conn for an allocated arena match
     /// (ADR-0027/0028), completing the `MatchRecord` so the relay can route between them.
     pub arena: crate::fleet::arena_rendezvous::ArenaRendezvous,
     /// Max co-located bots spawned on demand per game (config `FLEET_COLOCATED_COUNT`). The arena
     /// admission ceiling: `reserve_or_spawn` spawns up to this many concurrent matches per game, then
-    /// returns nothing. `0` (default) serves no co-located bots — only pre-registered warm ones.
+    /// returns nothing. `0` (default) serves no co-located bots.
     pub arena_fleet_count: u32,
     /// Games the co-located fleet serves (config `FLEET_COLOCATED_GAMES`). A game not in this set has
     /// an effective cap of 0 — the trusted-subset gate (a `play_game` arm may exist before it's live).
     pub arena_fleet_games: std::collections::HashSet<String>,
     /// Funded seat-B identity source (PR #124): `Some` when `WALLET_POOL_ID` is configured, else
-    /// `None` (on-demand bots use the deterministic placeholder address).
-    pub wallet_pool: Option<crate::wallet::WalletPoolSource>,
+    /// `None` (on-demand bots use the deterministic placeholder address). Shared (`Arc`) with the
+    /// `SuiArenaOpener`, which signs each open as the checked-out member.
+    pub wallet_pool: Option<std::sync::Arc<crate::wallet::WalletPoolSource>>,
     /// Whole-token MTPS one public-faucet pull mints (config `FAUCET_USER_AMOUNT`).
     pub faucet_user_amount: u64,
     /// Whole-token MTPS the internal faucet mints by default (config `FAUCET_INTERNAL_AMOUNT`);
