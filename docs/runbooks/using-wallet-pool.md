@@ -334,6 +334,69 @@ pool.set_enabled(SetEnabledOptions {
 pool.delete(&pool_id).await?;
 ```
 
+## Online pool (S3 storage)
+
+The offline pool writes blobs to a local directory. The **online** pool is
+identical in every feature — it stores the same encrypted blobs in an Amazon S3
+bucket so any caller with AWS credentials can reach a shared pool. Only the
+storage location differs.
+
+### Configure access
+
+Create (or have provisioned) a private S3 bucket and an IAM user whose policy is
+scoped to that bucket (`s3:ListBucket` + `s3:GetObject`/`PutObject`/`DeleteObject`
+on `…/*`). Then export:
+
+```bash
+export AWS_ACCESS_KEY_ID=…
+export AWS_SECRET_ACCESS_KEY=…
+export AWS_REGION=us-east-1
+export WALLET_POOL_S3_BUCKET=dev-env-dopamint-wallet-pool
+# optional: namespace objects under a prefix
+export WALLET_POOL_S3_PREFIX=
+```
+
+The blobs are AES-256-GCM encrypted via the pool `access_value`, so the wallet
+keys stay safe even if the bucket is compromised. A leaked access key still
+exposes the plaintext address index and the ability to overwrite blobs — scope
+the IAM policy down and rotate keys if needed.
+
+### Build and wire it
+
+```bash
+cargo build -p wallet-pool-s3
+```
+
+Construct the store from the environment and inject it exactly like the file
+store — every other operation is unchanged:
+
+```rust
+use std::sync::Arc;
+use wallet_pool::rpc::ReqwestRpc;
+use wallet_pool::WalletPool;
+use wallet_pool_s3::S3WalletPoolStore;
+
+let rpc = Arc::new(ReqwestRpc::new("https://fullnode.testnet.sui.io:443"));
+let store = Arc::new(S3WalletPoolStore::from_env().await?);
+let pool = WalletPool::new(store, rpc);
+
+// create / open / fund / sign / list / export / import / delete work exactly
+// as in the offline examples above.
+```
+
+Run the included demo to confirm the round-trip:
+
+```bash
+cargo run -p wallet-pool-s3 --example s3_demo
+```
+
+### Concurrency
+
+Writes are last-writer-wins, same as the file store: if two processes mutate the
+same pool at once, one overwrites the other. Enable S3 bucket versioning (already
+on for `dev-env-dopamint-wallet-pool`) to recover from an accidental clobber.
+Safe concurrent mutation via S3 conditional writes is not yet wired.
+
 ## Security notes
 
 - The `access_value` decrypts every member key. Treat it like a seed phrase: store it in a secrets manager, never commit it, and never log it.
