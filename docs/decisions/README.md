@@ -97,6 +97,12 @@ _why_ survives after the people involved have moved on.
   pre-creates + funds seat B at allocate; the user joins with a deposit-only PTB
   (Active on one signature). Supersedes the open mechanics of 0026; makes
   `allocate` on-chain-bound, so it **must** be authenticated + rate-limited.
+- [0029](0029-async-queued-batched-settlement.md) — `/settle` becomes
+  asynchronous: validate → durable Redis stream → 202; a worker pool coalesces up
+  to K `close_cooperative_with_root` calls into one PTB (retry-by-split), behind a
+  governed AIMD+backoff RPC layer; confirmation via the `explorer:proofs` event.
+  Stays on the public fullnode, living under its ceiling by raising S. Scales the
+  0020 provenance layer; batches settles the way 0019 batches opens.
 
 ### Backend-local decisions
 
