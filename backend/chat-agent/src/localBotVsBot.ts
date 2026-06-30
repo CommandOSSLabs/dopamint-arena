@@ -15,10 +15,10 @@ const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434";
 const MODEL = process.env.CHAT_OLLAMA_MODEL ?? "qwen2.5:1.5b";
 const WS_URL = `${resolveMpWsUrl(BACKEND_URL)}/v1/mp`;
 
-const chatSession = await registerChatSession(
-  BACKEND_URL,
-  "0x0000000000000000000000000000000000000000000000000000000000000000",
-);
+const chatUserAddress =
+  "0x0000000000000000000000000000000000000000000000000000000000000000";
+const chatSession = await registerChatSession(BACKEND_URL, chatUserAddress);
+const refreshChatSession = () => registerChatSession(BACKEND_URL, chatUserAddress);
 const ollama = new OllamaBackendClient(
   OLLAMA_URL,
   BACKEND_URL,
@@ -31,6 +31,7 @@ const ollama = new OllamaBackendClient(
   },
   chatSession.sessionId,
   chatSession.statsToken,
+  refreshChatSession,
 );
 
 let n = 0;

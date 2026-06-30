@@ -44,6 +44,10 @@ export async function main(): Promise<void> {
   console.log("[chat-agent] registering chat session...");
   const chatSession = await register();
   console.log("[chat-agent] chat session:", chatSession.sessionId);
+  // When cfg.ollamaUrl is empty, chat/topic are routed through the authenticated
+  // backend proxy, which is the right default for deployed stacks (Ollama is a
+  // localhost sidecar inside the backend ECS task). Set OLLAMA_URL only for
+  // local dev when you want the agent to call Ollama directly.
   const ollama = new OllamaBackendClient(
     cfg.ollamaUrl,
     cfg.backendUrl,

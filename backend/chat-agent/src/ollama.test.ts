@@ -205,3 +205,58 @@ test("registerChatSessionWithRetry gives up after the attempt budget", async () 
     /registerChatSession failed: 502/,
   );
 });
+
+test("chat routes through the authenticated backend proxy when ollamaUrl is empty", async () => {
+  let postedUrl = "";
+  let postedHeaders: Record<string, string> = {};
+  let postedBody = "";
+  mockFetch((url, body, init) => {
+    postedUrl = url;
+    postedHeaders = (init?.headers as Record<string, string>) ?? {};
+    postedBody = body;
+    return new Response(JSON.stringify({ content: "proxy reply" }), {
+      status: 200,
+    });
+  });
+  const client = new OllamaBackendClient(
+    "",
+    "http://localhost:8080",
+    "qwen2.5:1.5b",
+    SPEED,
+    "sess_test",
+    "tok_test",
+  );
+  assert.equal(client.usesDirectOllama(), false);
+  const reply = await client.chat([{ role: "user", content: "hi" }]);
+  assert.equal(reply, "proxy reply");
+  assert.equal(postedUrl, "http://localhost:8080/v1/sessions/sess_test/chat");
+  assert.equal(postedHeaders["Authorization"], "Bearer tok_test");
+  assert.equal(JSON.parse(postedBody).messages.length, 1);
+});
+
+test("topic routes through the authenticated backend proxy when ollamaUrl is empty", async () => {
+  let postedUrl = "";
+  let postedHeaders: Record<string, string> = {};
+  mockFetch((url, _body, init) => {
+    postedUrl = url;
+    postedHeaders = (init?.headers as Record<string, string>) ?? {};
+    return new Response(JSON.stringify({ topic: "proxy topic" }), {
+      status: 200,
+    });
+  });
+  const client = new OllamaBackendClient(
+    "",
+    "http://localhost:8080",
+    "qwen2.5:1.5b",
+    SPEED,
+    "sess_test",
+    "tok_test",
+  );
+  const topic = await client.topic();
+  assert.equal(topic, "proxy topic");
+  assert.equal(
+    postedUrl,
+    "http://localhost:8080/v1/sessions/sess_test/chat/topic",
+  );
+  assert.equal(postedHeaders["Authorization"], "Bearer tok_test");
+});

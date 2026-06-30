@@ -109,9 +109,11 @@ export async function registerChatSessionWithRetry(
  * is kept resident (`keep_alive`) so rounds don't pay a reload tax.
  */
 export class OllamaBackendClient {
-  /** Direct Ollama base URL, e.g. http://localhost:11434. */
-  readonly ollamaUrl: string;
-  /** Chat backend base URL, used only for transcript publishing. */
+  /** Direct Ollama base URL, e.g. http://localhost:11434. When empty,
+   * chat/topic go through the authenticated backend proxy instead. */
+  private readonly ollamaUrl: string;
+  /** Chat backend base URL, used for transcript publishing and as the
+   * authenticated proxy when `ollamaUrl` is empty. */
   readonly backendUrl: string;
   readonly model: string;
   private readonly speed: OllamaSpeedOptions;
@@ -143,41 +145,89 @@ export class OllamaBackendClient {
     this.refreshCredentials = refreshCredentials;
   }
 
+  /** True when the client calls Ollama directly instead of the backend proxy. */
+  usesDirectOllama(): boolean {
+    return this.ollamaUrl.length > 0;
+  }
+
   /** Non-streaming chat completion; output length is capped by `num_predict`. */
   async chat(messages: OllamaMessage[]): Promise<string> {
-    return this.complete(messages, this.speed.numPredict);
+    if (this.usesDirectOllama()) {
+      return this.completeDirect(messages, this.speed.numPredict);
+    }
+    return this.proxyChat(messages);
   }
 
   /** One-shot topic generation with a tight token cap. */
   async topic(): Promise<string> {
-    const topic = await this.complete(
-      [{ role: "user", content: TOPIC_PROMPT }],
-      this.speed.topicPredict,
-    );
+    if (this.usesDirectOllama()) {
+      const topic = await this.completeDirect(
+        [{ role: "user", content: TOPIC_PROMPT }],
+        this.speed.topicPredict,
+      );
+      return topic.trim();
+    }
+    const topic = await this.proxyTopic();
     return topic.trim();
   }
 
-  private async complete(
+  private async completeDirect(
     messages: OllamaMessage[],
     numPredict: number,
   ): Promise<string> {
     const url = `${this.ollamaUrl}/api/chat`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          stream: false,
+          options: { num_predict: numPredict, num_ctx: this.speed.numCtx },
+          keep_alive: this.speed.keepAlive,
+        }),
+      });
+      if (!resp.ok) {
+        throw new Error(`ollama returned ${resp.status}: ${await resp.text()}`);
+      }
+      const data = (await resp.json()) as OllamaChatResponse;
+      return data.message.content;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async proxyChat(messages: OllamaMessage[]): Promise<string> {
+    const url = `${this.backendUrl}/v1/sessions/${this.sessionId}/chat`;
     const resp = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: false,
-        options: { num_predict: numPredict, num_ctx: this.speed.numCtx },
-        keep_alive: this.speed.keepAlive,
-      }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.statsToken}`,
+      },
+      body: JSON.stringify({ messages }),
     });
     if (!resp.ok) {
-      throw new Error(`ollama returned ${resp.status}: ${await resp.text()}`);
+      throw new Error(`chat proxy failed: ${resp.status}: ${await resp.text()}`);
     }
-    const data = (await resp.json()) as OllamaChatResponse;
-    return data.message.content;
+    const data = (await resp.json()) as { content: string };
+    return data.content;
+  }
+
+  private async proxyTopic(): Promise<string> {
+    const url = `${this.backendUrl}/v1/sessions/${this.sessionId}/chat/topic`;
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.statsToken}` },
+    });
+    if (!resp.ok) {
+      throw new Error(`topic proxy failed: ${resp.status}: ${await resp.text()}`);
+    }
+    const data = (await resp.json()) as { topic: string };
+    return data.topic;
   }
 
   async publishTranscript(
