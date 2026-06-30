@@ -6,9 +6,11 @@
 //! (last-writer-wins). Authentication uses the AWS SDK default credential chain
 //! — set `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` and go.
 
+use async_trait::async_trait;
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use wallet_pool::error::{Error, Result};
-use wallet_pool::store::validate_id;
+use wallet_pool::store::{validate_id, WalletPoolStore};
 
 /// S3-backed [`wallet_pool::store::WalletPoolStore`].
 ///
@@ -56,5 +58,63 @@ impl S3WalletPoolStore {
     pub fn key(&self, id: &str) -> Result<String> {
         validate_id(id)?;
         Ok(format!("{}{id}.json", self.prefix))
+    }
+}
+
+#[async_trait]
+impl WalletPoolStore for S3WalletPoolStore {
+    async fn read(&self, id: &str) -> Result<Option<Vec<u8>>> {
+        let key = self.key(id)?;
+        match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(out) => {
+                let bytes = out
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|e| Error::Store(format!("s3 read body failed: {e}")))?
+                    .into_bytes();
+                Ok(Some(bytes.to_vec()))
+            }
+            Err(err) => {
+                let not_found = matches!(
+                    err.as_service_error(),
+                    Some(aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey(_))
+                );
+                if not_found {
+                    Ok(None)
+                } else {
+                    Err(Error::Store(format!("s3 read failed: {err}")))
+                }
+            }
+        }
+    }
+
+    async fn write(&self, id: &str, bytes: &[u8]) -> Result<()> {
+        let key = self.key(id)?;
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(ByteStream::from(bytes.to_vec()))
+            .send()
+            .await
+            .map_err(|e| Error::Store(format!("s3 write failed: {e}")))?;
+        Ok(())
+    }
+
+    // `list` and `delete` are implemented in Task 3.
+    async fn list(&self) -> Result<Vec<String>> {
+        Err(Error::Store("s3 list not yet implemented".into()))
+    }
+
+    async fn delete(&self, _id: &str) -> Result<()> {
+        Err(Error::Store("s3 delete not yet implemented".into()))
     }
 }
