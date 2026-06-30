@@ -12,7 +12,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest
     outputs:
       ci: ${{ steps.filter.outputs.ci }}
       ts_sdk: ${{ steps.filter.outputs.ts_sdk }}
