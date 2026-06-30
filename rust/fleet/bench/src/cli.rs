@@ -164,7 +164,7 @@ always: force ANSI color\n  \
 never: disable ANSI color\n\n\
 Anchor values:\n  \
 memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n  \
-sui-sponsored: Sui Tunnel anchor for sponsored open and backend settlement\n  \
+sui-sponsored: Sui Tunnel anchor for Sui-backed open and settlement flows\n  \
 sui: backwards-compatible alias for sui-sponsored\n\n\
 Sui sponsored anchor flags:\n  \
 --sui-rpc-url: Sui gRPC endpoint used to execute/read sponsored open transactions\n  \
@@ -172,7 +172,10 @@ Sui sponsored anchor flags:\n  \
 --sui-package-id: published Sui Tunnel package id containing tunnel::create_and_fund<T>\n  \
 --sui-tunnel-coin-type: Move coin type for Tunnel<T>; defaults to 0x2::sui::SUI\n  \
 --sui-open-mode sponsored-create-and-fund: build tunnel::create_and_fund<T> PTBs for opens\n  \
+--sui-open-mode direct-create-and-fund: build the same open PTBs and pay gas from the funder wallet\n  \
 --sui-settle-mode backend-settle: submit the TS-compatible settlement body to /v1/tunnels/{id}/settle\n  \
+--sui-settle-mode sponsored-settle: build the settlement PTB locally and execute it through the sponsor API\n  \
+--sui-settle-mode direct-settle: build the settlement PTB locally and pay gas from the funder wallet\n  \
 --sui-funding-profile single-funder: one bech32 Sui private key funds both seats\n  \
 --sui-funder-priv-key: bech32 Sui private key required by single-funder\n  \
 --sui-stake-source coin-object: split both stakes from --sui-funder-stake-coin-id\n  \
@@ -189,11 +192,15 @@ struct Raw {
     /// Number of Tokio runtime worker threads, or `auto` to use available CPU parallelism.
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     workers: String,
-    /// Time-bounded run length in seconds. May also be bounded by tunnel completion.
+    /// Duration for auto steady-state runs. Fixed tunnel counts drain to completion.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
     /// Tunnel concurrency: `auto` (duration-led steady state) or a fixed count.
-    #[arg(long = "tunnel-concurrency", default_value = "auto", value_name = "auto|N")]
+    #[arg(
+        long = "tunnel-concurrency",
+        default_value = "auto",
+        value_name = "auto|N"
+    )]
     tunnel_concurrency: String,
     /// Show the per-move latency breakdown (per-frame transport send/recv rows).
     #[arg(long = "per-move-latency", default_value_t = false)]
@@ -270,14 +277,14 @@ struct Raw {
     #[arg(
         long = "sui-open-mode",
         default_value = "sponsored-create-and-fund",
-        value_name = "sponsored-create-and-fund"
+        value_name = "sponsored-create-and-fund|direct-create-and-fund"
     )]
     sui_open_mode: String,
     /// Sui settle flow used by --anchor sui-sponsored.
     #[arg(
         long = "sui-settle-mode",
         default_value = "backend-settle",
-        value_name = "backend-settle"
+        value_name = "backend-settle|sponsored-settle|direct-settle"
     )]
     sui_settle_mode: String,
     /// Funding profile used by --anchor sui-sponsored.
@@ -469,17 +476,20 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         }
         let open_mode = match raw.sui_open_mode.as_str() {
             "sponsored-create-and-fund" => SuiOpenMode::SponsoredCreateAndFund,
+            "direct-create-and-fund" => SuiOpenMode::DirectCreateAndFund,
             other => {
                 return Err(format!(
-                    "--sui-open-mode must be sponsored-create-and-fund, got {other}"
+                    "--sui-open-mode must be sponsored-create-and-fund or direct-create-and-fund, got {other}"
                 ))
             }
         };
         let settle_mode = match raw.sui_settle_mode.as_str() {
             "backend-settle" => SuiSettleMode::BackendSettle,
+            "sponsored-settle" => SuiSettleMode::SponsoredSettle,
+            "direct-settle" => SuiSettleMode::DirectSettle,
             other => {
                 return Err(format!(
-                    "--sui-settle-mode must be backend-settle, got {other}"
+                    "--sui-settle-mode must be backend-settle, sponsored-settle, or direct-settle, got {other}"
                 ))
             }
         };
@@ -830,6 +840,58 @@ mod tests {
     }
 
     #[test]
+    fn anchor_sui_accepts_direct_and_sponsored_composition_modes() {
+        let o = parse_v(&[
+            "--anchor",
+            "sui-sponsored",
+            "--transcript-recorder",
+            "memory",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0xcoin",
+            "--sui-open-mode",
+            "direct-create-and-fund",
+            "--sui-settle-mode",
+            "sponsored-settle",
+        ])
+        .unwrap();
+
+        let sui = o.sui_anchor.expect("sui config");
+        assert_eq!(sui.open_mode, SuiOpenMode::DirectCreateAndFund);
+        assert_eq!(sui.settle_mode, SuiSettleMode::SponsoredSettle);
+
+        let direct_settle = parse_v(&[
+            "--anchor",
+            "sui-sponsored",
+            "--transcript-recorder",
+            "memory",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0xcoin",
+            "--sui-settle-mode",
+            "direct-settle",
+        ])
+        .unwrap();
+
+        let sui = direct_settle.sui_anchor.expect("sui config");
+        assert_eq!(sui.settle_mode, SuiSettleMode::DirectSettle);
+    }
+
+    #[test]
     fn anchor_sui_alias_lowers_to_sui_sponsored_for_backwards_compatibility() {
         let o = parse_v(&[
             "--anchor",
@@ -872,7 +934,7 @@ mod tests {
         ];
 
         let mut bad_open = base.to_vec();
-        bad_open.extend(["--sui-open-mode", "direct-create-and-fund"]);
+        bad_open.extend(["--sui-open-mode", "backend-create-and-fund"]);
         let err = parse_v(&bad_open).unwrap_err();
         assert!(err.contains("sui-open-mode"), "{err}");
 
@@ -1136,7 +1198,10 @@ mod tests {
 
     #[test]
     fn tunnel_concurrency_auto_is_default_and_numbers_pin_a_burst() {
-        assert_eq!(parse_v(&[]).unwrap().tunnel_concurrency, ConcurrencyMode::Auto);
+        assert_eq!(
+            parse_v(&[]).unwrap().tunnel_concurrency,
+            ConcurrencyMode::Auto
+        );
         assert_eq!(
             parse_v(&["--tunnel-concurrency", "auto"])
                 .unwrap()
@@ -1227,10 +1292,13 @@ mod tests {
         assert!(help.contains("--anchor <memory|sui-sponsored>"));
         assert!(help.contains("  sui-sponsored: Sui Tunnel anchor"));
         assert!(help.contains("  sui: backwards-compatible alias for sui-sponsored"));
-        assert!(help.contains("--sui-open-mode <sponsored-create-and-fund>"));
+        assert!(help.contains("--sui-open-mode <sponsored-create-and-fund|direct-create-and-fund>"));
         assert!(help.contains("sponsored-create-and-fund: build tunnel::create_and_fund<T>"));
-        assert!(help.contains("--sui-settle-mode <backend-settle>"));
+        assert!(help.contains("direct-create-and-fund: build the same open PTBs"));
+        assert!(help.contains("--sui-settle-mode <backend-settle|sponsored-settle|direct-settle>"));
         assert!(help.contains("backend-settle: submit the TS-compatible settlement body"));
+        assert!(help.contains("sponsored-settle: build the settlement PTB locally"));
+        assert!(help.contains("direct-settle: build the settlement PTB locally"));
         assert!(help.contains("--sui-funding-profile <single-funder>"));
         assert!(help.contains("single-funder: one bech32 Sui private key funds both seats"));
         assert!(help.contains("--sui-stake-source <coin-object|address-balance>"));
