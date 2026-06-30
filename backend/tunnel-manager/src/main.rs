@@ -136,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
         fleet: crate::fleet::BotPool::default(),
         // Noop until SuiAnchor (ADR-0025): the arena 1a open seam is wired but does no chain work.
         arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+        arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());

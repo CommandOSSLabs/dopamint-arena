@@ -33,6 +33,9 @@ pub struct AppState {
     /// On-chain tunnel-open seam for the arena 1a flow (ADR-0025): the fleet creates + funds seat B
     /// at allocate so the user's open is deposit-only. `Noop` until the boss's `SuiAnchor` lands.
     pub arena_opener: std::sync::Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener>,
+    /// Binds the user's WS conn to its co-located bot's bus conn for an allocated arena match
+    /// (ADR-0024/0025), completing the `MatchRecord` so the relay can route between them.
+    pub arena: crate::fleet::arena_rendezvous::ArenaRendezvous,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -67,6 +70,7 @@ impl AppState {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         })
     }
 }

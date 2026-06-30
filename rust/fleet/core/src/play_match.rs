@@ -35,10 +35,14 @@ pub struct GameProfile {
     pub stake_each: u64,
 }
 
-/// Blackjack profile: stake 100 each. (No host — see [`GameProfile`].)
+/// Blackjack profile: stake 1 MTPS each (10^9 smallest units, 9 decimals), the per-seat stake every
+/// arena game uses. The FE arena tile must stake the same so the off-chain initial balances match
+/// (a divergent stake would break co-signing). Match length is bounded by the protocol's `ROUND_CAP`,
+/// not the bankroll, so a large stake stays well under the per-tunnel move budget. (No host — see
+/// [`GameProfile`].)
 pub const BLACKJACK: GameProfile = GameProfile {
     game_id: "blackjack",
-    stake_each: 100,
+    stake_each: 1_000_000_000,
 };
 
 /// Drive one match of ANY game to completion over the relay, on the merged `PartyDriver`.

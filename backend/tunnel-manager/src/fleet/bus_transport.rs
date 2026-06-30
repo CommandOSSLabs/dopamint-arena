@@ -8,10 +8,11 @@
 //! reuses the SAME [`crate::mp::ws::relay_to_other`] the human WS path uses, so move-counting and
 //! seat routing stay in exact parity — the relay still never signs.
 //!
-//! The co-located [`crate::fleet::colocated`] supervisor constructs these to play arena matches.
-//! `conn_ref`/`await_match` round out the connection's mirror of the WS `RelayConnection` for the
-//! queue/`MatchRecord` association the boss completes; they're test-exercised but not yet on the
-//! arena runtime path, hence their item-level dead-code allows.
+//! The co-located [`crate::fleet::colocated`] supervisor constructs these to play arena matches:
+//! `conn_ref` is bound into the match by the [`crate::fleet::arena_rendezvous`], and `send_to_peer`
+//! carries the bot's settle half for [`crate::fleet::arena_anchor`]. `await_match` mirrors the WS
+//! `RelayConnection`'s queue entry for the matchmaking path (the arena flow gets its match via the
+//! `BotPool` `Opened` push instead), so it stays test-exercised behind an item-level dead-code allow.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,9 +59,8 @@ impl BusRelayConnection {
         })
     }
 
-    /// This connection's `ConnRef` — the seat identity to put in a `MatchRecord`. The arena
-    /// scaffold doesn't wire the record yet (no human conn captured); the boss's association uses it.
-    #[allow(dead_code)]
+    /// This connection's `ConnRef` — the seat identity the arena rendezvous binds into the match's
+    /// `MatchRecord` (party B) so `relay_to_other` can route the human seat's frames here.
     pub fn conn_ref(&self) -> ConnRef {
         ConnRef {
             instance_id: self.state.bus.instance_id().to_owned(),
@@ -104,6 +104,29 @@ impl BusRelayConnection {
     async fn recv_server_msg(&self) -> Option<ServerMsg> {
         let text = self.inbound.lock().await.recv().await?;
         serde_json::from_str(&text).ok()
+    }
+
+    /// Route a control payload to this match's peer over the SAME [`crate::mp::ws::relay_to_other`]
+    /// path game frames take. Used by [`crate::fleet::arena_anchor::RelayBridgedAnchor`] to emit the
+    /// bot's settle half — the bot is not the frame transport but must still speak the peer protocol
+    /// to the human seat. A fresh routing cache is fine: the anchor emits once per match, and a
+    /// control payload (`t != "frame"`) is never counted as a move, exactly like a human peer's.
+    pub async fn send_to_peer(&self, match_id: &str, payload: String) {
+        let mut cache = HashMap::new();
+        crate::mp::ws::relay_to_other(
+            &self.state,
+            &mut cache,
+            self.conn_id,
+            match_id.to_owned(),
+            payload,
+        )
+        .await;
+    }
+
+    /// Next raw inbound frame text, for tests that assert what the relay routed to this conn.
+    #[cfg(test)]
+    pub async fn recv_for_test(&self) -> Option<String> {
+        self.inbound.lock().await.recv().await
     }
 }
 

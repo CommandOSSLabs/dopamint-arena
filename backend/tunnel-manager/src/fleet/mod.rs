@@ -12,7 +12,9 @@
 //! disconnects when the match ends, which `unregister`s it; an unclaimed reservation (user never
 //! opened) is reclaimed after `RESERVATION_TTL_MS`.
 
+pub mod arena_anchor;
 pub mod arena_opener;
+pub mod arena_rendezvous;
 pub mod bus_transport;
 pub mod colocated;
 pub mod ws;

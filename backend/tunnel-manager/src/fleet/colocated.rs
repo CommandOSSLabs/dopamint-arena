@@ -3,27 +3,40 @@
 //! Removing the per-bot socket is the capacity swap at 5000 CCU.
 //!
 //! **Inert by default** (`FLEET_COLOCATED_COUNT=0`) — the deployed relay spawns nothing unless
-//! explicitly enabled. **Scaffold, not yet live end to end:** the bot lifecycle here is real —
-//! register a warm bot (so `arena_allocate` reserves it exactly like a WS bot) → await `Reserved`
-//! then `Opened` on its pool ctrl channel → play → re-register. The PLAY step drives the genuine
-//! `fleet_core::play_match` over a [`BusRelayTransport`], but with [`NoopAnchor`] and without the
-//! arena flow yet creating a `MatchRecord` (it captures no human relay `ConnRef`), so an enabled
-//! bot parks awaiting bus frames. The boss's `SuiAnchor` (real seat-B deposit + settle) plus the
-//! `MatchRecord`/human-conn association make it live; this module is where both plug in.
+//! explicitly enabled. Each bot loops: register a warm bot (so `arena_allocate` reserves it exactly
+//! like a WS bot) → await `Reserved` then `Opened` on its pool ctrl channel → [`play_arena_match`]
+//! (bind to the [`crate::fleet::arena_rendezvous`], wait for the human to join, then drive
+//! `fleet_core::play_blackjack` over a [`BusRelayTransport`] with the
+//! [`crate::fleet::arena_anchor::RelayBridgedAnchor`] to settlement) → re-register.
+//!
+//! The remaining on-chain dependency is the funded bot account pool: [`bot_address`] is a
+//! deterministic placeholder until a durable/KMS key store lands, and the real seat-B funding lives
+//! in the [`crate::fleet::arena_opener`] (still `Noop` by default). The off-chain spine — routing,
+//! co-signed play, settle-half emission — is complete here.
 
 use std::time::Duration;
 
+use anyhow::bail;
 use tokio::sync::mpsc;
-use tunnel_harness::Signer;
+use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
 
+use fleet_core::match_channel::MatchChannel;
+use fleet_core::play_match::play_blackjack;
 use fleet_core::signer_durable::DurableSigner;
+use fleet_core::Role;
 
+use crate::fleet::arena_anchor::RelayBridgedAnchor;
 use crate::fleet::bus_transport::{BusRelayConnection, BusRelayTransport};
 use crate::fleet::{BotHandle, FleetServerMsg};
 use crate::state::SharedState;
 
 /// Backoff before a bot re-registers after a match, so a tight failure loop can't spin the pool.
 const REQUEUE_BACKOFF: Duration = Duration::from_secs(1);
+
+/// How long the bot waits for the user's browser to connect + `arena.join` after the tunnel opens,
+/// before giving up and re-registering. Generous: the user may sign the open then take a moment to
+/// land on the relay. The pool TTL is the backstop for a user who never opens at all.
+const ARENA_JOIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Spawn the co-located fleet if enabled. A no-op when `count == 0` or no games are listed, so the
 /// deployed relay stays inert unless explicitly turned on. Each (game × index) is one looping bot.
@@ -46,7 +59,7 @@ async fn run_bot(state: SharedState, game: String, idx: u32) {
     loop {
         let (bot_id, match_key, mut ctrl_rx) = register_bot(&state, &game, &address);
         if let Some(opened) = await_open(&mut ctrl_rx).await {
-            if let Err(e) = play_arena_match(&state, &opened, match_key).await {
+            if let Err(e) = play_arena_match(&state, &game, &opened, match_key).await {
                 tracing::debug!(%game, match_id = %opened.match_id, "co-located match ended: {e:#}");
             }
         }
@@ -61,9 +74,8 @@ async fn run_bot(state: SharedState, game: String, idx: u32) {
 struct OpenedMatch {
     match_id: String,
     opponent_wallet: String,
-    /// The on-chain tunnel the user opened. The `NoopAnchor` scaffold does not consume it (the
-    /// generic `play_match` re-derives a tunnel via the anchor); `SuiAnchor` + an arena-aware play
-    /// entry will deposit seat B into THIS tunnel instead.
+    /// The on-chain tunnel the fleet pre-created + funded seat B for at allocate (ADR-0025). The
+    /// [`RelayBridgedAnchor`] resolves THIS id in `open()` (no chain call) and settles against it.
     tunnel_id: String,
 }
 
@@ -112,34 +124,82 @@ async fn await_open(ctrl_rx: &mut mpsc::UnboundedReceiver<FleetServerMsg>) -> Op
     }
 }
 
-/// Establish the bus seam for one reserved+opened arena match, as seat B (the dealer).
+/// Play one reserved+opened arena match to settlement as party B (the dealer), over the relay bus.
 ///
-/// SCAFFOLD STUB — it does NOT yet play. Two pieces are missing and are the boss's to wire:
-///   1. **The play itself** needs `SuiAnchor` (deposit seat B into the user-opened tunnel + settle);
-///      `NoopAnchor` can't touch a real tunnel.
-///   2. **Routing**: the arena flow creates no `MatchRecord` and captures no human relay `ConnRef`,
-///      so nothing routes to this bot's `BusRelayConnection` yet.
+/// Sequence: register a virtual relay connection → bind it to the match and wait until the human
+/// also joins (so routing is live before our first frame, or the hello is dropped and the handshake
+/// deadlocks) → drive the merged `PartyDriver` over a [`BusRelayTransport`], with the
+/// [`RelayBridgedAnchor`] resolving the pre-created tunnel and emitting our settle half. The human FE
+/// pairs both halves and submits the cooperative close (`POST /settle`).
 ///
-/// It must also reconcile the open-flow: arena has the HUMAN open (funds seat A) and hands the bot
-/// `opened.tunnel_id` via `Opened`, whereas the generic `play_match` (`GameProfile{host:B}`) would
-/// have the BOT open — so the real entry threads `opened.tunnel_id` in rather than calling
-/// `anchor.open()`. Returning `Ok` here keeps an enabled bot cycling (register → reserve → open →
-/// here → re-register) instead of parking forever, so the warm pool never silently drains to empty.
+/// The connection + transport + anchor are game-agnostic; only the protocol+strategy differ, so the
+/// final step dispatches on `game` ([`play_game`]). `InMemoryTranscriptRecorder` is required (not
+/// `Null`): the anchor settles v2 (`close_cooperative_with_root`), so the driver needs the transcript
+/// to compute the root the FE also signs. Any error re-registers the bot, so a failed match never
+/// drains the warm pool.
 async fn play_arena_match(
     state: &SharedState,
+    game: &str,
     opened: &OpenedMatch,
-    _match_key: DurableSigner, // the per-match co-signing key the real (SuiAnchor) play will sign with
+    match_key: DurableSigner,
 ) -> anyhow::Result<()> {
-    // Register this bot's relay presence for the match (the transport the real play drives over).
     let conn = BusRelayConnection::register(state.clone());
-    let _arena_transport = BusRelayTransport::new(conn, opened.match_id.clone());
-    tracing::warn!(
+    let ready = state
+        .arena
+        .bind_bot(state, &opened.match_id, conn.conn_ref())
+        .await;
+    match tokio::time::timeout(ARENA_JOIN_TIMEOUT, ready).await {
+        Ok(Ok(())) => {} // user joined; the MatchRecord is live, routing works
+        Ok(Err(_)) => bail!(
+            "arena match {} vanished before the user joined",
+            opened.match_id
+        ),
+        Err(_) => {
+            state.arena.forget(&opened.match_id);
+            bail!("user did not join arena match {} in time", opened.match_id);
+        }
+    }
+
+    let transport = BusRelayTransport::new(conn.clone(), opened.match_id.clone());
+    let channel = MatchChannel::new(transport);
+    let anchor = RelayBridgedAnchor::new(opened.tunnel_id.clone(), conn, opened.match_id.clone());
+    let moves = play_game(game, channel, anchor, match_key, &opened.opponent_wallet).await?;
+    tracing::info!(
         match_id = %opened.match_id,
+        game = %game,
         tunnel = %opened.tunnel_id,
-        opponent = %opened.opponent_wallet,
-        "co-located arena play pending SuiAnchor + MatchRecord wiring; bot not yet serving humans",
+        moves,
+        "co-located arena match settled",
     );
     Ok(())
+}
+
+/// Drive the bot (party B) through one match of `game` over `channel`, settling via `anchor`. The
+/// transport/anchor are game-agnostic; this is the one place protocol+strategy are chosen, so adding
+/// a game is a single arm here — once its Rust protocol byte-matches the FE's TS protocol (verified
+/// by a cross-language golden test) and it has a `MoveStrategy`. Returns the move count.
+async fn play_game(
+    game: &str,
+    channel: MatchChannel<BusRelayTransport>,
+    anchor: RelayBridgedAnchor,
+    match_key: DurableSigner,
+    opponent_wallet: &str,
+) -> anyhow::Result<u64> {
+    let outcome = match game {
+        "blackjack" => {
+            play_blackjack(
+                channel,
+                anchor,
+                match_key,
+                Role::B,
+                opponent_wallet,
+                InMemoryTranscriptRecorder::new(),
+            )
+            .await?
+        }
+        other => bail!("co-located fleet has no protocol wired for game '{other}'"),
+    };
+    Ok(outcome.moves)
 }
 
 /// A bot's stable on-chain address — distinct per (game, idx), the same across its matches (only
@@ -257,5 +317,89 @@ mod tests {
         assert_eq!(bot_address("blackjack", 0), bot_address("blackjack", 0));
         assert_ne!(bot_address("blackjack", 0), bot_address("blackjack", 1));
         assert_ne!(bot_address("blackjack", 0), bot_address("caro", 0));
+    }
+
+    // The whole co-located arena seam, end to end over the REAL relay bus: the supervisor's
+    // `play_arena_match` (party B) plays a full co-signed blackjack match to settlement against a
+    // stand-in human (party A) that joins by match id. This exercises the rendezvous (bot binds and
+    // parks; the human's `arena.join` completes the MatchRecord and wakes the bot), bidirectional
+    // `relay_to_other` routing, the merged `PartyDriver` move loop, and BOTH seats' relay-bridged
+    // anchors emitting their settle half. Both sides returning a settled outcome proves the seam
+    // carries a genuine two-party match without a WebSocket — the on-chain open/funding is the only
+    // remaining dependency. A regression in the join, routing, or settle wiring deadlocks or errors
+    // here. (Settle-half PAIRING is covered by `bus_transport::full_match_completes_over_the_bus`
+    // and the byte-exact emit by `arena_anchor::settle_emits_the_co_signed_half_to_the_peer`.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn play_arena_match_settles_against_a_stand_in_human() {
+        use fleet_core::play_match::{play_blackjack, BLACKJACK};
+
+        // A valid-hex tunnel id (the co-signed move loop serializes it as a 32-byte address).
+        const TUNNEL_ID: &str = "0xdead";
+        let state = AppState::in_memory_for_test();
+        let match_id = "arena-e2e";
+        let bot_addr = bot_address("blackjack", 0);
+        state
+            .arena
+            .seed(match_id, "blackjack", "0xuser", &bot_addr, TUNNEL_ID);
+
+        // Bot side: the real supervisor entry. It registers its bus conn, binds + parks on the
+        // rendezvous, then plays once the human joins.
+        let bot_state = state.clone();
+        let bot = tokio::spawn(async move {
+            let opened = OpenedMatch {
+                match_id: match_id.to_owned(),
+                opponent_wallet: "0xuser".to_owned(),
+                tunnel_id: TUNNEL_ID.to_owned(),
+            };
+            let bot_key = DurableSigner::from_secret(&[7u8; 32]);
+            play_arena_match(&bot_state, "blackjack", &opened, bot_key).await
+        });
+
+        // Human side: register, join by match id, then wait for MatchFound so routing is live before
+        // driving the match (the same ordering the FE follows).
+        let human_conn = BusRelayConnection::register(state.clone());
+        assert!(
+            state
+                .arena
+                .bind_user(&state, match_id, human_conn.conn_ref(), "0xuser")
+                .await,
+            "the allocating user joins its arena match"
+        );
+        // Wait for `match.found` (delivered first, before the bot's hello) so routing is live before
+        // we drive — the same ordering the FE follows. It is the first frame, so we never drain past
+        // it into the bot's buffered hello.
+        let first = human_conn
+            .recv_for_test()
+            .await
+            .expect("human receives a frame");
+        assert!(
+            first.contains("match.found"),
+            "first inbound frame must be the match announcement, got: {first}"
+        );
+
+        let human_transport = BusRelayTransport::new(human_conn.clone(), match_id.to_owned());
+        let human_channel = MatchChannel::new(human_transport);
+        let human_anchor =
+            RelayBridgedAnchor::new(TUNNEL_ID.to_owned(), human_conn, match_id.to_owned());
+        let human = play_blackjack(
+            human_channel,
+            human_anchor,
+            DurableSigner::from_secret(&[42u8; 32]),
+            Role::A,
+            &bot_addr,
+            InMemoryTranscriptRecorder::new(),
+        );
+
+        let (bot_res, human_res) = tokio::join!(bot, human);
+        bot_res
+            .expect("bot task did not panic")
+            .expect("bot (party B) plays to settlement over the bus");
+        let human_outcome = human_res.expect("human (party A) plays to settlement over the bus");
+        assert!(human_outcome.moves > 0, "the match actually progressed");
+        assert_eq!(
+            human_outcome.final_balances.sum(),
+            2 * BLACKJACK.stake_each,
+            "stakes are conserved across the genuine two-party match",
+        );
     }
 }

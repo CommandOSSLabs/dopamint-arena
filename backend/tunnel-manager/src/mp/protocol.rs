@@ -61,6 +61,12 @@ pub enum ClientMsg {
     /// Authorization is the seat-ownership check server-side.
     #[serde(rename = "resume")]
     Resume { match_id: String },
+    /// Join a pre-allocated arena match by its id (ADR-0024/0025). Unlike `queue.join` (matchmaking),
+    /// this binds the user's connection to the SPECIFIC co-located bot + tunnel reserved at allocate;
+    /// the server completes the `MatchRecord` and replies `MatchFound` (always party A). Valid only
+    /// after `Connect`; authorized by wallet == the match's allocator.
+    #[serde(rename = "arena.join")]
+    ArenaJoin { match_id: String },
 }
 
 /// Messages the server sends to the client. `Deserialize` is for the co-located fleet (ADR-0024):
@@ -204,6 +210,20 @@ mod tests {
             m,
             ClientMsg::Resume {
                 match_id: "m1".into()
+            }
+        );
+    }
+
+    // The arena join wire shape is the contract the FE arena tile (T14) must send to bind to its
+    // pre-allocated match. A rename of the tag or `matchId` field silently breaks that join.
+    #[test]
+    fn client_arena_join_deserializes_dotted_name() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"type":"arena.join","matchId":"arena_7"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::ArenaJoin {
+                match_id: "arena_7".into()
             }
         );
     }

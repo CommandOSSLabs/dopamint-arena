@@ -55,6 +55,7 @@ pub(crate) mod test_support {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: std::sync::Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         })
     }
 }
@@ -301,6 +302,15 @@ pub(crate) async fn arena_allocate(
                 continue;
             }
         };
+        // Seed the rendezvous so the user's WS `arena.join` and the bot's `play_arena_match` can bind
+        // to THIS match + tunnel (ADR-0024/0025) — the seats are fixed now: user = A, bot = B.
+        state.arena.seed(
+            &r.match_id,
+            &game.id,
+            &req.user_address,
+            &r.address,
+            &tunnel_id,
+        );
         state.fleet.notify(
             &r.match_id,
             crate::fleet::FleetServerMsg::Reserved {

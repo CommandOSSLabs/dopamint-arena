@@ -7684,6 +7684,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "tunnel-core",
  "tunnel-harness",
  "uuid",
  "wiremock",

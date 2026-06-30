@@ -514,6 +514,20 @@ async fn handle_authed(
             state.bus.evict(&opp_conn, &match_id).await;
             Ok(())
         }
+        ClientMsg::ArenaJoin { match_id } => {
+            // Bind this connection to its pre-allocated arena match. The rendezvous completes the
+            // MatchRecord (and delivers `MatchFound` to us as party A) once the co-located bot also
+            // binds. `false` means the id is unknown/expired or we are not its allocator.
+            if state
+                .arena
+                .bind_user(state, &match_id, here(state, conn_id), wallet)
+                .await
+            {
+                Ok(())
+            } else {
+                Err("unknown_arena_match")
+            }
+        }
         ClientMsg::Connect { .. } => Err("already_connected"),
     }
 }
@@ -1274,6 +1288,7 @@ mod tests {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1430,6 +1445,7 @@ mod tests {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         })
     }
 

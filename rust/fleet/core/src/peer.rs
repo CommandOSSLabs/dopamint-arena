@@ -7,7 +7,10 @@
 //! protocol. A `payload` is therefore one of:
 //!   * `{"t":"frame", "kind":..., "data":...}` — a game move/ack (handled by the seat runtime
 //!     via [`crate::relay_envelope`]); classified here as [`Incoming::Frame`].
-//!   * a control [`PeerMsg`]: `hello` / `opened` / `settle` / `closed`.
+//!   * a control [`PeerMsg`]: `hello` / `stake` / `opened` / `settle` / `closed`.
+//!
+//! The FE also sends `stop` (user abort); the bot has no variant for it, so [`classify`] returns an
+//! error and the demux drops it — the match ends on terminal state regardless.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,11 @@ pub enum PeerMsg {
     /// Ephemeral-key exchange. `ephemeral_pubkey` is the sender's per-match co-signing pubkey
     /// (hex). Each side sends one and learns the opponent's (the runtime's `opponent_pk`).
     Hello { ephemeral_pubkey: String },
-    /// Dealer (role B) announces the on-chain tunnel it opened.
+    /// Buy-in announcement: the sender's seat stake (initial balance). The FE exchanges these after
+    /// `hello` to agree on the (possibly asymmetric) starting balances, and BUFFERS an early one.
+    Stake { amount: u64 },
+    /// Dealer (role B) announces the on-chain tunnel it opened. The FE does NOT buffer this — it must
+    /// arrive after the peer is awaiting it (the dealer's on-chain create normally provides that gap).
     Opened { tunnel_id: String },
     /// A settlement half: the sender's co-signature over the final state + transcript root (hex).
     Settle { sig: String, root: String },
@@ -87,6 +94,18 @@ mod tests {
         ] {
             assert_eq!(serde_json::from_str::<PeerMsg>(&m.to_payload()).unwrap(), m);
         }
+    }
+
+    // The `stake` wire shape must match the FE (`{t:"stake", amount:<number>}`) byte-for-byte: the
+    // bot announces its buy-in here and the FE blocks awaiting it, so a tag/field drift hangs the
+    // handshake before any move.
+    #[test]
+    fn stake_matches_the_fe_wire_shape() {
+        let m = PeerMsg::Stake { amount: 100 };
+        let s = m.to_payload();
+        assert!(s.contains(r#""t":"stake""#), "{s}");
+        assert!(s.contains(r#""amount":100"#), "{s}");
+        assert_eq!(serde_json::from_str::<PeerMsg>(&s).unwrap(), m);
     }
 
     #[test]
