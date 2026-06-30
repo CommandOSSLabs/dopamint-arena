@@ -1666,9 +1666,27 @@ impl SuiSponsoredAnchor {
             .collect();
         let body = encode_settle_body(&settlement, &root, &sig_a, &sig_b, &entries);
         let body = self.backend.settle(first.tunnel_id.clone(), body).await?;
-        if let Ok(Some(settle_effects)) = self.chain.get_transaction_effects(&body.tx_digest).await
-        {
-            self.cost.add(false, net_gas_mist(&settle_effects));
+        // Settle gas is metered post-hoc from the on-chain effects. If they
+        // can't be fetched (RPC error, or not yet indexed), warn instead of
+        // silently dropping the spend — an unmetered settle understates the gas
+        // total, and a silent gap is worse than a visible one.
+        match self.chain.get_transaction_effects(&body.tx_digest).await {
+            Ok(Some(settle_effects)) => {
+                self.cost.add(false, net_gas_mist(&settle_effects));
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    tx_digest = %body.tx_digest,
+                    "settle gas unmetered: transaction effects not yet available"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    tx_digest = %body.tx_digest,
+                    error = ?err,
+                    "settle gas unmetered: failed to fetch transaction effects"
+                );
+            }
         }
         Ok(SettledTunnel {
             digest: body.tx_digest,
