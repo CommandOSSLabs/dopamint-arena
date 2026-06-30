@@ -4,13 +4,16 @@
 //! If interrupted, rerunning the example resumes from the current member count.
 //!
 //! Required environment variables:
-//!   - `ACCESS_VALUE` — the access value that will seal (and unseal) the pool.
+//!   - `ACCESS_VALUE` — a passphrase that will seal (and unseal) the pool.
 //!   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` — S3 credentials.
 //!   - `WALLET_POOL_S3_BUCKET` — S3 bucket name.
 //!
 //! Optional environment variables:
 //!   - `WALLET_POOL_ID` — resume an existing pool instead of creating a new one.
 //!   - `SUI_RPC_URL` — defaults to `https://fullnode.testnet.sui.io:443`.
+//!
+//! The pool is sealed with `AccessMode::Passphrase`, so `ACCESS_VALUE` can be
+//! any passphrase you choose.
 //!
 //! Run:
 //!   export ACCESS_VALUE=...
@@ -22,6 +25,7 @@ use std::sync::Arc;
 use wallet_pool::rpc::ReqwestRpc;
 use wallet_pool::{AddMembersOptions, CacheMode, CreateOptions, Network, OpenOptions, WalletPool};
 use wallet_pool_core::crypto::ed25519_address;
+use wallet_pool_core::envelope::AccessMode;
 use wallet_pool_s3::S3WalletPoolStore;
 
 const TARGET_MEMBERS: u32 = 1_000_000;
@@ -54,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     network: Network::Testnet,
                     member_count: 0,
                     access_value: Some(access_value.clone()),
+                    access_mode: AccessMode::Passphrase,
                     ..Default::default()
                 })
                 .await?;
