@@ -1,7 +1,8 @@
 # 0024 — Control-plane durable S3-archive retry queue
 
-- **Status**: Proposed
+- **Status**: Superseded
 - **Date**: 2026-06-29
+- **Superseded by**: Direct S3 PutObject without durable retry queue (2026-06-30).
 - **Refs**: refines [ADR-0005](0005-redis-backed-ha-control-plane.md) and
   [ADR-0015](0015-data-plane-local-control-plane-redis.md) (Redis-only control plane)
   by adding one narrow exception.
@@ -48,3 +49,12 @@ a crash).
   the byte source (Walrus is best-effort — it may not have the blob, so S3 could not
   succeed independently). aws-sdk-s3 (and thus aws-lc/cmake in the Dockerfile) is an
   accepted, contained exception to the repo's ring-only TLS stance, scoped to S3.
+
+## Superseded note
+
+On 2026-06-30 we removed the Postgres retry queue. S3 transcript archival is now a
+single best-effort `PutObject` call from the `/settle` handler, fire-and-forget.
+The durable retry queue added operational complexity (cross-crate Postgres access,
+an extra migration, a background worker) that outweighed its value for this use case.
+The `pending_s3_archive` table and migration were deleted before the PR merged to
+`dev-raid`, so the table was never created in any shared environment.

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use crate::archive_queue::ArchiveQueue;
 use crate::s3::TranscriptArchiver;
 
 pub struct AppState {
@@ -21,8 +20,6 @@ pub struct AppState {
     /// S3 transcript archiver (ADR-0023). `None` when S3 is unconfigured (dev/test) —
     /// archival is then disabled. Concurrent with Walrus; Walrus is untouched.
     pub archiver: Option<Arc<dyn TranscriptArchiver>>,
-    /// Durable retry queue for S3 archival. `None` when unconfigured.
-    pub archive_queue: Option<Arc<dyn ArchiveQueue>>,
     /// S3 object-key prefix for transcript archival (e.g. "prod/"). Empty when unset.
     pub s3_prefix: String,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
@@ -73,7 +70,6 @@ impl AppState {
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
-            archive_queue: None,
             s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
@@ -93,16 +89,14 @@ impl AppState {
         })
     }
 
-    /// Test builder that wires a recording S3 archiver + in-memory queue, for parity
-    /// and worker tests. Settler stays noop; Redis/Postgres unused.
+    /// Test builder that wires a recording S3 archiver. Settler stays noop;
+    /// Redis/Postgres/S3 unused otherwise.
     pub fn with_fake_archiver(
         archiver: std::sync::Arc<dyn crate::s3::TranscriptArchiver>,
-        queue: std::sync::Arc<dyn crate::archive_queue::ArchiveQueue>,
     ) -> SharedState {
         let mut s = Self::in_memory_for_test();
         let inner = std::sync::Arc::get_mut(&mut s).expect("unique test arc");
         inner.archiver = Some(archiver);
-        inner.archive_queue = Some(queue);
         inner.s3_prefix = "".into();
         s
     }

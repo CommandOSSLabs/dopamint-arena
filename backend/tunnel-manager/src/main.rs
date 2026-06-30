@@ -1,8 +1,6 @@
 //! tunnel-manager — Dopamint Arena control-plane backend (DOP-170).
 //! Off the per-move path (ADR-0001): registry + settlement + Walrus + stats only.
 
-mod archive_queue;
-mod archive_worker;
 mod chat_store;
 mod config;
 mod enoki;
@@ -36,7 +34,7 @@ use crate::state::{AppState, SharedState};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Pin a single rustls CryptoProvider (ring) as the process default BEFORE any TLS
-    // client (fred, reqwest, sqlx, aws-sdk-s3) initializes. aws-sdk-s3 compiles aws-lc
+    // client (fred, reqwest, aws-sdk-s3) initializes. aws-sdk-s3 compiles aws-lc
     // (hence cmake in the Dockerfile) but at runtime every rustls user shares this one
     // provider, avoiding the rustls 0.23 "two default providers" panic. See Cargo.toml
     // TLS-provider note + ADR-0023.
@@ -99,9 +97,8 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "qwen2.5:1.5b".into()),
     )?;
 
-    // S3 transcript archival (ADR-0023). Optional: absent in dev/test (archive_or_enqueue
-    // and the drain worker are no-ops when these are None). Concurrent with Walrus;
-    // Walrus above is unchanged.
+    // S3 transcript archival (ADR-0023). Optional: absent in dev/test when
+    // S3_TRANSCRIPTS_BUCKET is unset. Concurrent with Walrus; Walrus above is unchanged.
     let archiver: Option<std::sync::Arc<dyn crate::s3::TranscriptArchiver>> =
         match config.s3_bucket.clone() {
             Some(bucket) => {
@@ -119,19 +116,6 @@ async fn main() -> anyhow::Result<()> {
                 None
             }
         };
-    let archive_queue: Option<std::sync::Arc<dyn crate::archive_queue::ArchiveQueue>> = match (
-        &config.database_url,
-        &archiver,
-    ) {
-        (Some(url), Some(_)) => match crate::archive_queue::PgArchiveQueue::connect(url).await {
-            Ok(q) => Some(std::sync::Arc::new(q)),
-            Err(e) => {
-                tracing::error!(error = %e, "failed to connect s3 archive queue (postgres); durable retry disabled");
-                None
-            }
-        },
-        _ => None,
-    };
 
     let instance_id = config
         .instance_id
@@ -172,7 +156,6 @@ async fn main() -> anyhow::Result<()> {
         enoki,
         walrus,
         archiver,
-        archive_queue,
         s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
         ollama,
         stats_tx,
@@ -191,7 +174,6 @@ async fn main() -> anyhow::Result<()> {
     // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
     // live feed reflects real settlements; without this the stats SSE never emits any.
     sui::spawn_event_indexer(state.clone());
-    archive_worker::spawn_archive_drain(state.clone());
 
     // Clone before `state` is consumed by `.with_state` so we can flush after shutdown.
     let flush_state = state.clone();

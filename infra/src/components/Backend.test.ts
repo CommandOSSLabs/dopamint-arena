@@ -216,11 +216,9 @@ describe("backend component", () => {
     );
   });
 
-  it("wires S3 transcript archival and the DATABASE_URL secret when configured", async () => {
+  it("wires S3 transcript archival when configured", async () => {
     const backend = createBackend(
       makeBackendArgs({
-        databaseUrlSecretArn:
-          "arn:aws:secretsmanager:us-east-1:123:secret:test-db-url-AbCdEf",
         s3TranscriptsBucket: "dopamint-test-transcripts",
       }),
     );
@@ -246,20 +244,10 @@ describe("backend component", () => {
     );
 
     assert.ok(
-      !backendEnv.some((e: { name: string }) => e.name === "DATABASE_URL"),
-      "DATABASE_URL must never be a plaintext environment variable",
-    );
-    const dbSecret = container.secrets?.find(
-      (s: { name: string }) => s.name === "DATABASE_URL",
-    );
-    assert.ok(
-      dbSecret,
-      "DATABASE_URL must be injected via secrets[] from Secrets Manager",
-    );
-    assert.strictEqual(
-      dbSecret.valueFrom,
-      "arn:aws:secretsmanager:us-east-1:123:secret:test-db-url-AbCdEf",
-      "DATABASE_URL valueFrom must reference the secret ARN",
+      !container.secrets?.some(
+        (s: { name: string }) => s.name === "DATABASE_URL",
+      ),
+      "backend must not receive DATABASE_URL secret",
     );
   });
 });

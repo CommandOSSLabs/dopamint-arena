@@ -49,7 +49,6 @@ pub(crate) mod test_support {
             enoki: None,
             walrus,
             archiver: None,
-            archive_queue: None,
             s3_prefix: "".into(),
             ollama,
             stats_tx,
@@ -312,10 +311,10 @@ pub(crate) async fn settle(
                 .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
                 .await;
             // S3 archival runs CONCURRENTLY with Walrus and is independent of it (ADR-0023).
-            // Fire-and-forget from the response; the worker guarantees it lands. `body` is
+            // Fire-and-forget from the response; the SDK handles inline retries. `body` is
             // cheap to clone (Bytes is ref-counted); Walrus below still gets `body.to_vec()`
             // exactly as before — its call site, error handling, and result are unchanged.
-            if state.archiver.is_some() {
+            if let Some(archiver) = state.archiver.clone() {
                 let key = crate::s3::archive_key(&state.s3_prefix, &tunnel_id, &digest);
                 let meta = crate::s3::ArchiveMeta {
                     tunnel_id: tunnel_id.clone(),
@@ -323,16 +322,12 @@ pub(crate) async fn settle(
                     transcript_root: transcript_root_hex.clone(),
                     settle_version: crate::routes::SETTLE_BODY_VERSION,
                 };
-                let s3_state = state.clone();
                 let s3_bytes = body.clone();
+                let s3_digest = digest.clone();
                 tokio::spawn(async move {
-                    crate::archive_worker::archive_or_enqueue(
-                        &s3_state,
-                        key,
-                        s3_bytes.to_vec(),
-                        meta,
-                    )
-                    .await;
+                    if let Err(e) = archiver.archive(&key, &s3_bytes, &meta).await {
+                        tracing::warn!(%s3_digest, error = %e, "s3 archive failed");
+                    }
                 });
             }
 
@@ -1303,7 +1298,6 @@ mod tests {
         use axum::Router;
         use tower::ServiceExt;
 
-        use crate::archive_queue::InMemoryArchiveQueue;
         use crate::s3::FakeArchiver;
 
         let body = sample_settle_body();
@@ -1311,10 +1305,7 @@ mod tests {
         let tunnel_id = normalize_tunnel_id(&parsed.tunnel_id);
 
         let archiver = std::sync::Arc::new(FakeArchiver::default());
-        let mut state = AppState::with_fake_archiver(
-            archiver.clone(),
-            std::sync::Arc::new(InMemoryArchiveQueue::default()),
-        );
+        let mut state = AppState::with_fake_archiver(archiver.clone());
         // Reach the settlement success path (S3 archival sits inside it) without real RPC.
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")

@@ -135,7 +135,6 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
-  databaseUrlSecretArn: databaseUrlSecret.arn,
   s3TranscriptsBucket: transcriptsBucket.bucketName,
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,

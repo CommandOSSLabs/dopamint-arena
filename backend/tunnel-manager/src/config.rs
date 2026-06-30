@@ -59,9 +59,6 @@ pub struct Config {
     pub s3_bucket: Option<String>,
     /// Optional key prefix (e.g. "prod/"). Default empty.
     pub s3_prefix: Option<String>,
-    /// Postgres DATABASE_URL (via RDS Proxy) for the `pending_s3_archive` durable retry
-    /// queue. Required for durable retry; when unset, archival is fire-and-forget.
-    pub database_url: Option<String>,
 }
 
 impl Config {
@@ -115,7 +112,6 @@ impl Config {
             ollama_model: opt("OLLAMA_MODEL"),
             s3_bucket: opt("S3_TRANSCRIPTS_BUCKET"),
             s3_prefix: opt("S3_TRANSCRIPTS_PREFIX"),
-            database_url: opt("DATABASE_URL"),
         })
     }
 
@@ -225,16 +221,13 @@ mod tests {
     }
 
     #[test]
-    fn from_env_reads_s3_and_db() {
+    fn from_env_reads_s3() {
         let _b = EnvGuard("S3_TRANSCRIPTS_BUCKET");
         let _p = EnvGuard("S3_TRANSCRIPTS_PREFIX");
-        let _d = EnvGuard("DATABASE_URL");
         std::env::set_var("S3_TRANSCRIPTS_BUCKET", "dopamint-dev-transcripts");
         std::env::set_var("S3_TRANSCRIPTS_PREFIX", "x/");
-        std::env::set_var("DATABASE_URL", "postgresql://u:p@h:5432/d");
         let c = Config::from_env().unwrap();
         assert_eq!(c.s3_bucket.as_deref(), Some("dopamint-dev-transcripts"));
         assert_eq!(c.s3_prefix.as_deref(), Some("x/"));
-        assert_eq!(c.database_url.as_deref(), Some("postgresql://u:p@h:5432/d"));
     }
 }

@@ -29,10 +29,6 @@ export interface BackendArgs {
   ollamaImageTag?: pulumi.Input<string>;
   // Comma-separated list of origins allowed by the CORS layer. Omitted => permissive CORS.
   corsAllowedOrigins?: pulumi.Input<string>;
-  // Secrets Manager ARN holding the Postgres DATABASE_URL (via RDS Proxy). Injected as
-  // DATABASE_URL via ECS `secrets` so the tunnel-manager can use the `pending_s3_archive`
-  // durable retry queue (ADR-0023). Omitted => the env var is absent (fire-and-forget).
-  databaseUrlSecretArn?: pulumi.Input<string>;
   // S3 bucket for transcript archival. Injected as S3_TRANSCRIPTS_BUCKET plaintext env.
   // Omitted => archival disabled.
   s3TranscriptsBucket?: pulumi.Input<string>;
@@ -63,11 +59,8 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
     ])
     .apply(([pubsub, cache]) => ({ pubsub, cache }));
   const s3Cfg = pulumi
-    .all([
-      pulumi.output(args.databaseUrlSecretArn ?? undefined),
-      pulumi.output(args.s3TranscriptsBucket ?? undefined),
-    ])
-    .apply(([dbArn, bucket]) => ({ dbArn, bucket }));
+    .all([pulumi.output(args.s3TranscriptsBucket ?? undefined)])
+    .apply(([bucket]) => ({ bucket }));
 
   return pulumi
     .all([
@@ -159,17 +152,16 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           portMappings: [{ containerPort: 8080, protocol: "tcp" }],
           environment: backendEnv,
           // Private key: injected from Secrets Manager, never inlined as plaintext env.
-          ...(function () {
-            const secs: { name: string; valueFrom: string }[] = [];
-            if (settlerKeySecretArn)
-              secs.push({
-                name: "SUI_SETTLER_KEY",
-                valueFrom: settlerKeySecretArn,
-              });
-            if (s3Cfg.dbArn)
-              secs.push({ name: "DATABASE_URL", valueFrom: s3Cfg.dbArn });
-            return secs.length ? { secrets: secs } : {};
-          })(),
+          ...(settlerKeySecretArn
+            ? {
+                secrets: [
+                  {
+                    name: "SUI_SETTLER_KEY",
+                    valueFrom: settlerKeySecretArn,
+                  },
+                ],
+              }
+            : {}),
           logConfiguration: {
             logDriver: "awslogs",
             options: {

@@ -1254,7 +1254,6 @@ mod tests {
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
-            archive_queue: None,
             s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
@@ -1413,7 +1412,6 @@ mod tests {
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
-            archive_queue: None,
             s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
