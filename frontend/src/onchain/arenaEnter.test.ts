@@ -110,6 +110,12 @@ test("enterArena sends the user eph pubkey, deposits seat A into the pre-opened 
   });
 
   assert.deepEqual(opened, [
-    { game: "blackjack", matchId: "m1", tunnelId: TUNNEL },
+    {
+      game: "blackjack",
+      matchId: "m1",
+      tunnelId: TUNNEL,
+      botAddress: BOT_ADDR,
+      botEphPubkey: BOT_EPH,
+    },
   ]);
 });

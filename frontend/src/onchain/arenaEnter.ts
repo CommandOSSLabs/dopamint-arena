@@ -88,6 +88,10 @@ export async function reportArenaOpened(
  * tunnel in ONE batched PTB (the batcher's deposit mode coalesces them — one wallet popup), and
  * reports the user joined. `open` and the API are injectable for tests; production uses the shared
  * batcher + live `fetch`.
+ *
+ * Returns the full [`ArenaAllocation`]s (with the bot's eph pubkey + address + the live tunnelId),
+ * not just the opened match ids — the caller needs the bot keys to verify the bot's move signatures
+ * when it wires the relay + engine via `enterArenaMatch`.
  */
 export async function enterArena(
   opts: {
@@ -99,7 +103,7 @@ export async function enterArena(
     coinType?: string;
     usesAddressBalance?: boolean;
   } & ArenaApi,
-): Promise<ArenaOpened[]> {
+): Promise<ArenaAllocation[]> {
   // A fresh ephemeral key per game, BEFORE allocate — its pubkey is baked into the tunnel at create.
   const parties = new Map<string, PartyOnchain>();
   await Promise.all(
@@ -116,7 +120,10 @@ export async function enterArena(
     opts,
   );
   const open = opts.open ?? requestTunnelOpen;
-  const opened = await Promise.all(
+  // Deposit seat A into every pre-opened tunnel. The batcher coalesces these into ONE PTB (one
+  // wallet popup); the resolved tunnelId should match the fleet-pre-created one, but use the
+  // deposit's resolved id as the live one (it's what on-chain sees after the split+deposit).
+  const live = await Promise.all(
     allocations.map(async (alloc) => {
       const partyA = parties.get(alloc.game)!;
       const partyB: PartyOnchain = {
@@ -133,12 +140,12 @@ export async function enterArena(
         coinType: opts.coinType,
         usesAddressBalance: opts.usesAddressBalance ?? true,
       });
-      return { game: alloc.game, matchId: alloc.matchId, tunnelId };
+      return { ...alloc, tunnelId };
     }),
   );
   await reportArenaOpened(
-    opened.map((o) => ({ matchId: o.matchId, tunnelId: o.tunnelId })),
+    live.map((o) => ({ matchId: o.matchId, tunnelId: o.tunnelId })),
     opts,
   );
-  return opened;
+  return live;
 }
