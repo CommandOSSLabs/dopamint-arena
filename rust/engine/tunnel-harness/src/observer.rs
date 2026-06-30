@@ -82,6 +82,7 @@ mod tests {
         r.on_finished(&DriverOutcome {
             moves: 1,
             final_balances: Balances { a: 1, b: 1 },
+            play_ns: 0,
         });
         r.on_aborted();
 

@@ -4,11 +4,12 @@
 //! committed transition in the loop's effects band, independent of the anchor.
 
 use crate::{
-    Balances, DriverObserver, DriverStart, FrameTransport, FrameTransportError, HarnessError,
-    MoveCommitted, MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol, Seat, SettlementMode,
-    Signer, TranscriptRecorder, TranscriptSettleEntry, TunnelAnchor, TunnelAnchorError,
-    TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
+    Balances, DriverObserver, DriverStart, FrameCodec, FrameTransport, FrameTransportError,
+    HarnessError, JsonFrameCodec, MoveCommitted, MoveStrategy, MoveStrategyContext, PartyRuntime,
+    Protocol, Seat, SettlementMode, Signer, TranscriptRecorder, TranscriptSettleEntry,
+    TunnelAnchor, TunnelAnchorError, TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
 };
+use std::time::Instant;
 use tunnel_core::protocol_id::ProtocolId;
 use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Settlement};
 
@@ -16,6 +17,11 @@ use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Se
 pub struct DriverOutcome {
     pub moves: u64,
     pub final_balances: Balances,
+    /// Wall time spent in the move loop alone, in nanoseconds — excludes anchor
+    /// `open`/`settle` and settlement-root construction. Lets callers separate
+    /// gameplay latency from chain/setup overhead instead of conflating them
+    /// into one end-to-end span.
+    pub play_ns: u128,
 }
 
 /// Everything needed to build the seat except the `tunnel_id`, which `open`
@@ -28,7 +34,7 @@ pub struct SeatParts<P: Protocol, S: Signer> {
     pub seat: Seat,
 }
 
-pub struct PartyDriver<P, Pol, Ch, S, A, R>
+pub struct PartyDriver<P, Pol, Ch, S, A, R, C = JsonFrameCodec>
 where
     P: Protocol,
     Pol: MoveStrategy<P>,
@@ -36,6 +42,7 @@ where
     S: Signer,
     A: TunnelAnchor + Send + Sync,
     R: TranscriptRecorder<P::Move> + Send + Sync,
+    C: FrameCodec<P::Move>,
 {
     parts: SeatParts<P, S>,
     move_strategy: Pol,
@@ -43,9 +50,10 @@ where
     anchor: A,
     recorder: R,
     observers: Vec<Box<dyn DriverObserver>>,
+    codec: C,
 }
 
-impl<P, Pol, Ch, S, A, R> PartyDriver<P, Pol, Ch, S, A, R>
+impl<P, Pol, Ch, S, A, R> PartyDriver<P, Pol, Ch, S, A, R, JsonFrameCodec>
 where
     P: Protocol,
     Pol: MoveStrategy<P>,
@@ -53,6 +61,7 @@ where
     S: Signer,
     A: TunnelAnchor + Send + Sync,
     R: TranscriptRecorder<P::Move> + Send + Sync,
+    JsonFrameCodec: FrameCodec<P::Move>,
 {
     pub fn new(
         parts: SeatParts<P, S>,
@@ -61,6 +70,35 @@ where
         anchor: A,
         recorder: R,
     ) -> Self {
+        Self::with_codec(
+            parts,
+            move_strategy,
+            frame_transport,
+            anchor,
+            recorder,
+            JsonFrameCodec,
+        )
+    }
+}
+
+impl<P, Pol, Ch, S, A, R, C> PartyDriver<P, Pol, Ch, S, A, R, C>
+where
+    P: Protocol,
+    Pol: MoveStrategy<P>,
+    Ch: FrameTransport,
+    S: Signer,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<P::Move> + Send + Sync,
+    C: FrameCodec<P::Move>,
+{
+    pub fn with_codec(
+        parts: SeatParts<P, S>,
+        move_strategy: Pol,
+        frame_transport: Ch,
+        anchor: A,
+        recorder: R,
+        codec: C,
+    ) -> Self {
         PartyDriver {
             parts,
             move_strategy,
@@ -68,6 +106,7 @@ where
             anchor,
             recorder,
             observers: Vec::new(),
+            codec,
         }
     }
 
@@ -92,10 +131,12 @@ where
             anchor,
             recorder,
             mut observers,
+            codec,
         } = self;
 
         let result = Self::drive(
             parts,
+            codec,
             &mut move_strategy,
             &frame_transport,
             &anchor,
@@ -121,6 +162,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn drive(
         parts: SeatParts<P, S>,
+        codec: C,
         move_strategy: &mut Pol,
         frame_transport: &Ch,
         anchor: &A,
@@ -152,9 +194,10 @@ where
         })?;
 
         let our_seat = parts.seat;
-        let mut seat = PartyRuntime::<P, S>::new(
+        let mut seat = PartyRuntime::<P, S, C>::with_codec(
             parts.protocol,
             parts.signer,
+            codec,
             parts.opponent_pk,
             TunnelContext {
                 tunnel_id,
@@ -178,6 +221,9 @@ where
         let mut moves = 0u64;
         let mut last_timestamp = 0u64;
 
+        // Time the move loop alone — open already resolved above, settle happens
+        // after — so callers get gameplay latency free of chain/setup cost.
+        let play_started = Instant::now();
         loop {
             if seat.is_terminal() {
                 break;
@@ -243,6 +289,7 @@ where
             }
         }
 
+        let play_ns = play_started.elapsed().as_nanos();
         let final_balances = seat.balances();
         // The v2 cooperative close signs `timestamp` into the settlement message, and the remote
         // (browser) half signs `timestamp = tunnel.created_at` (it reads it on-chain). So when the
@@ -303,6 +350,7 @@ where
         let outcome = DriverOutcome {
             moves,
             final_balances,
+            play_ns,
         };
         for o in observers.iter_mut() {
             o.on_finished(&outcome);
