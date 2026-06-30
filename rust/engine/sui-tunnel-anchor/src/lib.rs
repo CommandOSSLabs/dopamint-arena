@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,6 +37,48 @@ const ED25519_SCHEME_FLAG: u8 = 0x00;
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const MAX_SPONSORED_OPEN_BATCH_SIZE: usize = 255;
+
+/// Accumulated gas spend (MIST) split by who paid: the funder wallet
+/// (`SingleFunder`) or the backend sponsor.
+#[derive(Debug, Default)]
+struct CostMeter {
+    gas_funder_mist: AtomicU64,
+    gas_sponsor_mist: AtomicU64,
+}
+
+impl CostMeter {
+    fn add(&self, paid_by_funder: bool, mist: u64) {
+        if paid_by_funder {
+            self.gas_funder_mist.fetch_add(mist, Ordering::Relaxed);
+        } else {
+            self.gas_sponsor_mist.fetch_add(mist, Ordering::Relaxed);
+        }
+    }
+
+    fn snapshot(&self) -> AnchorCostSnapshot {
+        AnchorCostSnapshot {
+            gas_funder_mist: self.gas_funder_mist.load(Ordering::Relaxed),
+            gas_sponsor_mist: self.gas_sponsor_mist.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Point-in-time view of cumulative gas spend on a `SuiSponsoredAnchor`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AnchorCostSnapshot {
+    /// MIST charged to the funder wallet (open transactions when
+    /// `SuiFundingProfile::SingleFunder` pays).
+    pub gas_funder_mist: u64,
+    /// MIST charged to the backend sponsor (all settle transactions and open
+    /// transactions paid by the sponsor).
+    pub gas_sponsor_mist: u64,
+}
+
+/// Net MIST consumed by a transaction: computation + storage − rebate.
+fn net_gas_mist(effects: &TransactionEffects) -> u64 {
+    let g = effects.gas_summary();
+    (g.computation_cost + g.storage_cost).saturating_sub(g.storage_rebate)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuiOpenBatchingConfig {
@@ -115,6 +158,7 @@ pub struct SuiSponsoredAnchor {
     backend: Arc<dyn SuiBackendClient>,
     inner: Arc<Mutex<AnchorState>>,
     open_batch_executor: Option<SuiOpenBatchExecutor>,
+    cost: Arc<CostMeter>,
 }
 
 #[derive(Clone)]
@@ -125,6 +169,7 @@ struct SuiSponsoredAnchorShared {
     chain: Arc<dyn SuiChainClient>,
     backend: Arc<dyn SuiBackendClient>,
     inner: Arc<Mutex<AnchorState>>,
+    cost: Arc<CostMeter>,
 }
 
 #[derive(Default)]
@@ -502,6 +547,7 @@ impl SuiSponsoredAnchorShared {
             backend: self.backend.clone(),
             inner: self.inner.clone(),
             open_batch_executor: None,
+            cost: self.cost.clone(),
         }
     }
 
@@ -663,6 +709,7 @@ impl SuiSponsoredAnchor {
                 .map_err(TunnelAnchorError::Rejected)?;
         let funder_address = funder.public_key().derive_address();
         let inner = Arc::new(Mutex::new(AnchorState::default()));
+        let cost = Arc::new(CostMeter::default());
         let shared = SuiSponsoredAnchorShared {
             config: config.clone(),
             funder: funder.clone(),
@@ -670,6 +717,7 @@ impl SuiSponsoredAnchor {
             chain: chain.clone(),
             backend: backend.clone(),
             inner: inner.clone(),
+            cost: cost.clone(),
         };
         let open_batch_executor = if config.open_batching.enabled {
             Some(SuiOpenBatchExecutor::new(shared)?)
@@ -684,11 +732,29 @@ impl SuiSponsoredAnchor {
             backend,
             inner,
             open_batch_executor,
+            cost,
         })
     }
 
     pub fn funder_address(&self) -> Address {
         self.funder_address
+    }
+
+    /// Returns a point-in-time snapshot of cumulative gas spend.
+    pub fn cost_snapshot(&self) -> AnchorCostSnapshot {
+        self.cost.snapshot()
+    }
+
+    /// True when the funder wallet bears open-transaction gas costs.
+    ///
+    /// `SingleFunder` signs and pays for opens itself; the sponsor only covers
+    /// the PTB fee. Any future profile that routes gas through the backend
+    /// should return `false` so the spend lands in `gas_sponsor_mist`.
+    fn funding_pays_gas(&self) -> bool {
+        matches!(
+            self.config.funding_profile,
+            SuiFundingProfile::SingleFunder { .. }
+        )
     }
 
     async fn open_once(
@@ -726,6 +792,8 @@ impl SuiSponsoredAnchor {
     ) -> Result<OpenedTunnel, TunnelAnchorError> {
         let kind = self.build_open_kind_for_config(&request).await?;
         let effects = self.execute_sponsored_kind(kind).await?;
+        self.cost
+            .add(self.funding_pays_gas(), net_gas_mist(&effects));
         let (tunnel_id, created_at_ms) = self.opened_from_effects(&effects).await?;
         let record = OpenRecord {
             tunnel_id: tunnel_id.clone(),
@@ -872,6 +940,8 @@ impl SuiSponsoredAnchor {
             .execute_sponsored_kind(kind)
             .await
             .map_err(open_batch_attempt_error)?;
+        self.cost
+            .add(self.funding_pays_gas(), net_gas_mist(&effects));
         ensure_success(&effects).map_err(OpenBatchAttemptError::Retryable)?;
         let opened = self
             .map_created_tunnels_to_open_requests(&effects, requests)
@@ -1596,6 +1666,10 @@ impl SuiSponsoredAnchor {
             .collect();
         let body = encode_settle_body(&settlement, &root, &sig_a, &sig_b, &entries);
         let body = self.backend.settle(first.tunnel_id.clone(), body).await?;
+        if let Ok(Some(settle_effects)) = self.chain.get_transaction_effects(&body.tx_digest).await
+        {
+            self.cost.add(false, net_gas_mist(&settle_effects));
+        }
         Ok(SettledTunnel {
             digest: body.tx_digest,
             final_balances: Balances {
@@ -3086,6 +3160,83 @@ mod tests {
             verify_paired_settle(&half_a, &half_b, &record).expect("settlement verifies");
         assert_eq!(sig_a, signer_a.sign(&msg));
         assert_eq!(sig_b, signer_b.sign(&msg));
+    }
+
+    fn success_effects_with_nonzero_gas(tunnel_id: Address) -> TransactionEffects {
+        let gas_object = ObjectReferenceWithOwner {
+            reference: object_ref(Address::ZERO),
+            owner: Owner::Address(Address::ZERO),
+        };
+        TransactionEffects::V1(Box::new(TransactionEffectsV1 {
+            status: ExecutionStatus::Success,
+            epoch: 0,
+            gas_used: GasCostSummary {
+                computation_cost: 500_000,
+                storage_cost: 1_000_000,
+                storage_rebate: 200_000,
+                non_refundable_storage_fee: 0,
+            },
+            modified_at_versions: Vec::new(),
+            consensus_objects: Vec::new(),
+            transaction_digest: Digest::ZERO,
+            created: vec![ObjectReferenceWithOwner {
+                reference: object_ref(tunnel_id),
+                owner: Owner::Shared(1),
+            }],
+            mutated: Vec::new(),
+            unwrapped: Vec::new(),
+            deleted: Vec::new(),
+            unwrapped_then_deleted: Vec::new(),
+            wrapped: Vec::new(),
+            gas_object,
+            events_digest: None,
+            dependencies: Vec::new(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn open_accumulates_gas_into_meter() {
+        let tunnel_id = Address::from_str("0x42").unwrap();
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects_with_nonzero_gas(tunnel_id));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_000);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let anchor = SuiSponsoredAnchor::with_clients(config, chain, backend).expect("anchor");
+
+        let before = anchor.cost_snapshot();
+        let _ = anchor.open(open_request()).await.expect("open");
+        let after = anchor.cost_snapshot();
+
+        assert!(
+            after.gas_funder_mist + after.gas_sponsor_mist
+                > before.gas_funder_mist + before.gas_sponsor_mist,
+            "meter must advance after open: before={:?} after={:?}",
+            before,
+            after,
+        );
     }
 
     #[tokio::test]
