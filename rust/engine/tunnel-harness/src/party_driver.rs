@@ -244,7 +244,16 @@ where
         }
 
         let final_balances = seat.balances();
-        let timestamp = if moves == 0 { now() } else { last_timestamp };
+        // The v2 cooperative close signs `timestamp` into the settlement message, and the remote
+        // (browser) half signs `timestamp = tunnel.created_at` (it reads it on-chain). So when the
+        // anchor surfaces the on-chain createdAt we MUST sign that exact value, or the two co-signing
+        // halves never combine. Anchors that don't surface it (in-memory self-play) fall back to the
+        // move-loop clock — both seats run this driver there, so they agree regardless.
+        let timestamp = match opened.created_at_ms {
+            Some(created_at) => created_at,
+            None if moves == 0 => now(),
+            None => last_timestamp,
+        };
         let settlement = Settlement {
             tunnel_id: seat.tunnel_id().to_string(),
             party_a_balance: final_balances.a,

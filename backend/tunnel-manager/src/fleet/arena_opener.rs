@@ -49,6 +49,12 @@ pub trait ArenaTunnelOpener: Send + Sync {
     /// on-chain tunnel id the user will `deposit_party_a` into. On-chain-bound and may fail per
     /// game; the caller omits a game whose open errors (ADR-0028).
     async fn open_and_fund_seat_b(&self, req: ArenaOpenRequest<'_>) -> anyhow::Result<String>;
+
+    /// Read the tunnel's on-chain `created_at` (ms) — the same field the FE reads. The co-located bot
+    /// signs its settlement half with `timestamp = created_at` to byte-match the FE half (v2 close), so
+    /// the relay-bridged anchor resolves this once per match. Kept off `open_and_fund_seat_b`'s return
+    /// so a caller with an already-open tunnel (resume/retry) can resolve it without re-opening.
+    async fn read_created_at_ms(&self, tunnel_id: &str) -> anyhow::Result<u64>;
 }
 
 /// Placeholder opener: a deterministic id derived from the request, no chain access. Lets the 1a
@@ -68,6 +74,12 @@ impl ArenaTunnelOpener for NoopArenaOpener {
         req.bot_address.hash(&mut h);
         req.bot_eph_pubkey.hash(&mut h);
         Ok(format!("0xnoop{:016x}", h.finish()))
+    }
+
+    async fn read_created_at_ms(&self, _tunnel_id: &str) -> anyhow::Result<u64> {
+        // No chain here: the Noop path never produces a real on-chain close. The FE's `readCreatedAt`
+        // on a non-existent placeholder id also resolves to 0, so 0 keeps both halves agreeing.
+        Ok(0)
     }
 }
 
@@ -249,6 +261,20 @@ impl ArenaTunnelOpener for SuiArenaOpener {
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign arena open tx: {e}"))?;
         self.execute_and_read_tunnel(&tx, &sig).await
+    }
+
+    async fn read_created_at_ms(&self, tunnel_id: &str) -> anyhow::Result<u64> {
+        let r = self
+            .rpc(
+                "sui_getObject",
+                serde_json::json!([tunnel_id, {"showContent": true}]),
+            )
+            .await?;
+        // The tunnel's `created_at` (ms) — the exact field the FE's `readCreatedAt` reads. Move u64
+        // fields render as decimal strings in JSON; tolerate a numeric too.
+        r.pointer("/data/content/fields/created_at")
+            .and_then(|v| v.as_str().and_then(|s| s.parse::<u64>().ok()).or_else(|| v.as_u64()))
+            .ok_or_else(|| anyhow!("tunnel {tunnel_id} has no created_at field: {r}"))
     }
 }
 

@@ -42,6 +42,12 @@ pub struct RelayBridgedAnchor {
     conn: Arc<BusRelayConnection>,
     /// The relay match id this anchor settles, used for `relay_to_other` routing.
     match_id: String,
+    /// The tunnel's on-chain `created_at` (ms). The FE signs its settlement half with
+    /// `timestamp = created_at` (it reads the same field on-chain), so `open()` surfaces this to the
+    /// driver as `OpenedTunnel::created_at_ms` and the bot signs the SAME value — without it the two
+    /// halves commit to different `timestamp` bytes and never combine. Read once at allocate by the
+    /// [`crate::fleet::arena_opener::ArenaTunnelOpener`].
+    created_at_ms: u64,
 }
 
 impl RelayBridgedAnchor {
@@ -49,13 +55,33 @@ impl RelayBridgedAnchor {
         tunnel_id: String,
         conn: Arc<BusRelayConnection>,
         match_id: String,
+        created_at_ms: u64,
     ) -> RelayBridgedAnchor {
         RelayBridgedAnchor {
             tunnel_id,
             conn,
             match_id,
+            created_at_ms,
         }
     }
+}
+
+/// The FE-facing settlement-half wire — the TS `PeerMessage` `settleHalf` variant. Kept distinct from
+/// the inbound-routable [`PeerMsg`] enum on purpose: the bot only EMITS this shape (the human's
+/// inbound `settleHalf` is never consumed and stays dropped by `classify`), so making it a `PeerMsg`
+/// variant would needlessly flip the demux from dropping that frame to routing it. Field casing +
+/// encoding mirror exactly what the FE sends: camelCase keys, hex `sig`/`transcriptRoot` (TS
+/// `bytesToHex`), decimal-string numerics (TS `.toString()`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeSettleHalf {
+    t: &'static str,
+    party_a_balance: String,
+    party_b_balance: String,
+    final_nonce: String,
+    timestamp: String,
+    transcript_root: String,
+    sig: String,
 }
 
 impl TunnelAnchor for RelayBridgedAnchor {
@@ -98,7 +124,9 @@ impl TunnelAnchor for RelayBridgedAnchor {
         Ok(OpenedTunnel {
             tunnel_id: self.tunnel_id.clone(),
             onchain_nonce: 0,
-            created_at_ms: None,
+            // Surface the on-chain createdAt so the driver signs `timestamp = created_at`, matching
+            // the FE half (see the `created_at_ms` field doc). `None`/`0` would sign a different ts.
+            created_at_ms: Some(self.created_at_ms),
             created: false,
         })
     }
@@ -111,14 +139,26 @@ impl TunnelAnchor for RelayBridgedAnchor {
         let root = request.transcript_root.ok_or_else(|| {
             TunnelAnchorError::Rejected("arena settle requires a transcript root (v2)".into())
         })?;
-        // Emit our co-signing half. `sig`/`root` are lowercase, no-`0x` hex to match the TS
-        // `bytesToHex` the FE uses — the two halves must be byte-identical to pair at `/settle`.
-        let half = PeerMsg::Settle {
+        // Emit our co-signing half in the FE's `settleHalf` wire shape (TS `PeerMessage`): the browser
+        // pairs it with its own half (`combineSettlementWithRoot`) and submits the cooperative close.
+        // The FE reads only `sig`+`transcriptRoot`, but we send the full half the FE itself sends so the
+        // wire stays symmetric. `sig`/root are lowercase no-`0x` hex (TS `bytesToHex`); balances/nonce/
+        // timestamp are decimal strings (TS `.toString()`). This is NOT `PeerMsg::Settle` (tag
+        // `settle`): every FE hook waits on tag `settleHalf`, so the old tag deadlocked the handshake.
+        let half = FeSettleHalf {
+            t: "settleHalf",
+            party_a_balance: request.party_a_balance.to_string(),
+            party_b_balance: request.party_b_balance.to_string(),
+            final_nonce: request.final_nonce.to_string(),
+            timestamp: request.timestamp.to_string(),
+            transcript_root: hex::encode(root),
             sig: hex::encode(request.signature),
-            root: hex::encode(root),
         };
         self.conn
-            .send_to_peer(&self.match_id, half.to_payload())
+            .send_to_peer(
+                &self.match_id,
+                serde_json::to_string(&half).expect("FeSettleHalf serializes"),
+            )
             .await;
         // The human FE pairs this half with its own and submits the cooperative close; the bot does
         // not submit. Return the agreed balances; the on-chain digest is unknown on this side.
@@ -137,8 +177,9 @@ mod tests {
     use super::*;
     use crate::mp::protocol::ServerMsg;
     use crate::mp::MatchRecord;
+    // NOTE: the settle golden parses the emitted JSON directly (asserting the FE `settleHalf` wire),
+    // so `classify`/`PeerMsg::Settle` are deliberately NOT used here — see the test's comment.
     use crate::state::AppState;
-    use fleet_core::peer::{classify, Incoming};
     use tunnel_harness::Seat;
 
     // The anchor's `open` resolves the pre-created tunnel (no chain call): it returns the id it was
@@ -147,7 +188,7 @@ mod tests {
     async fn open_resolves_the_precreated_tunnel() {
         let state = AppState::in_memory_for_test();
         let conn = BusRelayConnection::register(state.clone());
-        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into());
+        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into(), 1_700_000_000_000);
 
         let opened = anchor
             .open(TunnelOpenRequest {
@@ -164,12 +205,17 @@ mod tests {
             "the fleet created the tunnel, not the anchor"
         );
         assert_eq!(opened.onchain_nonce, 0);
+        // The driver signs `timestamp = created_at`; surfacing it here is what makes the bot's half
+        // combine with the FE's (which signs the same on-chain createdAt).
+        assert_eq!(opened.created_at_ms, Some(1_700_000_000_000));
     }
 
-    // `settle` emits the bot's co-signed half to the human peer as a `PeerMsg::Settle` over the
-    // relay, with the signature and root hex the FE pairs against. This is the seam the genuine
-    // two-party close hinges on: a regression in the wire (tag, hex, routing) breaks `/settle`
-    // pairing and fails here.
+    // `settle` emits the bot's co-signed half to the human peer in the FE `settleHalf` wire — the
+    // exact keys/values the browser's `waitPeer("settleHalf")` + `combineSettlementWithRoot` read.
+    // This is the cross-language seam the genuine two-party close hinges on, so it asserts against the
+    // TS `PeerMessage` shape (tag `settleHalf`, field `transcriptRoot`, decimal-string numerics), NOT
+    // a Rust `PeerMsg` round-trip — the latter would pass even if the FE-facing wire drifted (the
+    // self-assertion trap that let `settle`/`settleHalf` diverge unnoticed).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn settle_emits_the_co_signed_half_to_the_peer() {
         let state = AppState::in_memory_for_test();
@@ -194,7 +240,8 @@ mod tests {
             )
             .await;
 
-        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), bot_conn, match_id.into());
+        let anchor =
+            RelayBridgedAnchor::new("0xtunnel".into(), bot_conn, match_id.into(), 1_700_000_000_000);
         let sig = [7u8; 64];
         let root = [9u8; 32];
         anchor
@@ -222,13 +269,22 @@ mod tests {
         else {
             panic!("expected a Relay frame");
         };
-        match classify(payload.as_bytes()).expect("classifies") {
-            Incoming::Peer(PeerMsg::Settle { sig: s, root: r }) => {
-                assert_eq!(s, hex::encode(sig), "settle sig is the bot's half, hex");
-                assert_eq!(r, hex::encode(root), "settle root matches the v2 root, hex");
-            }
-            other => panic!("expected a settle half, got {other:?}"),
-        }
+        let half: serde_json::Value = serde_json::from_str(&payload).expect("settle half is JSON");
+        assert_eq!(half["t"], "settleHalf", "FE waits on tag `settleHalf`, not `settle`");
+        assert_eq!(
+            half["sig"],
+            hex::encode(sig),
+            "sig is the bot's half, lowercase no-0x hex (TS bytesToHex)"
+        );
+        assert_eq!(
+            half["transcriptRoot"],
+            hex::encode(root),
+            "FE reads `transcriptRoot`, not `root`"
+        );
+        assert_eq!(half["partyABalance"], "120", "balances are decimal strings (TS toString)");
+        assert_eq!(half["partyBBalance"], "80");
+        assert_eq!(half["finalNonce"], "1");
+        assert_eq!(half["timestamp"], "42");
     }
 
     // v1 (rootless) settlement is rejected: the arena close is always v2, so a missing root is a
@@ -237,7 +293,7 @@ mod tests {
     async fn settle_without_root_is_rejected() {
         let state = AppState::in_memory_for_test();
         let conn = BusRelayConnection::register(state.clone());
-        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into());
+        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into(), 1_700_000_000_000);
         let err = anchor
             .settle(TunnelSettleRequest {
                 by: Seat::B,

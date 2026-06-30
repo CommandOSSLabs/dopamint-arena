@@ -189,7 +189,19 @@ async fn play_arena_match(
     tracing::info!(match_id = %opened.match_id, game = %game, "arena: user joined; bot driving co-signed play");
     let transport = BusRelayTransport::new(conn.clone(), opened.match_id.clone());
     let channel = MatchChannel::new(transport);
-    let anchor = RelayBridgedAnchor::new(opened.tunnel_id.clone(), conn, opened.match_id.clone());
+    // The bot signs its settlement half with `timestamp = created_at` (matching the FE half, which
+    // reads the same on-chain field), so resolve it before play. Fail the match if unreadable — a bot
+    // that can't sign a combinable half would only produce a settle the FE rejects.
+    let created_at_ms = state
+        .arena_opener
+        .read_created_at_ms(&opened.tunnel_id)
+        .await?;
+    let anchor = RelayBridgedAnchor::new(
+        opened.tunnel_id.clone(),
+        conn,
+        opened.match_id.clone(),
+        created_at_ms,
+    );
     let moves = match play_game(game, channel, anchor, match_key, &opened.opponent_wallet).await {
         Ok(m) => m,
         Err(e) => {
@@ -535,8 +547,10 @@ mod tests {
 
         let human_transport = BusRelayTransport::new(human_conn.clone(), match_id.to_owned());
         let human_channel = MatchChannel::new(human_transport);
+        // createdAt `0` matches the bot side: `play_arena_match` here resolves it via the
+        // `NoopArenaOpener` (in-memory state), which returns 0 — so both seats sign `timestamp = 0`.
         let human_anchor =
-            RelayBridgedAnchor::new(TUNNEL_ID.to_owned(), human_conn, match_id.to_owned());
+            RelayBridgedAnchor::new(TUNNEL_ID.to_owned(), human_conn, match_id.to_owned(), 0);
         let human = play_blackjack(
             human_channel,
             human_anchor,
