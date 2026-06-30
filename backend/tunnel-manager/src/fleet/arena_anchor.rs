@@ -188,7 +188,8 @@ mod tests {
     async fn open_resolves_the_precreated_tunnel() {
         let state = AppState::in_memory_for_test();
         let conn = BusRelayConnection::register(state.clone());
-        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into(), 1_700_000_000_000);
+        let anchor =
+            RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into(), 1_700_000_000_000);
 
         let opened = anchor
             .open(TunnelOpenRequest {
@@ -240,8 +241,12 @@ mod tests {
             )
             .await;
 
-        let anchor =
-            RelayBridgedAnchor::new("0xtunnel".into(), bot_conn, match_id.into(), 1_700_000_000_000);
+        let anchor = RelayBridgedAnchor::new(
+            "0xtunnel".into(),
+            bot_conn,
+            match_id.into(),
+            1_700_000_000_000,
+        );
         let sig = [7u8; 64];
         let root = [9u8; 32];
         anchor
@@ -270,7 +275,10 @@ mod tests {
             panic!("expected a Relay frame");
         };
         let half: serde_json::Value = serde_json::from_str(&payload).expect("settle half is JSON");
-        assert_eq!(half["t"], "settleHalf", "FE waits on tag `settleHalf`, not `settle`");
+        assert_eq!(
+            half["t"], "settleHalf",
+            "FE waits on tag `settleHalf`, not `settle`"
+        );
         assert_eq!(
             half["sig"],
             hex::encode(sig),
@@ -281,7 +289,10 @@ mod tests {
             hex::encode(root),
             "FE reads `transcriptRoot`, not `root`"
         );
-        assert_eq!(half["partyABalance"], "120", "balances are decimal strings (TS toString)");
+        assert_eq!(
+            half["partyABalance"], "120",
+            "balances are decimal strings (TS toString)"
+        );
         assert_eq!(half["partyBBalance"], "80");
         assert_eq!(half["finalNonce"], "1");
         assert_eq!(half["timestamp"], "42");
@@ -293,7 +304,8 @@ mod tests {
     async fn settle_without_root_is_rejected() {
         let state = AppState::in_memory_for_test();
         let conn = BusRelayConnection::register(state.clone());
-        let anchor = RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into(), 1_700_000_000_000);
+        let anchor =
+            RelayBridgedAnchor::new("0xtunnel".into(), conn, "m1".into(), 1_700_000_000_000);
         let err = anchor
             .settle(TunnelSettleRequest {
                 by: Seat::B,

@@ -142,7 +142,9 @@ async fn main() -> anyhow::Result<()> {
     {
         Ok(pool) => pool.map(Arc::new),
         Err(e) => {
-            tracing::error!("wallet pool open failed — arena opener falls back to Noop/placeholder: {e:#}");
+            tracing::error!(
+                "wallet pool open failed — arena opener falls back to Noop/placeholder: {e:#}"
+            );
             None
         }
     };
@@ -150,24 +152,27 @@ async fn main() -> anyhow::Result<()> {
     // Arena opener (ADR-0028): the real `SuiArenaOpener` — each open self-signs create + fund-seat-B as
     // the checked-out pool member — when the wallet pool + on-chain package/RPC are configured; else
     // `Noop` so the allocate contract + FE deposit path still work for tests/dev without the pool.
-    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> =
-        match (&wallet_pool, &config.sui_rpc_url, &config.package_id) {
-            (Some(pool), Some(rpc), Some(pkg)) => Arc::new(
-                crate::fleet::arena_opener::SuiArenaOpener::new(
-                    rpc.clone(),
-                    pkg,
-                    &config.coin_type,
-                    pool.clone(),
-                )
-                .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
-            ),
-            _ => {
-                tracing::info!(
+    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> = match (
+        &wallet_pool,
+        &config.sui_rpc_url,
+        &config.package_id,
+    ) {
+        (Some(pool), Some(rpc), Some(pkg)) => Arc::new(
+            crate::fleet::arena_opener::SuiArenaOpener::new(
+                rpc.clone(),
+                pkg,
+                &config.coin_type,
+                pool.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
+        ),
+        _ => {
+            tracing::info!(
                     "arena opener: Noop (set WALLET_POOL_ID + SUI_RPC_URL + TUNNEL_PACKAGE_ID for real on-chain opens)"
                 );
-                Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
-            }
-        };
+            Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
+        }
+    };
 
     let state: SharedState = Arc::new(AppState {
         control,

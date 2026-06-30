@@ -37,7 +37,10 @@ fn reveal(secret: BlackjackV2Secret) -> BlackjackV2Move {
 
 /// Place the opening bet (player of round 1 = Seat::A) to begin round 1 (→ draw_commit). The
 /// protocol awaits a `bet` before the first deal (FE parity), so card-machinery tests deal first.
-fn deal(protocol: &BlackjackV2, state: &<BlackjackV2 as Protocol>::State) -> <BlackjackV2 as Protocol>::State {
+fn deal(
+    protocol: &BlackjackV2,
+    state: &<BlackjackV2 as Protocol>::State,
+) -> <BlackjackV2 as Protocol>::State {
     protocol
         .apply_move(state, &BlackjackV2Move::Bet { amount: WAGER }, Seat::A)
         .unwrap()
@@ -170,10 +173,14 @@ fn move_json_matches_ts_blackjack_move_codec() {
         json!({ "kind": "reveal", "reveal": { "value": "0x07", "salt": format!("0x{}", "09".repeat(16)) } }),
     );
     // And the bot decodes the FE's exact bytes back.
-    let bet: BlackjackV2Move = serde_json::from_value(json!({ "kind": "bet", "amount": "25" })).unwrap();
+    let bet: BlackjackV2Move =
+        serde_json::from_value(json!({ "kind": "bet", "amount": "25" })).unwrap();
     assert!(matches!(bet, BlackjackV2Move::Bet { amount: 25 }));
-    let commit: BlackjackV2Move =
-        serde_json::from_value(json!({ "kind": "commit", "commitment": format!("0x{}", "cd".repeat(32)) }))
-            .unwrap();
-    assert!(matches!(commit, BlackjackV2Move::Commit { commitment, .. } if commitment == [0xcd; 32]));
+    let commit: BlackjackV2Move = serde_json::from_value(
+        json!({ "kind": "commit", "commitment": format!("0x{}", "cd".repeat(32)) }),
+    )
+    .unwrap();
+    assert!(
+        matches!(commit, BlackjackV2Move::Commit { commitment, .. } if commitment == [0xcd; 32])
+    );
 }

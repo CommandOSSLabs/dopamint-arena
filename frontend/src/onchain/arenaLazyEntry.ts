@@ -43,7 +43,8 @@ export async function requestArenaGame(
       apiBase: resolveBackendUrl(),
     });
     const alloc = allocations[0];
-    if (alloc && keypair) setArenaEntry(alloc.game, { allocation: alloc, keypair });
+    if (alloc && keypair)
+      setArenaEntry(alloc.game, { allocation: alloc, keypair });
   } catch (e) {
     // No free bot / deposit rejected — the window just shows its normal lobby; a reopen retries.
     console.warn(`[arena] late allocate failed for ${arenaGameId}`, e);

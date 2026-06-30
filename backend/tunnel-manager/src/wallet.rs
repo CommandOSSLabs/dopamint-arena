@@ -42,7 +42,10 @@ impl WalletPoolSource {
     /// The keypair for a member by on-chain address — the seat-B signer the opener uses to self-sign
     /// `create + deposit_party_b`. In-memory (no S3 write); `By::Address` is a linear scan over the
     /// blob (O(members)), fine at allocate cadence where the open RPC dominates.
-    pub fn keypair_for_address(&self, address: &str) -> anyhow::Result<wallet_pool_core::crypto::KeyPair> {
+    pub fn keypair_for_address(
+        &self,
+        address: &str,
+    ) -> anyhow::Result<wallet_pool_core::crypto::KeyPair> {
         self.handle
             .get_member_key(By::Address(address.to_owned()))
             .map_err(|e| anyhow::anyhow!("wallet pool key for {address}: {e}"))

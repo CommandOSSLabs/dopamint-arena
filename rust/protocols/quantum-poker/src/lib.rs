@@ -805,8 +805,9 @@ impl QuantumPoker {
         }
         let mut next = state.clone();
         next.hand_no += 1;
-        let can_continue =
-            next.hand_no < next.hand_cap && next.balance_a >= self.ante && next.balance_b >= self.ante;
+        let can_continue = next.hand_no < next.hand_cap
+            && next.balance_a >= self.ante
+            && next.balance_b >= self.ante;
         next.commit_a = None;
         next.commit_b = None;
         next.reveals_a = empty_reveals();
@@ -1262,14 +1263,24 @@ mod tests {
         }
         // Re-serialize: must reproduce the TS shape (0x-hex strings), NOT serde's default byte arrays.
         let back = serde_json::to_string(&m).expect("encode commit_slots");
-        assert!(back.contains(r#""commitments":["0x"#), "commitments must be 0x-hex, got {back}");
-        assert!(!back.contains("[1]") && !back.contains(",1,"), "must not be a byte array: {back}");
+        assert!(
+            back.contains(r#""commitments":["0x"#),
+            "commitments must be 0x-hex, got {back}"
+        );
+        assert!(
+            !back.contains("[1]") && !back.contains(",1,"),
+            "must not be a byte array: {back}"
+        );
 
         // bet: amount is a DECIMAL STRING, not a JSON number.
-        let bet: PokerMove = serde_json::from_str(r#"{"kind":"bet","amount":"250"}"#).expect("decode bet");
+        let bet: PokerMove =
+            serde_json::from_str(r#"{"kind":"bet","amount":"250"}"#).expect("decode bet");
         assert_eq!(bet, PokerMove::Bet { amount: 250 });
         let bet_back = serde_json::to_string(&bet).expect("encode bet");
-        assert!(bet_back.contains(r#""amount":"250""#), "amount must be a decimal string: {bet_back}");
+        assert!(
+            bet_back.contains(r#""amount":"250""#),
+            "amount must be a decimal string: {bet_back}"
+        );
 
         // reveal_slots: value (32) + salt (16) as 0x-hex.
         let reveal_json = r#"{"kind":"reveal_slots","slots":[0],"reveals":[{"value":"0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20","salt":"0xaabbccddeeff00112233445566778899"}]}"#;
@@ -1283,7 +1294,10 @@ mod tests {
             other => panic!("expected reveal_slots, got {other:?}"),
         }
         let reveal_back = serde_json::to_string(&reveal).expect("encode reveal_slots");
-        assert!(reveal_back.contains(r#""value":"0x"#) && reveal_back.contains(r#""salt":"0x"#), "{reveal_back}");
+        assert!(
+            reveal_back.contains(r#""value":"0x"#) && reveal_back.contains(r#""salt":"0x"#),
+            "{reveal_back}"
+        );
     }
 
     fn ctx() -> TunnelContext {

@@ -915,7 +915,9 @@ export function usePvpTicTacToe(
             options: { showContent: true },
           });
           const fields = (
-            obj.data?.content as { fields?: Record<string, unknown> } | undefined
+            obj.data?.content as
+              | { fields?: Record<string, unknown> }
+              | undefined
           )?.fields;
           createdAtRef.current = BigInt(
             (fields?.created_at as string | undefined) ?? 0,

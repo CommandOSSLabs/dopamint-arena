@@ -142,7 +142,9 @@ export async function enterArena(
       const aAmount =
         alloc.stakeEach != null ? BigInt(alloc.stakeEach) : opts.stakePerGame;
       if (aAmount == null)
-        throw new Error(`arena: no stake for ${alloc.game} (allocation.stakeEach + stakePerGame both unset)`);
+        throw new Error(
+          `arena: no stake for ${alloc.game} (allocation.stakeEach + stakePerGame both unset)`,
+        );
       const tunnelId = await open({
         mode: "deposit",
         tunnelId: alloc.tunnelId,

@@ -123,7 +123,11 @@ impl SuiArenaOpener {
     ) -> anyhow::Result<Self> {
         let nonce_seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| (d.as_secs() as u32).wrapping_mul(2_654_435_761).wrapping_add(d.subsec_nanos()))
+            .map(|d| {
+                (d.as_secs() as u32)
+                    .wrapping_mul(2_654_435_761)
+                    .wrapping_add(d.subsec_nanos())
+            })
             .unwrap_or(0);
         Ok(Self {
             http: reqwest::Client::new(),
@@ -135,7 +139,11 @@ impl SuiArenaOpener {
         })
     }
 
-    async fn rpc(&self, method: &str, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn rpc(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
         let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params});
         let resp: serde_json::Value = self
             .http
@@ -149,31 +157,51 @@ impl SuiArenaOpener {
         if let Some(err) = resp.get("error") {
             return Err(anyhow!("rpc {method}: {err}"));
         }
-        Ok(resp.get("result").cloned().unwrap_or(serde_json::Value::Null))
+        Ok(resp
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
     }
 
     async fn epoch_and_gas_price(&self) -> anyhow::Result<(u64, u64)> {
-        let r = self.rpc("suix_getLatestSuiSystemState", serde_json::json!({})).await?;
+        let r = self
+            .rpc("suix_getLatestSuiSystemState", serde_json::json!({}))
+            .await?;
         let epoch = r
             .pointer("/epoch")
-            .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| v.as_u64())
+            })
             .ok_or_else(|| anyhow!("no epoch in system state"))?;
         let gas = r
             .pointer("/referenceGasPrice")
-            .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| v.as_u64())
+            })
             .unwrap_or(1);
         Ok((epoch, gas))
     }
 
     async fn dry_run(&self, tx: &Transaction) -> anyhow::Result<()> {
-        let tx_b64 = base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(tx).context("bcs tx")?);
-        let r = self.rpc("sui_dryRunTransactionBlock", serde_json::json!([tx_b64])).await?;
+        let tx_b64 =
+            base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(tx).context("bcs tx")?);
+        let r = self
+            .rpc("sui_dryRunTransactionBlock", serde_json::json!([tx_b64]))
+            .await?;
         dryrun_effects_ok(&r).map_err(|e| anyhow!("arena open dry-run failed: {e}"))
     }
 
     /// Execute + return the tx digest AND the shared tunnel object id from the effects' object
     /// changes. The tunnel is the one `shared` object created by this tx (type `...::tunnel::Tunnel<...>`).
-    async fn execute_and_read_tunnel(&self, tx: &Transaction, sig: &UserSignature) -> anyhow::Result<String> {
+    async fn execute_and_read_tunnel(
+        &self,
+        tx: &Transaction,
+        sig: &UserSignature,
+    ) -> anyhow::Result<String> {
         let b64 = base64::engine::general_purpose::STANDARD;
         let tx_b64 = b64.encode(bcs::to_bytes(tx).context("bcs tx")?);
         let sig_b64 = sig.to_base64();
@@ -187,20 +215,28 @@ impl SuiArenaOpener {
             anyhow::ensure!(
                 status == "success",
                 "arena open execution failed: {}",
-                r.pointer("/effects/status").map(|v| v.to_string()).unwrap_or_default()
+                r.pointer("/effects/status")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default()
             );
         }
         // The created + shared Tunnel<T> object is the one we want. Object changes list each
         // created object with its type; match the tunnel module's Tunnel type.
         let tunnel_type = format!("{}::tunnel::Tunnel<{}>", self.package_id, self.coin_type);
-        let changes = r.pointer("/objectChanges").and_then(|v| v.as_array()).ok_or_else(|| anyhow!("no objectChanges in execute result"))?;
+        let changes = r
+            .pointer("/objectChanges")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("no objectChanges in execute result"))?;
         let mut found = None;
         for ch in changes {
             let kind = ch.pointer("/type").and_then(|v| v.as_str()).unwrap_or("");
             if kind != "created" {
                 continue;
             }
-            let otype = ch.pointer("/objectType").and_then(|v| v.as_str()).unwrap_or("");
+            let otype = ch
+                .pointer("/objectType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             // The on-chain type string may render with normalized whitespace/casing; match by suffix
             // on the tunnel type to be robust to the package's exact rendering.
             if otype.contains("::tunnel::Tunnel<") {
@@ -219,7 +255,8 @@ impl SuiArenaOpener {
 #[async_trait]
 impl ArenaTunnelOpener for SuiArenaOpener {
     async fn open_and_fund_seat_b(&self, req: ArenaOpenRequest<'_>) -> anyhow::Result<String> {
-        let user_addr = Address::from_str(&canonical_address(req.user_address)?).context("bad user address")?;
+        let user_addr =
+            Address::from_str(&canonical_address(req.user_address)?).context("bad user address")?;
         // Seat B is the pool member the fleet checked out (`req.bot_address`). Resolve its key from the
         // funded pool and self-sign the create+deposit PTB as that member: it is both sender and gas
         // owner (SIP-58), and `deposit_party_b` asserts `ctx.sender() == tunnel.party_b.address`, so
@@ -234,7 +271,10 @@ impl ArenaTunnelOpener for SuiArenaOpener {
             .context("user ephemeral pubkey hex")?;
         let bot_pk = hex::decode(req.bot_eph_pubkey.trim_start_matches("0x"))
             .context("bot ephemeral pubkey hex")?;
-        anyhow::ensure!(user_pk.len() == 32, "user ephemeral pubkey must be 32 bytes");
+        anyhow::ensure!(
+            user_pk.len() == 32,
+            "user ephemeral pubkey must be 32 bytes"
+        );
         anyhow::ensure!(bot_pk.len() == 32, "bot ephemeral pubkey must be 32 bytes");
 
         let (epoch, gas_price) = self.epoch_and_gas_price().await?;
@@ -275,7 +315,11 @@ impl ArenaTunnelOpener for SuiArenaOpener {
         // The tunnel's `created_at` (ms) — the exact field the FE's `readCreatedAt` reads. Move u64
         // fields render as decimal strings in JSON; tolerate a numeric too.
         r.pointer("/data/content/fields/created_at")
-            .and_then(|v| v.as_str().and_then(|s| s.parse::<u64>().ok()).or_else(|| v.as_u64()))
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .or_else(|| v.as_u64())
+            })
             .ok_or_else(|| anyhow!("tunnel {tunnel_id} has no created_at field: {r}"))
     }
 }
@@ -378,7 +422,9 @@ fn build_arena_open_tx(
         chain,
         nonce,
     });
-    let mut tx = tb.try_build().map_err(|e| anyhow!("build arena open tx: {e}"))?;
+    let mut tx = tb
+        .try_build()
+        .map_err(|e| anyhow!("build arena open tx: {e}"))?;
     tx.gas_payment.objects.clear();
     Ok(tx)
 }

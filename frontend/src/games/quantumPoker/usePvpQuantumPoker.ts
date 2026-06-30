@@ -812,12 +812,15 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
    *  relay + engine over the already-funded tunnel. `allocation` comes from `POST
    *  /v1/arena/allocate` (the bot's pubkey/address + the pre-created tunnelId + matchId). */
   const enterArenaMatch = useCallback(
-    (allocation: {
-      matchId: string;
-      tunnelId: string;
-      botEphPubkey: string;
-      botAddress: string;
-    }, eph: KeyPair) => {
+    (
+      allocation: {
+        matchId: string;
+        tunnelId: string;
+        botEphPubkey: string;
+        botAddress: string;
+      },
+      eph: KeyPair,
+    ) => {
       if (!account) {
         setError("connect a wallet first");
         setStatus("error");

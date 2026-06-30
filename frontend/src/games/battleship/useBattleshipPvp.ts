@@ -705,7 +705,10 @@ class PvpSession {
     // Auto-place a fleet for the user's seat and turn autopilot ON (the seat fires automatically).
     const placements = placeFleetRandom(Math.random);
     this.placements = placements;
-    const secret = makeFleetSecret(placementsToBoard(placements), randomSalts());
+    const secret = makeFleetSecret(
+      placementsToBoard(placements),
+      randomSalts(),
+    );
     this.secret = secret;
     this.auto = true;
 

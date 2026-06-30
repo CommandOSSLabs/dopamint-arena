@@ -68,9 +68,15 @@ pub async fn reserve_or_spawn(
         Some(Ok(addr)) => addr,
         Some(Err(e)) => {
             tracing::warn!("wallet pool checkout failed, using placeholder: {e:#}");
-            bot_address(game, ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+            bot_address(
+                game,
+                ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            )
         }
-        None => bot_address(game, ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        None => bot_address(
+            game,
+            ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ),
     };
     let bot = BotHandle {
         eph_pubkey: hex::encode(match_key.public_key()),

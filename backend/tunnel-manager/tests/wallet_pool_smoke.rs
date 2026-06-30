@@ -23,7 +23,11 @@ async fn real_pool_funding_distribution() {
     let access = std::env::var("WALLET_POOL_ACCESS_VALUE").expect("WALLET_POOL_ACCESS_VALUE");
     let rpc_url = std::env::var("SUI_RPC_URL").expect("SUI_RPC_URL");
 
-    let store = Arc::new(S3WalletPoolStore::from_env().await.expect("s3 store from_env"));
+    let store = Arc::new(
+        S3WalletPoolStore::from_env()
+            .await
+            .expect("s3 store from_env"),
+    );
     let rpc = Arc::new(ReqwestRpc::new(rpc_url));
     let pool = WalletPool::new(store, rpc.clone());
     let handle = pool

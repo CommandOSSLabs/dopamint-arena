@@ -101,5 +101,8 @@ async fn bot_plays_a_full_poker_match_against_a_human_stand_in() {
         a.final_balances, b.final_balances,
         "both seats agree on the settled outcome"
     );
-    assert!(a.moves > 0, "poker match progressed over the demuxed transport");
+    assert!(
+        a.moves > 0,
+        "poker match progressed over the demuxed transport"
+    );
 }

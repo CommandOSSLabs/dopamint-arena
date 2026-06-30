@@ -845,7 +845,11 @@ export function usePvpBlackjack(): PvpView {
       void (async () => {
         try {
           const connEph = core.generateKeyPair();
-          const mp = new MpClient(resolveMpWsUrl(MP_URL), walletAddress, connEph);
+          const mp = new MpClient(
+            resolveMpWsUrl(MP_URL),
+            walletAddress,
+            connEph,
+          );
           mpRef.current = mp;
           installResumePersistence();
           await mp.connect();
@@ -897,7 +901,9 @@ export function usePvpBlackjack(): PvpView {
             options: { showContent: true },
           });
           const fields = (
-            obj.data?.content as { fields?: Record<string, unknown> } | undefined
+            obj.data?.content as
+              | { fields?: Record<string, unknown> }
+              | undefined
           )?.fields;
           createdAtRef.current = BigInt(
             (fields?.created_at as string | undefined) ?? 0,

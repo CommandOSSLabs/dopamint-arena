@@ -10,18 +10,18 @@
 //! the on-chain genuine-two-party path.
 
 use anyhow::{anyhow, bail, Context, Result};
+use tunnel_battleship::{Battleship, BattleshipStrategy};
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
 use tunnel_blackjack::{Blackjack, BlackjackStrategy};
-use tunnel_battleship::{Battleship, BattleshipStrategy};
 use tunnel_bomb_it::{BombIt, BombItStrategy};
 use tunnel_caro::{CaroSeries, CaroSeriesStrategy, CaroStrength};
 use tunnel_cross::{Cross, CrossStrategy};
-use tunnel_tic_tac_toe::{TicTacToeDifficulty, TicTacToeSeries, TicTacToeSeriesStrategy};
 use tunnel_harness::{
     Balances, DriverOutcome, MoveStrategy, PartyDriver, Protocol, SeatParts, Signer,
     TranscriptRecorder, TunnelAnchor,
 };
 use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
+use tunnel_tic_tac_toe::{TicTacToeDifficulty, TicTacToeSeries, TicTacToeSeriesStrategy};
 use tunnel_world_canvas::{WorldCanvasStroke, WorldCanvasStrokeStrategy};
 
 use crate::match_channel::MatchChannel;
@@ -430,7 +430,14 @@ where
         .map_err(|e| anyhow!("ttt series: {e:?}"))?;
     let strategy = TicTacToeSeriesStrategy::new(TicTacToeDifficulty::Fast, fleet_seed(role) as u32);
     play_match(
-        protocol, strategy, &TIC_TAC_TOE, &info, channel, anchor, signer, recorder,
+        protocol,
+        strategy,
+        &TIC_TAC_TOE,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
     )
     .await
 }

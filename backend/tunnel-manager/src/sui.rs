@@ -27,7 +27,8 @@ use sui_sdk_types::{
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
 /// 0x6 system Clock — shared, first shared at version 1.
-pub(crate) const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
+pub(crate) const CLOCK_ADDRESS: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000006";
 /// Fixed gas budget for a single cooperative close (one MoveCall, two shared objects).
 pub(crate) const GAS_BUDGET: u64 = 100_000_000;
 /// Per-command gas budget for a sponsored open/fund PTB; the total is this × the PTB's command
