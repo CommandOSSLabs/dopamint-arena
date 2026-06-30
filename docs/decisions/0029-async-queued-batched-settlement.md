@@ -50,11 +50,16 @@ not the HTTP response. We **stay on the public fullnode** and live under its cei
   reaches the client; genuine rejection (bad sig / already-closed / balance mismatch) goes to
   a dead-letter + failed-settlement event. Structural rejects still return 422 synchronously
   at ingest (no RPC needed).
-- **Idempotency is required**: at-least-once delivery + crash recovery mean a tunnel must
-  settle at most once on-chain. Dedup by `tunnel_id` + closed-registry re-check at build
-  time; treat *already-closed-on-chain* as success (emit the proof, ack); the indexer makes
-  provenance eventually consistent if a worker dies before publishing. A multi-tunnel PTB
-  uses a per-batch nonce (like `sponsor_nonce`) for the SIP-58 `ValidDuring` replay guard.
+- **Idempotency**: at-least-once delivery + crash recovery mean a tunnel must settle at most
+  once on-chain. Implemented: dedup by `tunnel_id` within a claim + a closed-registry re-check
+  before submit, which covers the common redelivery. Fund-safe by construction — a second close
+  of a closed tunnel aborts `ETunnelClosed` on-chain (no double payout). **Known gap**: the rare
+  case where a close *landed* but its registry update was lost (crash between execute and
+  set-status) is, on redelivery, re-submitted, aborts, and is **dead-lettered as a false alarm**
+  (the tunnel is in fact closed) rather than recognized as success. The indexer still derives the
+  close from chain, so provenance is eventually consistent; mapping that on-chain
+  already-closed abort back to success is a follow-up (needs the abort code parsed). A multi-tunnel
+  PTB uses a per-batch nonce (like `sponsor_nonce`) for the SIP-58 `ValidDuring` replay guard.
 - **The driver fires-and-forgets** (awaits only the 202), removing the herd at the source;
   `party_driver` asserts only locally-known `final_balances`, so it needs no inline digest.
 - We remove the settle-specific 32-concurrency layer (ingest is now O(1); the worker pool +

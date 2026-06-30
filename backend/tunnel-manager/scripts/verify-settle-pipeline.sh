@@ -50,5 +50,12 @@ done
 
 echo
 if [ "$fail" -ne 0 ]; then echo "==> RESULT: FAIL"; exit 1; fi
-echo "==> RESULT: PASS — async settlement pipeline verified end-to-end."
+echo "==> RESULT: PASS — pipeline ORCHESTRATION verified (handler -> queue -> worker pool):"
+echo "    coalescing, retry-by-split isolation, transient re-queue, idempotency, 202 ingest."
 echo "    (Headline e2e: settle_worker::tests::e2e_burst_through_handler_settles_with_batching_retry_and_isolation)"
+echo
+echo "==> NOT verified here (chain submission goes through a fake settler in tests):"
+echo "    the on-chain batched close_cooperative_with_root PTB executing on testnet, and the"
+echo "    real-load 429 elimination. K=128 is within testnet protocol limits (1024 cmds /"
+echo "    2048 input objects / 128KB tx), but the remaining ACCEPTANCE TEST is a funded"
+echo "    sui_dryRunTransactionBlock of a small batch + a fleet bench run on dev."

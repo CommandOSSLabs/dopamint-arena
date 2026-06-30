@@ -123,9 +123,13 @@ pub(crate) async fn drain_once(
                 to_ack.push(q.id);
             }
             Err(CloseError::Rejected(msg)) => {
+                // Permanent: ack so the bad settle never loops. NOTE (ADR-0029 known gap): a settle
+                // that already LANDED but whose registry update was lost re-aborts `ETunnelClosed`
+                // here and is dead-lettered as a false alarm — fund-safe (the tunnel IS closed), the
+                // indexer still has the proof; mapping that abort back to success is a follow-up.
                 tracing::warn!(tunnel_id = %close.tunnel_id, error = %msg, "settle rejected; dead-lettering");
                 dead_letter(deps, &close.tunnel_id, &msg).await;
-                to_ack.push(q.id); // permanent: ack so the bad settle never loops
+                to_ack.push(q.id);
             }
             Err(CloseError::Transient { .. }) => {
                 // Node busy after GovernedRpc's own retries: re-queue intact for a later worker,
