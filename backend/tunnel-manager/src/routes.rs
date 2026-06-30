@@ -290,7 +290,13 @@ pub(crate) async fn arena_allocate(
         };
         // ADR-0028: the fleet pre-creates the tunnel + funds seat B now, so the user joins with a
         // deposit-only PTB. On-chain-bound and may fail per game — omit a game whose open errors
-        // (its reserved bot then TTL-reclaims, same as the no-bot case).
+        // (its reserved bot then TTL-reclaims, same as the no-bot case). The stake comes from the
+        // game's `GameProfile` so the on-chain deposit matches the off-chain initial balances the FE
+        // co-signs; an unknown game (no profile) is omitted — the fleet can't play it.
+        let Some(profile) = fleet_core::play_match::profile_for(&game.id) else {
+            tracing::warn!(game = %game.id, "arena allocate: no GameProfile, omitting");
+            continue;
+        };
         let tunnel_id = match state
             .arena_opener
             .open_and_fund_seat_b(crate::fleet::arena_opener::ArenaOpenRequest {
@@ -299,6 +305,7 @@ pub(crate) async fn arena_allocate(
                 user_eph_pubkey: &game.user_eph_pubkey,
                 bot_address: &r.address,
                 bot_eph_pubkey: &r.eph_pubkey,
+                stake_each: profile.stake_each,
             })
             .await
         {

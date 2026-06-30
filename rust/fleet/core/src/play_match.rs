@@ -56,6 +56,17 @@ pub const QUANTUM_POKER: GameProfile = GameProfile {
     stake_each: 5000,
 };
 
+/// Look up the [`GameProfile`] for a game id, or `None` if the fleet has no wired profile for it.
+/// The arena allocate path uses this to find the per-seat stake for the opener (ADR-0028); adding a
+/// game is a new `const` here + an arm in [`play_game`]'s dispatch.
+pub fn profile_for(game: &str) -> Option<GameProfile> {
+    match game {
+        "blackjack" => Some(BLACKJACK),
+        "quantum_poker" => Some(QUANTUM_POKER),
+        _ => None,
+    }
+}
+
 /// Per-hand ante for the fleet bot's quantum poker. Matches the TS protocol's default `ANTE` (50n),
 /// which every FE caller uses (no FE caller passes a custom ante). Kept separate from
 /// [`QUANTUM_POKER`] because the ante is a protocol-construction param, not a stake.

@@ -27,9 +27,9 @@ use sui_sdk_types::{
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
 /// 0x6 system Clock — shared, first shared at version 1.
-const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
+pub(crate) const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 /// Fixed gas budget for a single cooperative close (one MoveCall, two shared objects).
-const GAS_BUDGET: u64 = 100_000_000;
+pub(crate) const GAS_BUDGET: u64 = 100_000_000;
 /// Gas budget cap for a sponsored open/fund tx (create + deposit + share). Same magnitude as a
 /// close; the dry-run rejects anything that would exceed it before the settler pays (ADR-0009).
 const SPONSOR_GAS_BUDGET: u64 = 100_000_000;
@@ -92,7 +92,7 @@ type ExampleModule = (Address, &'static str, &'static [&'static str]);
 /// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
 /// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
 /// address-balance gas requires this in the transaction expiration.
-const CHAIN_DIGEST_B58: &str = "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD";
+pub(crate) const CHAIN_DIGEST_B58: &str = "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD";
 
 /// Fields for one on-chain `close_cooperative_with_root`, mapped from the SDK's
 /// SettlementWithRoot (ADR-0002). Balances/timestamp already parsed to `u64`; sigs and
@@ -216,7 +216,7 @@ fn parse_event_row(ev: &serde_json::Value) -> Option<RawTunnelEvent> {
 /// Read a `sui_dryRunTransactionBlock` result: `Ok` iff `effects.status.status == "success"`,
 /// else `Err(<status json>)`. Mirrors the `execute()` status check; lets the settler reject a
 /// settlement that will not land BEFORE sponsoring gas (ADR-0007). Unit-tested against sample JSON.
-fn dryrun_effects_ok(resp: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn dryrun_effects_ok(resp: &serde_json::Value) -> Result<(), String> {
     match resp
         .pointer("/effects/status/status")
         .and_then(|v| v.as_str())
@@ -1091,7 +1091,7 @@ fn validate_kind_targets(
 
 /// Decode the settler's ed25519 secret: 32 raw bytes, or 33 with the Sui ed25519 flag
 /// (`0x00`) prefix, base64-encoded.
-fn load_ed25519(b64: &str) -> anyhow::Result<Ed25519PrivateKey> {
+pub(crate) fn load_ed25519(b64: &str) -> anyhow::Result<Ed25519PrivateKey> {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(b64.trim())
         .context("SUI_SETTLER_KEY is not valid base64")?;

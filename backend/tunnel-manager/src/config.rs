@@ -59,6 +59,10 @@ pub struct Config {
     /// inert; only an explicit `FLEET_COLOCATED_COUNT > 0` (+ `FLEET_COLOCATED_GAMES`) spawns them.
     pub colocated_fleet_count: u32,
     pub colocated_fleet_games: Vec<String>,
+    /// Funded party-B bot key (base64 ed25519), the account that pre-creates + funds seat B at
+    /// allocate (ADR-0028). Unset = `NoopArenaOpener` (the allocate contract works but no real
+    /// tunnel is created — for tests/dev without a funded bot). Required for a real on-chain flow.
+    pub fleet_bot_key: Option<String>,
 }
 
 impl Config {
@@ -124,6 +128,7 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            fleet_bot_key: opt("FLEET_BOT_KEY"),
         })
     }
 

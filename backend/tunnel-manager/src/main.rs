@@ -121,6 +121,30 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(750);
+
+    // Arena opener (ADR-0028): the real `SuiArenaOpener` (bot self-signs create + fund-seat-B) when
+    // a funded bot key + the on-chain package/coin/RPC are all configured; otherwise `Noop` so the
+    // allocate contract + FE deposit path still work for tests/dev without a funded bot. A failed
+    // build (bad key/package) is a hard error — the fleet can't open real tunnels without it.
+    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> =
+        match (&config.fleet_bot_key, &config.sui_rpc_url, &config.package_id) {
+            (Some(key), Some(rpc), Some(pkg)) => Arc::new(
+                crate::fleet::arena_opener::SuiArenaOpener::new(
+                    rpc.clone(),
+                    pkg,
+                    &config.coin_type,
+                    key,
+                )
+                .map_err(|e| anyhow::anyhow!("FLEET_BOT_KEY opener build: {e:#}"))?,
+            ),
+            _ => {
+                tracing::info!(
+                    "arena opener: Noop (set FLEET_BOT_KEY + SUI_RPC_URL + TUNNEL_PACKAGE_ID for real on-chain opens)"
+                );
+                Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
+            }
+        };
+
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
@@ -135,8 +159,7 @@ async fn main() -> anyhow::Result<()> {
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
         fleet: crate::fleet::BotPool::default(),
-        // Noop until SuiAnchor (ADR-0028): the arena 1a open seam is wired but does no chain work.
-        arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+        arena_opener,
         arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         faucet_user_amount: config.faucet_user_amount,
         faucet_internal_amount: config.faucet_internal_amount,
