@@ -162,10 +162,10 @@ export interface BlackjackBotGame {
 }
 
 // Buy-in (bankroll) each bot brings to the table per game. Chips are 1:1 with the on-chain stake, so
-// this is also the starting chip stack AND the MTPS staked per seat (0-decimal; ADR-0023). 1,000
-// chips = 1,000 whole MTPS — a stack big enough to play many rounds before a seat drains and the
-// funder rebuys (min-bet 1, options up to 100).
-const BUY_IN = 1_000n;
+// this is also the starting chip stack AND the MTPS staked per seat (0-decimal; ADR-0023). 50,000
+// chips = 50,000 whole MTPS — 500× the top bet option (100), so the table sustains the full
+// rounds-per-tunnel target (2600) before a seat drains and the funder rebuys, even at high bets.
+const BUY_IN = 50_000n;
 // Animation cadence: in manual mode the dealer/betting auto-steps are paced to this so they're
 // watchable between the player's decisions.
 const STEP_MS = 900;
