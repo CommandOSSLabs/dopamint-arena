@@ -16,7 +16,7 @@ import { makeCrossResumeAdapter } from "./crossResumeAdapter";
 export const chickenCrossSpec = defineGame(
   makePublicStateSpec<CrossState, CrossMove, CrossDir | undefined, CrossView>({
     game: "chicken-cross",
-    stake: 500n, // per-seat MIST
+    stake: 10n, // per-seat MTPS (0-decimal; cheap so 100k faucet covers ~10k matches)
     stepMs: 300,
     makeProtocol: () => new CrossProtocol(),
     deriveView,

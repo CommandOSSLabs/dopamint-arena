@@ -56,8 +56,10 @@ export interface ArenaWindowSpec<Solo extends ArenaSolo, Pvp extends ArenaPvp> {
   renderPvpBoard: (pvp: Pvp, onPlayAgain: () => void) => ReactNode;
 }
 
-/** Default per-game stake for the auto-started solo match (matches the lobby default). */
-const AUTO_STAKE = 500;
+/** Default per-DUEL stake for the auto-started solo match. Small (1 token) so the funded bank
+ *  (~100/seat) lasts ~100 duels — NOT the bank itself. Setting this ≈ the bank made each session
+ *  one duel (loser → 0 → settle); larger than the bank underflows the loser's balance (u64 crash). */
+const AUTO_STAKE = 1;
 
 /**
  * Build an arena game Window: the Solo/PvP chooser + status router shared by every self-play-and-PvP

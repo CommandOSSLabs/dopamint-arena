@@ -44,12 +44,14 @@ const MAX_STEPS_PER_FRAME = 8;
 /** Default beat between finished duels when a spec omits `rematchMs`. */
 const DEFAULT_REMATCH_MS = 600;
 
-/** DEFAULT large per-seat bank funded on-chain (vs the small per-duel stake): 500 MTPS
- *  (0-decimal whole tokens). One bank survives 500 per-duel swaps (each 1 MTPS) before
- *  re-funding. A spec may override via `SoloGameSpec.lockedPerSeat` (e.g. poker, whose
- *  bank IS its chip buy-in). */
-const LOCKED_PER_SEAT = 500n;
-const SUI_PER_SEAT = 500n;
+/** DEFAULT per-seat bank funded on-chain (vs the small per-duel stake): 100 MTPS (0-decimal whole
+ *  tokens). Self-play is money-neutral (duels swap ~1 MTPS, the bank is collateral returned at
+ *  settle), so this is sized to keep the UPFRONT funding small — N solo windows fund N×2×100, not
+ *  ×500 — which is what keeps the open off the slow faucet top-up path. One bank still survives ~100
+ *  per-duel swaps. A spec may override via `SoloGameSpec.lockedPerSeat` (e.g. poker, whose bank IS
+ *  its chip buy-in). */
+const LOCKED_PER_SEAT = 100n;
+const SUI_PER_SEAT = 100n;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
@@ -85,6 +87,9 @@ export class SoloEngine {
   private advancing = false;
   // Bumped on reset / each new findSoloMatch so an in-flight open/loop abandons ship.
   private gen = 0;
+  /** A findSoloMatch queued because the window auto-started before init+attachBridge wired the
+   *  worker (a seeded window opening before the wallet connects); run once both land. */
+  private pendingFind: { gameId: GameId; setup?: unknown } | null = null;
 
   // Control-plane TPS heartbeat (ADR-0002): the backend derives live TPS from action COUNTS, never
   // a rate. Registered once per session; each co-signed update bumps the counters, flushed ~1/s.
@@ -95,7 +100,7 @@ export class SoloEngine {
 
   constructor(
     private readonly getSpec: (gameId: GameId) => AnySoloSpec | undefined,
-  ) { }
+  ) {}
 
   // --- Setup (mirrors PvpEngine; wired once at spawn by engine.worker.ts) -------------------
 
@@ -105,10 +110,20 @@ export class SoloEngine {
 
   attachBridge(bridge: MainBridge): void {
     this.bridge = bridge;
+    this.maybeRunPendingFind();
   }
 
   subscribe(onSnapshot: (snap: MatchSnapshot) => void): void {
     this.onSnapshot = onSnapshot;
+    this.maybeRunPendingFind();
+  }
+
+  /** Run a findSoloMatch that was queued before the worker was wired (config + bridge present). */
+  private maybeRunPendingFind(): void {
+    if (!this.pendingFind || !this.config || !this.bridge) return;
+    const { gameId, setup } = this.pendingFind;
+    this.pendingFind = null;
+    void this.findSoloMatch(gameId, setup);
   }
 
   /** Queue the take-over seat's next intent; the running advance loop consumes it once. */
@@ -168,7 +183,8 @@ export class SoloEngine {
     this.dirty = false;
     const tunnel = this.tunnel;
     const spec = this.spec;
-    const view = tunnel && spec ? spec.deriveView(tunnel.state) : null;
+    const view =
+      tunnel && spec ? spec.deriveView(tunnel.state, this.bots) : null;
     const snap: MatchSnapshot = {
       status: this.status,
       role: null,
@@ -183,6 +199,7 @@ export class SoloEngine {
       score: this.score,
       gamesPlayed: tunnel ? tunnel.state.gamesPlayed : 0,
       result: this.result,
+      moves: this.moveCount,
     };
     this.onSnapshot?.(snap);
   }
@@ -234,6 +251,7 @@ export class SoloEngine {
     // since solo opens aren't bulk-cancellable like PvP's; acceptable until solo resume lands.
     this.gen += 1;
     this.advancing = false;
+    this.pendingFind = null;
     if (this.flushTimer !== null) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -263,12 +281,22 @@ export class SoloEngine {
    * the per-duel stake (a number, or `{ stake }`), floored at the spec's stake.
    */
   async findSoloMatch(gameId: GameId, setup?: unknown): Promise<void> {
-    const config = this.config;
     const spec = this.getSpec(gameId);
-    if (!config || !spec) {
-      this.fail(new Error(`solo engine not ready for game '${gameId}'`));
+    if (!spec) {
+      // A genuinely unregistered game — fail loud (a missing `defineSoloGame` import in registry.ts).
+      this.fail(new Error(`solo engine has no spec for game '${gameId}'`));
       return;
     }
+    // The window can auto-start findSolo BEFORE init+attachBridge land (a seeded window opening
+    // before the wallet connects). Don't fail — queue it and run on wiring (maybeRunPendingFind).
+    if (!this.config || !this.bridge) {
+      this.pendingFind = { gameId, setup };
+      this.status = "matching";
+      this.emit();
+      return;
+    }
+    this.pendingFind = null;
+    const config = this.config;
     this.spec = spec;
     const myGen = ++this.gen;
     try {
@@ -286,9 +314,14 @@ export class SoloEngine {
       this.emit();
 
       // A game whose on-chain balance IS its in-game stack (poker's chip buy-in) overrides the
-      // default 1-MTPS bank so the funded seats equal the protocol's starting balances.
-      const lockedPerSeat = spec.lockedPerSeat ?? LOCKED_PER_SEAT;
-      const fundedPerSeat = isMtpsConfigured ? lockedPerSeat : SUI_PER_SEAT;
+      // default bank so the funded seats equal the protocol's starting balances.
+      const baseBank = spec.lockedPerSeat ?? LOCKED_PER_SEAT;
+      // Fund AT LEAST one per-duel stake: the first duel's loser-swap subtracts `stakePerGame` from
+      // the seat balance, so a bank smaller than the stake would underflow it negative and crash
+      // `u64ToBeBytes` at encode/settle. With small self-play stakes this is a no-op (bank ≫ stake);
+      // it only guards a large lobby-chosen stake. (canFundNextGame gates every LATER duel.)
+      const bank = isMtpsConfigured ? baseBank : SUI_PER_SEAT;
+      const fundedPerSeat = bank > stakePerGame ? bank : stakePerGame;
       const a = createParticipant(`${spec.game}-a`);
       const b = createParticipant(`${spec.game}-b`);
 

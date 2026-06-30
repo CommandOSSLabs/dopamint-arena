@@ -27,19 +27,21 @@ import { deriveBattleshipView, type BattleshipView } from "./view";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 
-const STAKE_BALANCE = 1_000_000_000n; // 1 MTPS locked per seat
-const STAKE_SHIFT = 200_000_000n; // 0.2 MTPS moves loser → winner on a decisive result
+// Match the legacy hook (useBattleshipPvp.ts): under the 0-decimal MTPS economy (ADR-0023) a
+// whole token is `1n`, not `1e9`. The stale 9-decimal `1_000_000_000n` demanded a per-seat stake
+// the faucet (≤500k MTPS / 30 min) can never fund, so battleship PvP never opened. The shift is
+// clamped to the loser's balance in BattleshipProtocol (`shift = min(stake, loserBal)`), so with a
+// 1-token balance the winner takes the whole 1-token pot regardless of STAKE_SHIFT's magnitude.
+const STAKE_BALANCE = 1n; // locked per seat: 1 MTPS (0 decimals; ADR-0023)
+const STAKE_SHIFT = 1n; // decisive result moves the loser's 1-token stake → winner (0-decimal)
 
-class BattleshipController
-  implements
-    MatchController<
-      BattleshipState,
-      BattleshipMove,
-      Placement[],
-      number,
-      BattleshipView
-    >
-{
+class BattleshipController implements MatchController<
+  BattleshipState,
+  BattleshipMove,
+  Placement[],
+  number,
+  BattleshipView
+> {
   private secret: FleetSecret | null = null;
   private placements: Placement[] = [];
   private lastYourShot: number | null = null;
@@ -105,10 +107,20 @@ class BattleshipController
     const role = this.io.role;
     if (!dt) return;
     const st = dt.state;
-    if (st.phase !== "playing" || st.pendingShot || st.turn !== role || st.winner !== 0) {
+    if (
+      st.phase !== "playing" ||
+      st.pendingShot ||
+      st.turn !== role ||
+      st.winner !== 0
+    ) {
       return;
     }
-    const cell = pickShot(st, role, Math.random, BOT_CONFIGS[DEFAULT_BOT_DIFFICULTY]);
+    const cell = pickShot(
+      st,
+      role,
+      Math.random,
+      BOT_CONFIGS[DEFAULT_BOT_DIFFICULTY],
+    );
     this.fire(cell);
   }
 
@@ -117,7 +129,12 @@ class BattleshipController
     const role = this.io.role;
     if (!dt) return;
     const st = dt.state;
-    if (st.phase !== "playing" || st.pendingShot || st.turn !== role || st.winner !== 0) {
+    if (
+      st.phase !== "playing" ||
+      st.pendingShot ||
+      st.turn !== role ||
+      st.winner !== 0
+    ) {
       return;
     }
     const atOpponent = role === "A" ? st.shotsAtB : st.shotsAtA;

@@ -37,6 +37,7 @@ import {
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { Party, ProtocolContext } from "sui-tunnel-ts/protocol/Protocol";
 import {
+  POKER_ANTE,
   POKER_BUYIN,
   QUANTUM_POKER_HANDS_PER_TUNNEL,
   QUANTUM_POKER_STAKE,
@@ -129,7 +130,8 @@ const quantumPokerSolo: SoloGameSpec<
   // Poker is a turn-based card game: manual play co-signs ONE tick per this many ms so the run-out
   // stays watchable, and it doubles as the poll cadence while parked on the human's betting turn.
   manualStepMs: POKER_MANUAL_STEP_MS,
-  makeProtocol: () => new SoloQuantumPokerProtocol(QUANTUM_POKER_HANDS_PER_TUNNEL),
+  makeProtocol: () =>
+    new SoloQuantumPokerProtocol(QUANTUM_POKER_HANDS_PER_TUNNEL, POKER_ANTE),
   makeBots: (stakePerGame) => ({
     A: makeSeatBot(
       "A",

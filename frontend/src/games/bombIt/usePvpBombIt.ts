@@ -19,8 +19,10 @@ import type { MatchSnapshot } from "@/engine/engineApi";
 
 export type { PvpStatus };
 
-export interface PvpBombIt
-  extends Omit<PvpMatch<BombItState, BombItAction, BombItView>, "setIntent"> {
+export interface PvpBombIt extends Omit<
+  PvpMatch<BombItState, BombItAction, BombItView>,
+  "setIntent"
+> {
   queueAction: (a: BombItAction) => void;
 }
 
@@ -34,7 +36,7 @@ const useLegacyMatch = createPvpMatchHook<
 >({
   game: "bomb-it",
   stepMs: 250,
-  stake: 500n, // per-seat MIST
+  stake: 10n, // per-seat MTPS (must match bombItSpec.ts)
   makeProtocol: () => new BombItProtocol(),
   deriveView,
   makeResumeAdapter: makeBombItResumeAdapter,

@@ -19,8 +19,10 @@ import type { MatchSnapshot } from "@/engine/engineApi";
 
 export type { PvpStatus };
 
-export interface PvpChickenCross
-  extends Omit<PvpMatch<CrossState, CrossDir | undefined, CrossView>, "setIntent"> {
+export interface PvpChickenCross extends Omit<
+  PvpMatch<CrossState, CrossDir | undefined, CrossView>,
+  "setIntent"
+> {
   setDir: (dir: CrossDir) => void;
 }
 
@@ -33,7 +35,7 @@ const useLegacyMatch = createPvpMatchHook<
 >({
   game: "chicken-cross",
   stepMs: 300,
-  stake: 500n, // per-seat MIST
+  stake: 10n, // per-seat MTPS (must match chickenCrossSpec.ts)
   makeProtocol: () => new CrossProtocol(),
   deriveView,
   makeResumeAdapter: makeCrossResumeAdapter,

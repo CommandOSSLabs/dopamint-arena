@@ -64,7 +64,7 @@ import { useGameMatch } from "@/engine/react/useGameMatch";
 import type { MatchSnapshot } from "@/engine/engineApi";
 
 const STAKE_BALANCE = 1n; // locked per seat: 1 MTPS (0 decimals; ADR-0023)
-const STAKE_SHIFT = 200_000_000n; // 0.2 MTPS moves loser → winner on a decisive result
+const STAKE_SHIFT = 1n; // decisive result moves the loser's 1-token stake → winner (0-decimal)
 /** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
  *  stale/dead match (or a backend that predates resume support) never confirms, so we
  *  abandon to idle rather than hang on a frozen board. */
@@ -809,7 +809,8 @@ function useWorkerBattleship(windowId: string): BattleshipPvp {
   const { report } = useTelemetry();
   const rowFired = useRef(false);
   useEffect(() => {
-    if (snap.status === "idle" || snap.status === "matching") rowFired.current = false;
+    if (snap.status === "idle" || snap.status === "matching")
+      rowFired.current = false;
     if (snap.status === "settled" && !rowFired.current && snap.role) {
       rowFired.current = true;
       const iWon = snap.winner === (snap.role === "A" ? 1 : 2);
@@ -841,6 +842,5 @@ function useWorkerBattleship(windowId: string): BattleshipPvp {
 
 /** `?engine=worker` runs battleship in a Web Worker; default keeps the main-thread path.
  *  Bound once at module load so the hook identity is stable per session (rules-of-hooks). */
-export const useBattleshipPvp: (windowId: string) => BattleshipPvp = engineEnabled()
-  ? useWorkerBattleship
-  : useLegacyBattleshipPvp;
+export const useBattleshipPvp: (windowId: string) => BattleshipPvp =
+  engineEnabled() ? useWorkerBattleship : useLegacyBattleshipPvp;

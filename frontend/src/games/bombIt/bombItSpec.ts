@@ -16,7 +16,7 @@ import { makeBombItResumeAdapter } from "./bombItResumeAdapter";
 export const bombItSpec = defineGame(
   makePublicStateSpec<BombItState, BombItMove, BombItAction, BombItView>({
     game: "bomb-it",
-    stake: 500n, // per-seat MIST
+    stake: 10n, // per-seat MTPS (0-decimal; cheap so 100k faucet covers ~10k matches)
     stepMs: 250,
     makeProtocol: () => new BombItProtocol(),
     deriveView,

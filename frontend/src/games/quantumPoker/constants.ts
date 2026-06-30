@@ -11,12 +11,20 @@ export const QUANTUM_POKER_HAND_CAP = 180n;
  */
 export const QUANTUM_POKER_HANDS_PER_TUNNEL = 1500n;
 
-/** Per-duel stake (the bet each seat puts in per hand). 500 MTPS per hand. */
-export const QUANTUM_POKER_STAKE = 500n;
+/** Per-hand bet unit fed to the bots (display/sanity only; the protocol's `ante` drives real bets). */
+export const QUANTUM_POKER_STAKE = 1n;
 
 /**
- * Per-seat buy-in for the solo tunnel lane, in chips. Chips == raw MTPS (0-decimal, 1:1).
- * 500 gives ~500 hands per tunnel before a seat busts — enough for a long auto-play session.
- * Also used by the PvP lane (display + tunnel funding).
+ * The fixed per-hand wager unit (`ante`) passed to `QuantumPokerProtocol`. THIS is what each hand
+ * actually risks — the default 50 made every hand a huge bet against a small buy-in, so it's scaled
+ * to 1 chip for the whole-token (0-decimal) economy. The buy-in below must be ≥ this (a seat posts
+ * one ante to be dealt in). */
+export const POKER_ANTE = 1n;
+
+/**
+ * Per-seat buy-in (chip stack) for the tunnel lane, in chips. Chips == raw MTPS (0-decimal, 1:1).
+ * The on-chain bank the engine funds per seat — the smallest sensible value: ~10 antes deep, so a
+ * tunnel opens cheap and a seat plays many small hands (the hand cap, not busting, bounds the match).
+ * Floor is {@link POKER_ANTE} (a seat needs ≥ one ante to be dealt in). Used by solo + PvP lanes.
  */
-export const POKER_BUYIN = 500n;
+export const POKER_BUYIN = 10n;
