@@ -1,4 +1,4 @@
-// MTPS — the free stake token (ADR-0015). Games stake MTPS instead of SUI; gas stays sponsored in
+// MTPS — the free stake token (ADR-0023). Games stake MTPS instead of SUI; gas stays sponsored in
 // SUI. The token never shows in the UI — a background top-up keeps the player's balance above a
 // threshold, so the stake path never faucets in-line. Minting is admin-only: faucet pulls go
 // through the backend (`POST /v1/faucet`), not an on-chain PTB. Ids come from env.
@@ -15,11 +15,11 @@ export const MTPS_COIN_TYPE = import.meta.env?.VITE_MTPS_COIN_TYPE ?? "";
  *  the backend now, so there is no on-chain faucet-object id to require. */
 export const isMtpsConfigured = Boolean(MTPS_PACKAGE_ID && MTPS_COIN_TYPE);
 
-/** The MTPS token icon (the same icon registered in the coin's on-chain metadata; ADR-0015), for
+/** The MTPS token icon (the same icon registered in the coin's on-chain metadata; ADR-0023), for
  *  UI that displays the MTPS balance. */
 export const MTPS_ICON_URL = "https://dev.millionstps.io/favicons/favicon.svg";
 
-/** MTPS is a 0-decimal whole-token currency (ADR-0015): 1 MTPS is the integer `1`, not `1e9`. The
+/** MTPS is a 0-decimal whole-token currency (ADR-0023): 1 MTPS is the integer `1`, not `1e9`. The
  *  `mtps(n)` helper (identity at 0 decimals) is kept so call sites read intent and survive a future
  *  decimals change. Game stakes/chips are therefore whole tokens — see each game's stake constant. */
 export const MTPS_DECIMALS = 0;
@@ -31,7 +31,7 @@ export const mtps = (whole: bigint): bigint =>
 export const MTPS_MIN_BALANCE = mtps(1_000n);
 
 /**
- * Faucet MTPS to `recipient` via the backend (`POST /v1/faucet`, ADR-0015). Minting moved fully
+ * Faucet MTPS to `recipient` via the backend (`POST /v1/faucet`, ADR-0023). Minting moved fully
  * behind the backend `admin_mint` (the on-chain `mtps::mint` faucet was removed), so this no longer
  * builds or signs a PTB — the backend mints a fixed amount and rate-limits per address. Returns the
  * mint tx digest; throws on a non-2xx (including a 429 cooldown) with the backend's detail.
@@ -59,18 +59,18 @@ export async function faucetMtps(opts: {
 export interface FaucetMintResult {
   /** The `admin_mint` tx digest. */
   digest: string;
-  /** Whole-token MTPS actually minted (0 decimals; ADR-0015). */
+  /** Whole-token MTPS actually minted (0 decimals; ADR-0023). */
   amount: number;
   /** Canonical recipient address the mint credited. */
   recipient: string;
 }
 
-/** Per-call mint ceiling, mirroring the backend `MAX_MINT_PER_CALL` / `mtps::admin_mint` (ADR-0015).
+/** Per-call mint ceiling, mirroring the backend `MAX_MINT_PER_CALL` / `mtps::admin_mint` (ADR-0023).
  *  The internal endpoint rejects an `amount` outside `1..=MTPS_MAX_MINT_PER_CALL`. */
 export const MTPS_MAX_MINT_PER_CALL = 1_000_000;
 
 /**
- * Internal (unlimited, no-cooldown) MTPS faucet for ops use (`POST /v1/faucet/internal`, ADR-0015).
+ * Internal (unlimited, no-cooldown) MTPS faucet for ops use (`POST /v1/faucet/internal`, ADR-0023).
  * Mints to any `recipient`, bearer-gated by the backend's `FAUCET_ADMIN_TOKEN` — pass that secret as
  * `adminToken`. Omit `amount` to mint the backend's configured internal default. Returns the mint
  * digest + amount + canonical recipient; throws on a non-2xx (401 bad token, 422 bad address/amount,

@@ -173,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
-        // MTPS faucet (ADR-0015): the public route is per-address rate limited; the internal route
+        // MTPS faucet (ADR-0023): the public route is per-address rate limited; the internal route
         // is unlimited and bearer-gated (fails closed when FAUCET_ADMIN_TOKEN is unset).
         .route("/v1/faucet", post(routes::faucet))
         .route("/v1/faucet/internal", post(routes::faucet_admin))

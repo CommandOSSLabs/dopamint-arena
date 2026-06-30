@@ -125,7 +125,7 @@ fun mint_zero_amount_yields_zero_coin() {
 }
 
 /// The MetadataCap is kept (not burned) and lands with the deployer, so symbol/name/icon stay
-/// updatable post-deploy (ADR-0015 §Decision 2).
+/// updatable post-deploy (ADR-0023 §Decision 2).
 #[test]
 fun init_hands_metadata_cap_to_deployer() {
     let backend = @0xA;

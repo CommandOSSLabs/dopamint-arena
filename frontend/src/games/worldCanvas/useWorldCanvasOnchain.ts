@@ -110,9 +110,9 @@ const NUM_COLORS = 16;
 /** SUI-fallback per-seat stake (MIST) when MTPS env is unset. Collaborative free
  *  mode never shifts balances, so any close is a draw (each seat keeps its stake). */
 const STAKE = 1n;
-/** MTPS per-seat stake (1 token; 0 decimals, ADR-0015) — the default on-chain path (ADR-0010):
+/** MTPS per-seat stake (1 token; 0 decimals, ADR-0023) — the default on-chain path (ADR-0010):
  *  faucet-minted, so painters need ZERO SUI; only gas is sponsored. Mirrors the other games. */
-const MTPS_STAKE_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
+const MTPS_STAKE_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0023)
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
 const GAME = "world-canvas";
 /** Soft cap on retained painted cells; oldest are evicted so an endless wall keeps

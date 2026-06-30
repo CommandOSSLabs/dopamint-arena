@@ -1,5 +1,5 @@
 // Internal MTPS faucet — an ops-only page (route `/faucet`) that mints MTPS to any address via the
-// backend's bearer-gated internal endpoint (`POST /v1/faucet/internal`, ADR-0015). Inputs are the
+// backend's bearer-gated internal endpoint (`POST /v1/faucet/internal`, ADR-0023). Inputs are the
 // recipient address and the backend's `FAUCET_ADMIN_TOKEN`; unlike the public faucet there is no
 // per-address cooldown, so this is deliberately kept outside the wallet gate and off the navbar.
 import { useState, type FormEvent } from "react";

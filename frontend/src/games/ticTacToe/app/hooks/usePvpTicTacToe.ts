@@ -73,7 +73,7 @@ const MP_URL =
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
-// MTPS mode (ADR-0015): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
+// MTPS mode (ADR-0023): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
 const MTPS_BANKROLL = 1n;
 // One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap

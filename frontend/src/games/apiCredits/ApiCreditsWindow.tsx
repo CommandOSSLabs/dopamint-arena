@@ -3,7 +3,7 @@ import { createApiCreditsKit } from "@/agent/games/apiCredits/kit";
 import type { GameWindowProps } from "../types";
 import { PaymentSelfPlay } from "../paymentSelfPlay/PaymentSelfPlay";
 
-// Credits prepaid per seat (0-decimal MTPS; ADR-0015). cost = stake/10, so the credits drain in
+// Credits prepaid per seat (0-decimal MTPS; ADR-0023). cost = stake/10, so the credits drain in
 // ~10 calls. A 2-seat open (2 × stake) stays well under one faucet pull. (Was a stale 9-decimal
 // 1_000_000_000 = "1 MTPS"; at 0 decimals that is 1B MTPS/seat → a 2B open the faucet can't fund.)
 const STAKE_PER_SEAT = 1_000n;

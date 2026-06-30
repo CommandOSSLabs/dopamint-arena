@@ -1,6 +1,6 @@
 # MTPS Token Deploy Runbook
 
-Publish the hardened `mtps` coin package (ADR-0015) and bring its metadata online.
+Publish the hardened `mtps` coin package (ADR-0023) and bring its metadata online.
 
 The `coin_registry` OTW flow is **two transactions**: `publish` registers the currency object,
 and a one-time `finalize_registration` promotes it into the shared registry. Skipping the second
@@ -49,7 +49,7 @@ Verify the metadata (symbol `MTPS`, the favicon icon) now resolves in an explore
 
 ## 3. Update environment ids
 
-Point the apps at the new package (see ADR-0015 follow-ups):
+Point the apps at the new package (see ADR-0023 follow-ups):
 
 - `VITE_MTPS_*` (frontend). `VITE_MTPS_FAUCET_ID` is **gone** — the shared faucet object no longer
   exists; the frontend faucets via the backend `POST /v1/faucet`.

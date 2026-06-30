@@ -488,7 +488,7 @@ pub(crate) struct FaucetRequest {
 struct FaucetResponse {
     /// The `admin_mint` tx digest.
     digest: String,
-    /// Whole-token MTPS minted (0 decimals; ADR-0015).
+    /// Whole-token MTPS minted (0 decimals; ADR-0023).
     amount: u64,
     /// Canonical recipient address the mint credited.
     recipient: String,
@@ -518,7 +518,7 @@ fn faucet_disabled() -> Response {
     .into_response()
 }
 
-/// Public MTPS faucet (ADR-0015): mint a fixed amount to the requesting address, rate-limited to
+/// Public MTPS faucet (ADR-0023): mint a fixed amount to the requesting address, rate-limited to
 /// once per `faucet_cooldown_secs` per address. The cooldown is claimed BEFORE the mint and released
 /// if the mint fails, so a transient backend error never locks the user out for the full window.
 /// 503 when unconfigured, 422 on a bad address, 429 (+ `Retry-After`) when on cooldown.

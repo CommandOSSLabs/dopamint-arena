@@ -46,7 +46,7 @@ export function cardText(card: number): string {
   return `${RANKS[card % 13]}${SUITS[Math.floor(card / 13)]}`;
 }
 
-// Compact chip count. At 0-decimal MTPS (ADR-0015) stacks are small whole tokens (≤ ~10k), so
+// Compact chip count. At 0-decimal MTPS (ADR-0023) stacks are small whole tokens (≤ ~10k), so
 // this returns the exact integer; the K/M/B abbreviation is a safety net for large COUNTS (a
 // number abbreviation, NOT a decimal conversion). Thresholds carry the rounding margin so a value
 // just under a unit reads as the next one up (≈999.99M → "1.0B"; 999,999 → "1.0M", never "1000K").

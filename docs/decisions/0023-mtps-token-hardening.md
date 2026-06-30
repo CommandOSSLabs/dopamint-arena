@@ -1,4 +1,4 @@
-# 0015 — MTPS token hardening (admin-only mint, coin_registry)
+# 0023 — MTPS token hardening (admin-only mint, coin_registry)
 
 - **Status**: Accepted
 - **Date**: 2026-06-26

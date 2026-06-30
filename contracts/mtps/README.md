@@ -6,7 +6,7 @@ MTPS is the free stake token for **MillionsTPS** — lightning-speed games and a
 stake MTPS to fund a game while **gas stays sponsored in SUI**, so a 0-SUI player can play for free.
 A single Move module, `mtps::mtps`, defines the coin and its mint authority.
 
-> Design rationale and the decisions behind this package: **[ADR-0015](../../docs/decisions/0015-mtps-token-hardening.md)**
+> Design rationale and the decisions behind this package: **[ADR-0023](../../docs/decisions/0023-mtps-token-hardening.md)**
 > (builds on [ADR-0010](../../docs/decisions/0010-mtps-stake-token.md)).
 
 ## Design at a glance

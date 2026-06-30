@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { faucetMtps, faucetMtpsInternal } from "./mtps.ts";
 
-// The faucet is server-side now (ADR-0015): faucetMtps POSTs the recipient to /v1/faucet and
+// The faucet is server-side now (ADR-0023): faucetMtps POSTs the recipient to /v1/faucet and
 // returns the backend's mint digest — no PTB, no signer. (resolveBackendUrl is "" under node:test,
 // so the request path is the relative /v1/faucet.)
 test("faucetMtps POSTs the recipient to /v1/faucet and returns the digest", async () => {

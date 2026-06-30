@@ -67,7 +67,7 @@ const MP_URL =
       ? location.origin
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
-/** Default buy-in (bankroll) deposited on-chain per seat — whole MTPS (0-decimal; ADR-0015), shown
+/** Default buy-in (bankroll) deposited on-chain per seat — whole MTPS (0-decimal; ADR-0023), shown
  *  1:1 as chips. Each player chooses their own before matchmaking; the bet protocol caps each round
  *  at min(both balances). */
 const DEFAULT_STAKE = 1000n;

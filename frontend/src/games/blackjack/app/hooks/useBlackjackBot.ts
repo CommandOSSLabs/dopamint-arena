@@ -162,7 +162,7 @@ export interface BlackjackBotGame {
 }
 
 // Buy-in (bankroll) each bot brings to the table per game. Chips are 1:1 with the on-chain stake, so
-// this is also the starting chip stack AND the MTPS staked per seat (0-decimal; ADR-0015). 1,000
+// this is also the starting chip stack AND the MTPS staked per seat (0-decimal; ADR-0023). 1,000
 // chips = 1,000 whole MTPS — a stack big enough to play many rounds before a seat drains and the
 // funder rebuys (min-bet 1, options up to 100).
 const BUY_IN = 1_000n;

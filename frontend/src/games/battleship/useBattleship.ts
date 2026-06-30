@@ -49,7 +49,7 @@ import {
 } from "./engine/selfPlay";
 import { type BotDifficulty } from "./engine/bot";
 
-const STAKE = 1n; // per-game wager shifted loser -> winner: the winner takes 1 MTPS (0-decimal; ADR-0015)
+const STAKE = 1n; // per-game wager shifted loser -> winner: the winner takes 1 MTPS (0-decimal; ADR-0023)
 /** MTPS bank locked per seat — funds MANY duels off one tunnel before a seat is exhausted (the
  *  session ends only when neither side can fund the next STAKE). */
 const LOCKED_PER_SEAT = 500n; // 500 MTPS/seat → ~500 games per tunnel

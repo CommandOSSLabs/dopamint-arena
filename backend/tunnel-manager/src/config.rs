@@ -28,11 +28,11 @@ pub struct Config {
     pub agent_allowance_package_id: Option<String>,
     pub streaming_payment_package_id: Option<String>,
     pub settler_key: Option<String>, // base64 ed25519 secret of the gas/settler account
-    /// The MTPS `AdminCap` object id (ADR-0015), owned by the settler/deploy address. Required by
+    /// The MTPS `AdminCap` object id (ADR-0023), owned by the settler/deploy address. Required by
     /// the faucet endpoints: `admin_mint` takes it as a `&mut` owned input. Unset = faucet disabled
     /// (the endpoints 503), which is correct against the older permissionless package.
     pub mtps_admin_cap_id: Option<String>,
-    /// Whole-token MTPS one public-faucet pull mints (0 decimals; ADR-0015).
+    /// Whole-token MTPS one public-faucet pull mints (0 decimals; ADR-0023).
     pub faucet_user_amount: u64,
     /// Whole-token MTPS the internal faucet mints by default (caps at the contract's
     /// `MAX_MINT_PER_CALL`). The internal endpoint may request less, never more.

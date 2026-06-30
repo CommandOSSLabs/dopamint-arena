@@ -33,7 +33,7 @@ const GAS_BUDGET: u64 = 100_000_000;
 /// Gas budget cap for a sponsored open/fund tx (create + deposit + share). Same magnitude as a
 /// close; the dry-run rejects anything that would exceed it before the settler pays (ADR-0009).
 const SPONSOR_GAS_BUDGET: u64 = 100_000_000;
-/// Per-call mint cap, mirroring `mtps::admin_mint`'s `MAX_MINT_PER_CALL` (ADR-0015). The faucet
+/// Per-call mint cap, mirroring `mtps::admin_mint`'s `MAX_MINT_PER_CALL` (ADR-0023). The faucet
 /// pre-checks against this so an over-cap request returns a clean 422 instead of an on-chain abort.
 pub const MAX_MINT_PER_CALL: u64 = 1_000_000;
 /// 0x2 Sui framework — the only non-tunnel package the sponsor allows, for `public_share_object`.
@@ -129,7 +129,7 @@ pub struct SuiSettler {
     rpc_url: String,
     package_id: Address,
     coin_type: TypeTag,
-    /// MTPS `AdminCap` object id (ADR-0015), owned by `sender`. `None` = the faucet is unconfigured
+    /// MTPS `AdminCap` object id (ADR-0023), owned by `sender`. `None` = the faucet is unconfigured
     /// and `mint_mtps` refuses. The cap is an owned `&mut` input to `admin_mint`.
     admin_cap_id: Option<Address>,
     /// Sponsorable example-app modules (agent allowance, streaming payment, …), built from config.
@@ -382,7 +382,7 @@ impl SuiSettler {
         self.admin_cap_id.is_some()
     }
 
-    /// Mint `amount` whole-token MTPS to `recipient` (ADR-0015); returns the tx digest. `to_balance`
+    /// Mint `amount` whole-token MTPS to `recipient` (ADR-0023); returns the tx digest. `to_balance`
     /// selects the entry: `admin_mint_to_balance` deposits straight into the recipient's SIP-58
     /// address balance (the stake path withdraws from it — no client sweep), `admin_mint` gives an
     /// owned coin. The settler holds the `AdminCap`, so this signs with the settler key. Serialized by
@@ -770,7 +770,7 @@ fn build_close_tx(
     Ok(tx)
 }
 
-/// PURE core: build the `mtps::admin_mint{,_to_balance}(cap, amount, recipient)` PTB (ADR-0015). Arg
+/// PURE core: build the `mtps::admin_mint{,_to_balance}(cap, amount, recipient)` PTB (ADR-0023). Arg
 /// order matches the Move signature exactly: the owned `&mut AdminCap`, the `u64` amount, the
 /// recipient `address`. `to_balance` picks `admin_mint_to_balance` (deposit into the recipient's
 /// SIP-58 address balance) over `admin_mint` (owned coin); both share that signature and are not
@@ -961,7 +961,7 @@ fn validate_sponsorable_inner(
                 let framework_share = mc.package == framework
                     && mc.module.as_str() == "transfer"
                     && mc.function.as_str() == "public_share_object";
-                // The stake faucet moved to the backend admin endpoint (ADR-0015 `admin_mint`), so
+                // The stake faucet moved to the backend admin endpoint (ADR-0023 `admin_mint`), so
                 // the permissionless `mint`/`mint_default` are no longer sponsored. Only `mint_nft`
                 // (the regular-payments shop reward, in the coin type's own `<pkg>::mtps`) stays
                 // sponsorable so the miner receives the collectible gaslessly.
@@ -1404,7 +1404,7 @@ mod tests {
     }
 
     // The permissionless `mtps::mint` faucet is no longer sponsorable — minting moved fully behind
-    // the backend `admin_mint` endpoint (ADR-0015). Even from the real coin package it is refused.
+    // the backend `admin_mint` endpoint (ADR-0023). Even from the real coin package it is refused.
     #[test]
     fn validate_refuses_mtps_mint_now_admin_only() {
         let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
