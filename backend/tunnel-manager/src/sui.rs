@@ -30,9 +30,12 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 /// Fixed gas budget for a single cooperative close (one MoveCall, two shared objects).
 const GAS_BUDGET: u64 = 100_000_000;
-/// Gas budget cap for a sponsored open/fund tx (create + deposit + share). Same magnitude as a
-/// close; the dry-run rejects anything that would exceed it before the settler pays (ADR-0009).
-const SPONSOR_GAS_BUDGET: u64 = 100_000_000;
+/// Per-command gas budget for a sponsored open/fund PTB; the total is this × the PTB's command
+/// count, so a batched open of N tunnels (~N+1 commands) scales instead of under-funding on a flat
+/// budget. An upper bound, not a charge — the dry-run rejects any PTB whose actual gas exceeds the
+/// total before the settler pays, and only actual is charged. Bounded by the 1024-command protocol
+/// cap (≪ max_tx_gas): a tight, work-proportional anti-abuse ceiling (ADR-0009).
+const SPONSOR_GAS_BUDGET_PER_COMMAND: u64 = 100_000_000;
 /// Per-call mint cap, mirroring `mtps::admin_mint`'s `MAX_MINT_PER_CALL` (ADR-0023). The faucet
 /// pre-checks against this so an over-cap request returns a clean 422 instead of an on-chain abort.
 pub const MAX_MINT_PER_CALL: u64 = 1_000_000;
@@ -851,12 +854,18 @@ fn build_sponsored_tx(
     nonce: u32,
 ) -> anyhow::Result<Transaction> {
     let kind: TransactionKind = bcs::from_bytes(kind_bytes).context("decode tx kind")?;
-    match &kind {
+    let num_commands = match &kind {
         TransactionKind::ProgrammableTransaction(ptb) => {
-            validate_sponsorable_inner(ptb, package_id, coin_type, example_packages)?
+            validate_sponsorable_inner(ptb, package_id, coin_type, example_packages)?;
+            ptb.commands.len() as u64
         }
         _ => anyhow::bail!("only programmable transactions can be sponsored"),
-    }
+    };
+    // Scale the budget with PTB size (see SPONSOR_GAS_BUDGET_PER_COMMAND). saturating_mul guards an
+    // implausibly large count; the floor keeps a degenerate 0-command PTB off a zero budget.
+    let budget = SPONSOR_GAS_BUDGET_PER_COMMAND
+        .saturating_mul(num_commands)
+        .max(SPONSOR_GAS_BUDGET_PER_COMMAND);
     Ok(Transaction {
         kind,
         sender,
@@ -866,7 +875,7 @@ fn build_sponsored_tx(
             objects: Vec::new(),
             owner: gas_owner,
             price: gas_price.max(1),
-            budget: SPONSOR_GAS_BUDGET,
+            budget,
         },
         // SIP-58 address-balance gas requires a ValidDuring window; nonce is the per-withdrawal
         // replay guard. min==max==current epoch; chain is the genesis digest (see build_close_tx).
@@ -1605,7 +1614,47 @@ mod tests {
             tx.gas_payment.objects.is_empty(),
             "SIP-58 address-balance gas (empty objects)"
         );
-        assert_eq!(tx.gas_payment.budget, SPONSOR_GAS_BUDGET);
+        // One command => one unit of the per-command budget.
+        assert_eq!(tx.gas_payment.budget, SPONSOR_GAS_BUDGET_PER_COMMAND);
+    }
+
+    // A batched open packs many commands into one PTB; the gas budget must scale with the command
+    // count so the dry-run doesn't reject the batch as under-funded — the bug a flat budget caused.
+    #[test]
+    fn build_sponsored_tx_scales_budget_by_command_count() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let framework = Address::from_str(SUI_FRAMEWORK_ADDRESS).unwrap();
+        // create + deposit_party_a + framework public_share_object = 3 sponsorable commands.
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![
+            tunnel_call(pkg, "create"),
+            tunnel_call(pkg, "deposit_party_a"),
+            Command::MoveCall(sui_sdk_types::MoveCall {
+                package: framework,
+                module: Identifier::new("transfer").unwrap(),
+                function: Identifier::new("public_share_object").unwrap(),
+                type_arguments: vec![],
+                arguments: vec![],
+            }),
+        ]));
+        let kind_bytes = bcs::to_bytes(&kind).unwrap();
+        let tx = build_sponsored_tx(
+            pkg,
+            &sui_coin(),
+            &[],
+            Address::from_str("0x111").unwrap(),
+            Address::from_str("0x222").unwrap(),
+            &kind_bytes,
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            7,
+        )
+        .expect("valid 3-command open/fund kind builds");
+        assert_eq!(
+            tx.gas_payment.budget,
+            3 * SPONSOR_GAS_BUDGET_PER_COMMAND,
+            "budget scales with PTB command count"
+        );
     }
 
     // The wrap refuses a kind whose move call is not allowlisted, before any gas is signed for.
