@@ -124,7 +124,7 @@ impl WalletPoolStore for FileWalletPoolStore {
 }
 
 /// Validate that `id` matches `wp_[A-Za-z0-9_-]+` and contains no path separators.
-fn validate_id(id: &str) -> Result<()> {
+pub fn validate_id(id: &str) -> Result<()> {
     if id.len() < 4 || !id.starts_with("wp_") {
         return Err(Error::Store(format!("invalid pool id: {id}")));
     }
