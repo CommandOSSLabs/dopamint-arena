@@ -186,6 +186,9 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             { name: "WALLET_POOL_ID", value: "wp_cjmok4DQgZDpAooCGNjmqg" },
             { name: "WALLET_POOL_S3_BUCKET", value: "dev-env-dopamint-wallet-pool" },
             { name: "WALLET_POOL_FUNDED_COUNT", value: "5000" },
+            // The in-container AWS SDK (S3WalletPoolStore::from_env) needs an explicit region; ECS
+            // doesn't auto-inject one. Credentials still come from the task role. Bucket is us-east-1.
+            { name: "AWS_REGION", value: aws.config.region ?? "us-east-1" },
             { name: "OLLAMA_URL", value: "http://localhost:11434" },
             { name: "OLLAMA_MODEL", value: ollamaModel },
           );
