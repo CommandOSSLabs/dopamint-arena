@@ -17,11 +17,40 @@ pub struct OllamaMessage {
     pub content: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct OllamaOptions {
+    pub num_predict: i64,
+    pub num_ctx: i64,
+    pub keep_alive: String,
+    pub topic_predict: i64,
+}
+
+impl Default for OllamaOptions {
+    fn default() -> Self {
+        Self {
+            num_predict: 64,
+            num_ctx: 2048,
+            keep_alive: "30m".into(),
+            topic_predict: 24,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct OllamaChatRequest<'a> {
     model: &'a str,
     messages: &'a [OllamaMessage],
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaRequestOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaRequestOptions {
+    num_predict: i64,
+    num_ctx: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,10 +63,19 @@ pub struct OllamaClient {
     http: reqwest::Client,
     base_url: String,
     model: String,
+    options: OllamaOptions,
 }
 
 impl OllamaClient {
     pub fn new(base_url: String, model: String) -> anyhow::Result<Self> {
+        Self::new_with_options(base_url, model, OllamaOptions::default())
+    }
+
+    pub fn new_with_options(
+        base_url: String,
+        model: String,
+        options: OllamaOptions,
+    ) -> anyhow::Result<Self> {
         let url = base_url
             .parse::<reqwest::Url>()
             .context("invalid Ollama base URL")?;
@@ -50,17 +88,49 @@ impl OllamaClient {
             http,
             base_url,
             model,
+            options,
         })
+    }
+
+    fn build_request<'a>(
+        &'a self,
+        messages: &'a [OllamaMessage],
+        num_predict: i64,
+    ) -> OllamaChatRequest<'a> {
+        OllamaChatRequest {
+            model: &self.model,
+            messages,
+            stream: false,
+            options: Some(OllamaRequestOptions {
+                num_predict,
+                num_ctx: self.options.num_ctx,
+            }),
+            keep_alive: Some(&self.options.keep_alive),
+        }
     }
 
     /// Non-streaming chat completion. Returns the assistant's text.
     pub async fn chat(&self, messages: &[OllamaMessage]) -> anyhow::Result<String> {
-        let url = format!("{}/api/chat", self.base_url);
-        let req = OllamaChatRequest {
-            model: &self.model,
-            messages,
-            stream: false,
+        self.complete(messages, self.options.num_predict).await
+    }
+
+    /// Ask Ollama for a short random conversation topic.
+    pub async fn topic(&self) -> anyhow::Result<String> {
+        let prompt = OllamaMessage {
+            role: "user".into(),
+            content: TOPIC_PROMPT.into(),
         };
+        let topic = self.complete(&[prompt], self.options.topic_predict).await?;
+        Ok(topic.trim().to_string())
+    }
+
+    async fn complete(
+        &self,
+        messages: &[OllamaMessage],
+        num_predict: i64,
+    ) -> anyhow::Result<String> {
+        let url = format!("{}/api/chat", self.base_url);
+        let req = self.build_request(messages, num_predict);
         let resp: OllamaChatResponse = self
             .http
             .post(&url)
@@ -74,15 +144,6 @@ impl OllamaClient {
             .await
             .context("ollama returned non-json")?;
         Ok(resp.message.content)
-    }
-
-    /// Ask Ollama for a short random conversation topic.
-    pub async fn topic(&self) -> anyhow::Result<String> {
-        let prompt = OllamaMessage {
-            role: "user".into(),
-            content: TOPIC_PROMPT.into(),
-        };
-        self.chat(&[prompt]).await
     }
 }
 
@@ -102,6 +163,8 @@ mod tests {
             "model": "qwen2.5:1.5b",
             "messages": [{ "role": "user", "content": "hi" }],
             "stream": false,
+            "options": { "num_predict": 64, "num_ctx": 2048 },
+            "keep_alive": "30m",
         });
         Mock::given(method("POST"))
             .and(path("/api/chat"))

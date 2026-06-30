@@ -248,21 +248,8 @@ pub(crate) async fn heartbeat(
     Path(session_id): Path<String>,
     headers: HeaderMap,
     Json(req): Json<HeartbeatRequest>,
-) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let Some(rec) = state.control.get_session(&session_id).await else {
-        return Err(ApiError::resp(
-            StatusCode::NOT_FOUND,
-            "unknown_session",
-            "no such session",
-        ));
-    };
-    if !bearer_matches(&headers, &rec.stats_token) {
-        return Err(ApiError::resp(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "missing or invalid bearer token",
-        ));
-    }
+) -> Result<StatusCode, Response> {
+    let rec = require_session_auth(&state, &session_id, &headers).await?;
     tracing::debug!(%session_id, tunnel = %req.tunnel_id, nonce = %req.nonce, window_ms = req.window_ms, "heartbeat");
     // Park the delta in the per-instance counter; the 1 Hz flusher drains it into ControlStore.
     // Avoids a per-heartbeat single-key INCRBY hotspot (the relay path already does this).

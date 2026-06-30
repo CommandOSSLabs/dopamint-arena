@@ -54,6 +54,10 @@ pub struct Config {
     pub settle_max_concurrency: usize,
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
+    pub ollama_num_predict: Option<i64>,
+    pub ollama_num_ctx: Option<i64>,
+    pub ollama_keep_alive: Option<String>,
+    pub ollama_topic_predict: Option<i64>,
     /// S3 transcript archival (ADR-0023). When set, the settle handler archives the
     /// transcript body to this bucket alongside Walrus. Unset => archival disabled (dev).
     pub s3_bucket: Option<String>,
@@ -126,6 +130,16 @@ impl Config {
                 .unwrap_or(32),
             ollama_url: opt("OLLAMA_URL"),
             ollama_model: opt("OLLAMA_MODEL"),
+            ollama_num_predict: opt("OLLAMA_NUM_PREDICT")
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0),
+            ollama_num_ctx: opt("OLLAMA_NUM_CTX")
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0),
+            ollama_keep_alive: opt("OLLAMA_KEEP_ALIVE"),
+            ollama_topic_predict: opt("OLLAMA_TOPIC_PREDICT")
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0),
             s3_bucket: opt("S3_TRANSCRIPTS_BUCKET"),
             s3_prefix: opt("S3_TRANSCRIPTS_PREFIX"),
             colocated_fleet_count: std::env::var("FLEET_COLOCATED_COUNT")
@@ -267,11 +281,23 @@ mod tests {
     fn from_env_reads_ollama_config() {
         let _url = EnvGuard("OLLAMA_URL");
         let _model = EnvGuard("OLLAMA_MODEL");
+        let _num_predict = EnvGuard("OLLAMA_NUM_PREDICT");
+        let _num_ctx = EnvGuard("OLLAMA_NUM_CTX");
+        let _keep_alive = EnvGuard("OLLAMA_KEEP_ALIVE");
+        let _topic_predict = EnvGuard("OLLAMA_TOPIC_PREDICT");
         std::env::set_var("OLLAMA_URL", "http://ollama:11434");
         std::env::set_var("OLLAMA_MODEL", "qwen2.5:1.5b");
+        std::env::set_var("OLLAMA_NUM_PREDICT", "64");
+        std::env::set_var("OLLAMA_NUM_CTX", "2048");
+        std::env::set_var("OLLAMA_KEEP_ALIVE", "30m");
+        std::env::set_var("OLLAMA_TOPIC_PREDICT", "24");
         let c = Config::from_env().unwrap();
         assert_eq!(c.ollama_url.as_deref(), Some("http://ollama:11434"));
         assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.5b"));
+        assert_eq!(c.ollama_num_predict, Some(64));
+        assert_eq!(c.ollama_num_ctx, Some(2048));
+        assert_eq!(c.ollama_keep_alive.as_deref(), Some("30m"));
+        assert_eq!(c.ollama_topic_predict, Some(24));
     }
 
     #[test]

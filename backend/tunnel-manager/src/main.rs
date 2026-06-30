@@ -91,7 +91,16 @@ async fn main() -> anyhow::Result<()> {
         Config::require("WALRUS_PUBLISHER_URL", &config.walrus_publisher_url)?.to_string(),
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
     );
-    let ollama = crate::ollama::OllamaClient::new(
+    let ollama_options = crate::ollama::OllamaOptions {
+        num_predict: config.ollama_num_predict.unwrap_or(64),
+        num_ctx: config.ollama_num_ctx.unwrap_or(2048),
+        keep_alive: config
+            .ollama_keep_alive
+            .clone()
+            .unwrap_or_else(|| "30m".into()),
+        topic_predict: config.ollama_topic_predict.unwrap_or(24),
+    };
+    let ollama = crate::ollama::OllamaClient::new_with_options(
         config
             .ollama_url
             .clone()
@@ -100,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
             .ollama_model
             .clone()
             .unwrap_or_else(|| "qwen2.5:1.5b".into()),
+        ollama_options,
     )?;
 
     // S3 transcript archival (ADR-0023). Optional: absent in dev/test when
