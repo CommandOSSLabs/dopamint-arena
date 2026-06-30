@@ -81,6 +81,11 @@ const DEFAULT_BET = Number(MIN_BET); // auto's starting bet until the player pic
 
 /** Pacing for auto-driven commit/reveal plumbing moves (ms). */
 const PLUMBING_MS = 120;
+// Flat-out auto pacing: in-match auto moves/rounds fire on the next tick (0ms still defers, so the
+// confirmed-update sync runs first); the inter-match requeue keeps a short glimpse. Manual play
+// still uses BOT_MOVE_MS / NEXT_MS / PLUMBING_MS above.
+const AUTO_MOVE_MS = 0;
+const AUTO_REQUEUE_MS = 150;
 
 export type PvpPhase =
   | "idle"
@@ -409,7 +414,7 @@ export function usePvpBlackjack(): PvpView {
                   /* in flight */
                 }
               },
-              autoRef.current ? 50 : PLUMBING_MS,
+              autoRef.current ? AUTO_MOVE_MS : PLUMBING_MS,
             );
           return;
         }
@@ -428,7 +433,7 @@ export function usePvpBlackjack(): PvpView {
                 /* raced / in flight */
               }
             },
-            autoRef.current ? 100 : NEXT_MS,
+            autoRef.current ? AUTO_MOVE_MS : NEXT_MS,
           );
           return;
         }
@@ -444,7 +449,7 @@ export function usePvpBlackjack(): PvpView {
                   /* not my turn / in flight */
                 }
               },
-              autoRef.current ? 50 : BOT_MOVE_MS,
+              autoRef.current ? AUTO_MOVE_MS : BOT_MOVE_MS,
             );
         }
       };
@@ -877,7 +882,7 @@ export function usePvpBlackjack(): PvpView {
                 /* ignore */
               }
             },
-            autoRef.current ? 50 : BOT_MOVE_MS,
+            autoRef.current ? AUTO_MOVE_MS : BOT_MOVE_MS,
           );
       } else if (st.phase === "round_over") {
         const mv = bjBetMove(lastBetRef.current ?? Number(MIN_BET), st);
@@ -889,7 +894,7 @@ export function usePvpBlackjack(): PvpView {
               /* ignore */
             }
           },
-          autoRef.current ? 100 : NEXT_MS,
+          autoRef.current ? AUTO_MOVE_MS : NEXT_MS,
         );
       }
     },
@@ -1004,7 +1009,7 @@ export function usePvpBlackjack(): PvpView {
     if (phase !== "done" || !autoRef.current) return;
     const id = setTimeout(() => {
       if (autoRef.current) requeue();
-    }, NEXT_MS);
+    }, AUTO_REQUEUE_MS);
     return () => clearTimeout(id);
   }, [phase, requeue]);
 
