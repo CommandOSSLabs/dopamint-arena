@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import { type Difficulty } from "@/games/ticTacToe/app/hooks/useBotGame";
 import { useTttBotGame } from "@/games/ticTacToe/useTttBotGame";
-import { useCaroBotGame } from "@/games/ticTacToe/app/hooks/useCaroBotGame";
+import { useCaroBotGame } from "@/games/ticTacToe/useCaroBotGame";
 import {
   useCustomWallet,
   CustomWalletProvider,
@@ -40,7 +40,7 @@ function AppContent({ windowId }: { windowId: string }) {
   // Both hooks are always called (rules of hooks); only the active one is driven. They share
   // the same bot identities and SuiClient, so the idle hook costs only one extra balance read.
   const tttGame = useTttBotGame(windowId, difficulty);
-  const caroGame = useCaroBotGame(difficulty, boardSize);
+  const caroGame = useCaroBotGame(windowId, difficulty, boardSize);
   const g = gameType === "caro" ? caroGame : tttGame;
 
   // MTPS mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
@@ -237,7 +237,11 @@ function AppContent({ windowId }: { windowId: string }) {
             isPortrait={isPortrait}
           />
         ) : scene === "pvp" ? (
-          <PvpScene onBack={() => setScene("login")} isPortrait={isPortrait} />
+          <PvpScene
+            windowId={windowId}
+            onBack={() => setScene("login")}
+            isPortrait={isPortrait}
+          />
         ) : (
           <GameCardScale
             targetWidth={targetWidth}
