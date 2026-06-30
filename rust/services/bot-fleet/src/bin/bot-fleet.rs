@@ -16,11 +16,10 @@
 
 use std::time::Duration;
 
-use bot_fleet::anchor::NoopAnchor;
 use bot_fleet::live_runner::run_live_blackjack;
 use bot_fleet::relay_client::RelayConfig;
 use bot_fleet::signer_durable::DurableSigner;
-use tunnel_harness::Signer;
+use tunnel_harness::{InMemoryAnchor, Signer};
 
 const DEFAULT_WS_URL: &str = "wss://relay-dev.millionstps.io/v1/mp";
 
@@ -29,11 +28,14 @@ async fn main() -> anyhow::Result<()> {
     let ws_url = std::env::var("RELAY_WS_URL").unwrap_or_else(|_| DEFAULT_WS_URL.to_string());
     let count: u32 = parse_env("BOT_COUNT", 1);
 
-    println!("bot-fleet: launching {count} bot(s) → {ws_url} (off-chain NoopAnchor)");
+    println!("bot-fleet: launching {count} bot(s) → {ws_url} (off-chain InMemoryAnchor)");
+    // One shared anchor so two in-process bots (BOT_COUNT=2) pair each other's settle halves. A bot
+    // vs a real browser instead needs the relay-bridged / Sui anchor — a remote half can't pair here.
+    let anchor = InMemoryAnchor::new();
     let mut handles = Vec::new();
     for idx in 0..count {
         let ws_url = ws_url.clone();
-        handles.push(tokio::spawn(run_bot(idx, ws_url)));
+        handles.push(tokio::spawn(run_bot(idx, ws_url, anchor.clone())));
     }
     for h in handles {
         let _ = h.await;
@@ -42,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// One bot: a stable identity, looping connect → queue → play → re-queue.
-async fn run_bot(idx: u32, ws_url: String) {
+async fn run_bot(idx: u32, ws_url: String, anchor: InMemoryAnchor) {
     // Stable identity key per bot (deterministic by index for now; a real fleet loads per-bot keys
     // from a durable store / KMS). The per-MATCH co-signing key is fresh each iteration.
     let identity = DurableSigner::from_secret(&identity_secret(idx));
@@ -54,10 +56,10 @@ async fn run_bot(idx: u32, ws_url: String) {
 
     loop {
         let match_key = DurableSigner::from_secret(&random_secret());
-        match run_live_blackjack(&config, &identity, match_key, &NoopAnchor).await {
+        match run_live_blackjack(&config, &identity, match_key, anchor.clone()).await {
             Ok(out) => println!(
-                "[bot {idx}] match {} done: {} moves, balances {:?}, settle {:?}",
-                out.tunnel_id, out.moves, out.final_balances, out.settle_digest
+                "[bot {idx}] match done: {} moves, balances {:?}",
+                out.moves, out.final_balances
             ),
             Err(e) => println!("[bot {idx}] match ended: {e:#}"),
         }

@@ -13,6 +13,6 @@ pub mod relay_client;
 pub mod relay_wire;
 
 pub use fleet_core::{
-    anchor, match_channel, peer, play_match, relay_channel, relay_envelope, relay_ws,
-    signer_durable, MatchInfo, Role,
+    match_channel, peer, play_match, relay_channel, relay_envelope, relay_ws, signer_durable,
+    MatchInfo, Role,
 };

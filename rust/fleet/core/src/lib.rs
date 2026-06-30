@@ -9,7 +9,6 @@
 //! Deliberately free of WebSocket deps so the relay can consume it without a WS client in its
 //! binary. On-chain open/settle is the [`anchor::MatchAnchor`] seam (sans-IO engine has no builder).
 
-pub mod anchor;
 pub mod match_channel;
 pub mod peer;
 pub mod play_match;

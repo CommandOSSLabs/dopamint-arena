@@ -171,16 +171,17 @@ impl RelayTransport for BusRelayTransport {
 mod tests {
     use super::*;
     use crate::state::AppState;
-    use fleet_core::anchor::NoopAnchor;
     use fleet_core::match_channel::MatchChannel;
     use fleet_core::play_match::{play_blackjack, BLACKJACK};
     use fleet_core::signer_durable::DurableSigner;
+    use tunnel_harness::{InMemoryAnchor, NullTranscriptRecorder};
 
     // Two virtual bus connections complete a full co-signed blackjack match over the REAL relay bus
     // (LocalBus + the shared `relay_to_other` routing) — the co-located analog of the WS
-    // `BOT_COUNT=2` test. Proves the `BusRelayTransport` seam carries the whole orchestration
-    // (hello exchange → NoopAnchor open → co-signed play → settle) without a WebSocket. A
-    // regression that breaks bus routing or the payload round-trip fails here, not in production.
+    // `BOT_COUNT=2` test. Proves the `BusRelayTransport` seam carries the whole orchestration on the
+    // merged `PartyDriver` (hello exchange → anchor open → co-signed play → settle PAIRING) without
+    // a WebSocket. Both seats share one `InMemoryAnchor`, so both returning Ok means the cooperative
+    // close verified. A regression in bus routing or the payload round-trip fails here.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn full_match_completes_over_the_bus() {
         let state = AppState::in_memory_for_test();
@@ -208,7 +209,8 @@ mod tests {
 
         let cha = MatchChannel::new(BusRelayTransport::new(conn_a.clone(), match_id.into()));
         let chb = MatchChannel::new(BusRelayTransport::new(conn_b.clone(), match_id.into()));
-        let anchor = NoopAnchor;
+        // One shared anchor so the two seats' settle halves pair (open idempotent, settle paired).
+        let anchor = InMemoryAnchor::new();
 
         let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
@@ -216,22 +218,24 @@ mod tests {
         let (ra, rb) = tokio::join!(
             play_blackjack(
                 cha,
-                &anchor,
+                anchor.clone(),
                 DurableSigner::from_secret(&sa),
                 Role::A,
-                "0xbotB"
+                "0xbotB",
+                NullTranscriptRecorder,
             ),
             play_blackjack(
                 chb,
-                &anchor,
+                anchor.clone(),
                 DurableSigner::from_secret(&sb),
                 Role::B,
-                "0xhumanA"
+                "0xhumanA",
+                NullTranscriptRecorder,
             ),
         );
 
-        let a = ra.expect("seat A completes the match over the bus");
-        let b = rb.expect("seat B completes the match over the bus");
+        let a = ra.expect("seat A completes open → play → settle over the bus");
+        let b = rb.expect("seat B completes open → play → settle over the bus");
         let total = 2 * BLACKJACK.stake_each;
         assert_eq!(
             a.final_balances.sum(),
@@ -243,11 +247,8 @@ mod tests {
             "both seats agree on the outcome"
         );
         assert!(a.moves > 0, "match progressed over the bus transport");
-        assert!(
-            b.settle_digest.is_some(),
-            "dealer (role B) submitted settle"
-        );
-        assert!(a.settle_digest.is_none(), "player (role A) does not settle");
+        // Both Ok ⇒ the shared anchor PAIRED the two settle halves over the bus: cooperative close
+        // verified, not just the move loop.
     }
 
     // `await_match` decodes a delivered `match.found` into the seat assignment — the entry the

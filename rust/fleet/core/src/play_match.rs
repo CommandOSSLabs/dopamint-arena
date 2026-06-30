@@ -1,21 +1,21 @@
-//! Generic per-match orchestration a bot runs after `match.found`, for ANY game protocol:
-//! ephemeral-key exchange → on-chain open/fund (via [`MatchAnchor`]) → co-signed play over the
-//! demuxed transport → settle. The game-specific bits are *data* — a [`GameProfile`] (id, host
-//! seat, stake) plus the [`Protocol`] and its [`MoveStrategy`] — so **adding a game is a value,
-//! not a new function**. The thin wrappers (`play_blackjack`, `run_live_blackjack`) just supply it.
+//! Per-match orchestration a bot runs after `match.found`, layered on the merged
+//! `tunnel_harness::PartyDriver` (PR #131). The driver now brackets the whole match —
+//! `anchor.open` → co-signed move loop → `anchor.settle` — so our job shrinks to the relay-side
+//! ephemeral-key exchange (learn the opponent's co-signing pubkey) and then handing the driver our
+//! demuxed frame transport + the chosen [`tunnel_harness::TunnelAnchor`].
 //!
-//! The settle-half handshake + transcript root + on-chain submit live in the `MatchAnchor` impl
-//! (`SuiAnchor`), because the sans-IO engine exposes no settlement builder; here settlement is the
-//! seam call after a conserved terminal. With [`crate::anchor::NoopAnchor`] this drives a full
-//! off-chain match end to end. The transport-specific live runners (WS, in-process bus) wrap this.
+//! Adding a game is still data: a [`GameProfile`] (id + stake) plus the [`Protocol`] and its
+//! [`MoveStrategy`]. The anchor is the swap point: `InMemoryAnchor` drives a full off-chain match
+//! (bot-vs-bot, both seats sharing one anchor instance); the Sui anchor / a relay-bridged anchor is
+//! the on-chain genuine-two-party path.
 
 use anyhow::{anyhow, bail, Context, Result};
 use tunnel_blackjack::{Blackjack, BlackjackStrategy};
 use tunnel_harness::{
-    Balances, MoveStrategy, PartyDriver, PartyRuntime, Protocol, Signer, TunnelContext,
+    Balances, DriverOutcome, MoveStrategy, PartyDriver, Protocol, SeatParts, Signer,
+    TranscriptRecorder, TunnelAnchor,
 };
 
-use crate::anchor::MatchAnchor;
 use crate::match_channel::MatchChannel;
 use crate::peer::PeerMsg;
 use crate::relay_ws::RelayTransport;
@@ -25,125 +25,97 @@ use crate::{MatchInfo, Role};
 /// Per-tunnel move budget (matches the canonical MAX_MOVES_PER_TUNNEL ceiling).
 const MAX_MOVES: u64 = 100_000;
 
-/// The static per-game config — everything that differs between games. Adding a game is one of
-/// these plus a `Protocol` (e.g. tic-tac-toe: `{ game_id: "tictactoe", host: Role::A, stake_each: 10 }`).
+/// The static per-game config. `host` is gone vs the pre-merge harness: the merged `TunnelAnchor`
+/// is symmetric (both seats `open` idempotently and `settle` their own half), so no seat is "the
+/// opener". What remains differs between games: the matchmaking id and the per-seat stake.
 #[derive(Clone, Copy, Debug)]
 pub struct GameProfile {
     /// The matchmaking queue id (`queue.join`), matching the FE's game id.
     pub game_id: &'static str,
-    /// The seat that opens the tunnel + submits the cooperative settle (blackjack = dealer/`B`;
-    /// generic PvP = `A`).
-    pub host: Role,
     pub stake_each: u64,
 }
 
-pub struct MatchOutcome {
-    pub tunnel_id: String,
-    pub moves: u64,
-    pub final_balances: Balances,
-    /// `Some(digest)` when this bot was the host and submitted the cooperative settle.
-    pub settle_digest: Option<String>,
-}
+/// Blackjack profile: stake 100 each. (No host — see [`GameProfile`].)
+pub const BLACKJACK: GameProfile = GameProfile {
+    game_id: "blackjack",
+    stake_each: 100,
+};
 
-/// Drive one match of ANY game to completion. `signer` is the bot's fresh per-match ephemeral key;
-/// `role` is this bot's seat (from `match.found`); `profile` carries the per-game conventions.
-pub async fn play_match<P, Strat, T, A>(
+/// Drive one match of ANY game to completion over the relay, on the merged `PartyDriver`.
+/// `signer` is this bot's fresh per-match ephemeral key; `match_info.role` is its seat; the
+/// `anchor` brackets the on-chain open/settle (its impl decides off-chain vs Sui vs relay-bridged);
+/// `recorder` taps the transcript (use `NullTranscriptRecorder` when not archiving).
+pub async fn play_match<P, Strat, T, A, R>(
     protocol: P,
     strategy: Strat,
     profile: &GameProfile,
     match_info: &MatchInfo,
     mut channel: MatchChannel<T>,
-    anchor: &A,
+    anchor: A,
     signer: DurableSigner,
-) -> Result<MatchOutcome>
+    recorder: R,
+) -> Result<DriverOutcome>
 where
     P: Protocol,
     Strat: MoveStrategy<P>,
     T: RelayTransport,
-    A: MatchAnchor,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<P::Move> + Send + Sync,
 {
+    // 1. Ephemeral-key exchange over the relay: announce ours, learn the opponent's co-signing pk.
+    //    (The merged driver expects `opponent_pk` up front; the relay peer protocol supplies it.)
     let my_pk = signer.public_key();
-    let role = match_info.role;
-
-    // 1. Ephemeral-key exchange: announce ours, learn the opponent's (the runtime's opponent_pk).
     channel
         .send_peer(&PeerMsg::Hello {
             ephemeral_pubkey: hex::encode(my_pk),
         })
         .await
         .map_err(|e| anyhow!("send hello: {e:?}"))?;
-    let opp_pk = recv_hello(&channel).await?;
+    let opponent_pk = recv_hello(&channel).await?;
 
-    // 2. On-chain open/fund/activate (seam). The host opens + announces; the guest waits.
-    let tunnel_id = if role == profile.host {
-        let opened = anchor
-            .open(my_pk, opp_pk, &match_info.opponent_wallet)
-            .await?;
-        channel
-            .send_peer(&PeerMsg::Opened {
-                tunnel_id: opened.tunnel_id.clone(),
-            })
-            .await
-            .map_err(|e| anyhow!("send opened: {e:?}"))?;
-        opened.tunnel_id
-    } else {
-        recv_opened(&channel).await?
-    };
-    anchor.fund_and_await_active(&tunnel_id, role).await?;
-
-    // 3. Co-signed play over the demuxed frame transport.
-    let ctx = TunnelContext {
-        tunnel_id: tunnel_id.clone(),
+    // 2. Hand the driver the demuxed frame transport + the anchor; it opens, plays, and settles.
+    let parts = SeatParts {
+        protocol,
+        signer,
+        opponent_pk,
         initial: Balances {
             a: profile.stake_each,
             b: profile.stake_each,
         },
-        seat: role.seat(),
+        seat: match_info.role.seat(),
     };
-    let runtime = PartyRuntime::new(protocol, signer, opp_pk, ctx);
-    let driver = PartyDriver::new(runtime, strategy, channel.take_frame_transport());
+    let driver = PartyDriver::new(
+        parts,
+        strategy,
+        channel.take_frame_transport(),
+        anchor,
+        recorder,
+    );
     let mut ts = 1u64;
-    let outcome = driver
+    let (outcome, _recorder) = driver
         .run(MAX_MOVES, move || {
             ts += 1;
             ts
         })
         .await
         .map_err(|e| anyhow!("party driver run: {e:?}"))?;
-
-    // 4. Settle (seam). The host submits; the settle-half exchange + transcript root live in the
-    //    MatchAnchor impl. NoopAnchor no-ops.
-    let settle_digest = if role == profile.host {
-        Some(anchor.settle(&tunnel_id, &[]).await?)
-    } else {
-        None
-    };
-
-    Ok(MatchOutcome {
-        tunnel_id,
-        moves: outcome.moves,
-        final_balances: outcome.final_balances,
-        settle_digest,
-    })
+    Ok(outcome)
 }
 
-/// Blackjack profile: dealer (role B) hosts, stake 100.
-pub const BLACKJACK: GameProfile = GameProfile {
-    game_id: "blackjack",
-    host: Role::B,
-    stake_each: 100,
-};
-
-/// Blackjack: a thin wrapper over the generic [`play_match`], driving the real basic-strategy
-/// [`BlackjackStrategy`]. Another game is the same one call with its profile + protocol +
-/// strategy, e.g. `play_match(TicTacToe, TicTacToeStrategy, &TICTACTOE, &info, ch, a, s)`.
-pub async fn play_blackjack<T: RelayTransport, A: MatchAnchor>(
+/// Blackjack: a thin wrapper over [`play_match`] driving the real basic-strategy [`BlackjackStrategy`].
+pub async fn play_blackjack<T, A, R>(
     channel: MatchChannel<T>,
-    anchor: &A,
+    anchor: A,
     signer: DurableSigner,
     role: Role,
     opponent_wallet: &str,
-) -> Result<MatchOutcome> {
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<Blackjack as Protocol>::Move> + Send + Sync,
+{
     let info = MatchInfo {
         match_id: String::new(),
         role,
@@ -157,6 +129,7 @@ pub async fn play_blackjack<T: RelayTransport, A: MatchAnchor>(
         channel,
         anchor,
         signer,
+        recorder,
     )
     .await
 }
@@ -173,16 +146,6 @@ async fn recv_hello<T: RelayTransport>(ch: &MatchChannel<T>) -> Result<[u8; 32]>
             }
             Some(_) => continue, // ignore other control messages until the hello arrives
             None => bail!("channel closed before opponent hello"),
-        }
-    }
-}
-
-async fn recv_opened<T: RelayTransport>(ch: &MatchChannel<T>) -> Result<String> {
-    loop {
-        match ch.recv_peer().await {
-            Some(PeerMsg::Opened { tunnel_id }) => return Ok(tunnel_id),
-            Some(_) => continue,
-            None => bail!("channel closed before tunnel opened"),
         }
     }
 }
