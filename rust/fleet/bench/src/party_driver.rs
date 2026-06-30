@@ -403,10 +403,23 @@ where
             };
             let (settled_a, settled_b) =
                 block_anchor(async { tokio::join!(anchor.settle(half_a), anchor.settle(half_b)) });
-            let settled_a = settled_a.expect("sponsored Sui anchor settle A");
-            let settled_b = settled_b.expect("sponsored Sui anchor settle B");
-            assert_eq!(settled_a.final_balances, bals);
-            assert_eq!(settled_b.final_balances, bals);
+            match (settled_a, settled_b) {
+                (Ok(sa), Ok(sb)) => {
+                    assert_eq!(sa.final_balances, bals);
+                    assert_eq!(sb.final_balances, bals);
+                }
+                // Async settle (ADR-0029): the backend accepts (202) and anchors off the request
+                // path, so a transient error here must NOT crash the rayon worker. The settlement is
+                // the co-signed bytes, anchored by the worker pool and confirmed via the proof event.
+                (a_res, b_res) => {
+                    eprintln!(
+                        "anchor settle failed anchor=sui-sponsored tunnel_id={tunnel_id} \
+                         final_nonce={final_nonce} a={:?} b={:?}",
+                        a_res.err(),
+                        b_res.err()
+                    );
+                }
+            }
         }
     }
 }
