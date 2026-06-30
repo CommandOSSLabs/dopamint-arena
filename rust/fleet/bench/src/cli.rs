@@ -10,7 +10,7 @@ use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SignerInitMode {
-    PerMatch,
+    PerTunnel,
     PreInitialized,
 }
 
@@ -39,10 +39,45 @@ pub enum ScenarioMode {
     Golden,
 }
 
-impl ScenarioMode {
-    pub fn card_seed(self, match_index: u64) -> Option<u64> {
+/// How many tunnels to drive and what bounds the run.
+/// - `Auto`: duration-led steady state — keep a worker-sized pool of tunnels in
+///   flight, relaunching as they finish, for the full `--duration`.
+/// - `Fixed(n)`: count-led burst — run exactly `n` tunnels once; `--duration` is
+///   only a guard that aborts an overrunning run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConcurrencyMode {
+    Auto,
+    Fixed(u64),
+}
+
+impl ConcurrencyMode {
+    /// Human label for the report header (`auto` or the fixed count).
+    pub fn label(self) -> String {
         match self {
-            ScenarioMode::Varied => Some(match_index),
+            ConcurrencyMode::Auto => "auto".to_string(),
+            ConcurrencyMode::Fixed(n) => n.to_string(),
+        }
+    }
+
+    /// In-flight tunnel pool for `Auto`, derived from the worker count: ~1.5×
+    /// workers (min 2) so cores stay busy across the per-move `recv` await points
+    /// without oversubscribing.
+    pub fn auto_in_flight(workers: usize) -> usize {
+        (workers * 3).div_ceil(2).max(2)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ColorMode {
+    Auto,
+    Always,
+    Never,
+}
+
+impl ScenarioMode {
+    pub fn card_seed(self, tunnel_index: u64) -> Option<u64> {
+        match self {
+            ScenarioMode::Varied => Some(tunnel_index),
             ScenarioMode::Golden => None,
         }
     }
@@ -52,9 +87,11 @@ impl ScenarioMode {
 pub struct BenchOpts {
     pub workers: usize,
     pub duration_secs: u64,
-    /// Number of tunnels to drive simultaneously (replaces the old `--matches` count).
-    pub tunnel_concurrency: u64,
-    /// Collect per-move latency samples (adds one sample per move; off by default).
+    /// Tunnel concurrency: `auto` (duration-led steady state) or a fixed count
+    /// (count-led burst). Replaces the old fixed-count flag.
+    pub tunnel_concurrency: ConcurrencyMode,
+    /// Show the per-move latency breakdown — per-frame transport send/recv (and
+    /// recorder-record, when a real recorder runs) latency rows. Off by default.
     pub per_move_latency: bool,
     /// Emit coarse-boundary tracing to the console (off by default).
     pub trace: bool,
@@ -63,12 +100,14 @@ pub struct BenchOpts {
     /// `PORTED_PROTOCOL_IDS` order for `all`). Always non-empty; runs execute
     /// sequentially so they don't contend for CPU.
     pub protocol_ids: Vec<&'static str>,
-    /// Protocol scenario for generated matches (`Varied` by default).
+    /// Protocol scenario for generated tunnels (`Varied` by default).
     pub scenario: ScenarioMode,
     /// Wire codec used to serialize tunnel frames (`Json` by default).
     pub frame_codec: FrameCodecKind,
     /// Tunnel anchor implementation (`Memory` by default).
     pub anchor_mode: AnchorMode,
+    /// ANSI color mode for the console report.
+    pub color_mode: ColorMode,
     /// Transcript recorder implementation (`None` by default).
     pub transcript_recorder: TranscriptRecorderMode,
     /// Sponsored Sui anchor configuration, present only when `anchor_mode == SuiSponsored`.
@@ -94,18 +133,18 @@ pub struct SuiSponsoredAnchorOpts {
     disable_help_flag = false,
     about = "Run the local memory-anchored tunnel fleet benchmark.",
     long_about = "Run the local memory-anchored tunnel fleet benchmark.\n\n\
-The bench drives two in-process PartyRuntime instances per match and reports \
-throughput, frame bytes, match counts, and resource usage. It uses the memory \
+The bench drives two in-process PartyRuntime instances per tunnel and reports \
+throughput, frame bytes, tunnel counts, and resource usage. It uses the memory \
 anchor by default, runs CPU-local with local frame transport, and submits no \
 chain transactions.",
     after_help = "Examples:\n  \
-fleet-bench --anchor memory --signer-init-mode per-match --tunnel-concurrency 50 --scenario golden --frame-codec postcard\n  \
+fleet-bench --anchor memory --signer-init-mode per-tunnel --tunnel-concurrency 50 --scenario golden --frame-codec postcard\n  \
 fleet-bench --signer-init-mode pre-initialized --tunnel-concurrency 1000 --frame-codec bcs\n  \
 fleet-bench --protocol-ids blackjack.v2 --tunnel-concurrency 100 --scenario varied --transcript-recorder memory\n  \
 fleet-bench --protocol-ids caro.v1,blackjack.v2 --tunnel-concurrency 100\n  \
 fleet-bench --protocol-ids all --tunnel-concurrency 50\n\n\
 Signer init mode values:\n  \
-per-match: create signer material inside each measured match\n  \
+per-tunnel: create signer material inside each measured tunnel\n  \
 pre-initialized: create all signer material before the timed run\n\n\
 Protocol IDs:\n  \
 --protocol-ids takes one ID, a comma-separated list, or `all`; listed\n  \
@@ -119,6 +158,10 @@ Frame codec values:\n  \
 json: TS-parity wire for bot-vs-user and regression baselines\n  \
 bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
 postcard: compact default candidate for bot-vs-bot\n\n\
+Color values:\n  \
+auto: colorize when stdout is a terminal\n  \
+always: force ANSI color\n  \
+never: disable ANSI color\n\n\
 Anchor values:\n  \
 memory: in-memory tunnel anchor for local throughput runs; no chain IO\n\n  \
 sui-sponsored: Sui Tunnel anchor for sponsored open and backend settlement\n  \
@@ -140,29 +183,29 @@ Sui sponsored anchor flags:\n  \
 --sui-disable-open-batching: execute each sponsored open request without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
-memory: retain committed transitions in memory during each match; useful for measuring recorder overhead"
+memory: retain committed transitions in memory during each tunnel; useful for measuring recorder overhead"
 )]
 struct Raw {
-    /// Number of rayon workers, or `auto` to use available CPU parallelism.
+    /// Number of Tokio runtime worker threads, or `auto` to use available CPU parallelism.
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     workers: String,
     /// Time-bounded run length in seconds. May also be bounded by tunnel completion.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
-    /// Number of tunnels to run, spawned simultaneously (total == in-flight).
-    #[arg(long = "tunnel-concurrency", default_value_t = 64, value_name = "N")]
-    tunnel_concurrency: u64,
-    /// Collect per-move latency samples (default off; adds a sample per move).
+    /// Tunnel concurrency: `auto` (duration-led steady state) or a fixed count.
+    #[arg(long = "tunnel-concurrency", default_value = "auto", value_name = "auto|N")]
+    tunnel_concurrency: String,
+    /// Show the per-move latency breakdown (per-frame transport send/recv rows).
     #[arg(long = "per-move-latency", default_value_t = false)]
     per_move_latency: bool,
     /// Emit coarse-boundary tracing to the console (default off).
     #[arg(long = "trace", default_value_t = false)]
     trace: bool,
-    /// Signer initialization timing: per-match or pre-initialized.
+    /// Signer initialization timing: per-tunnel or pre-initialized.
     #[arg(
         long = "signer-init-mode",
-        default_value = "per-match",
-        value_name = "per-match|pre-initialized"
+        default_value = "per-tunnel",
+        value_name = "per-tunnel|pre-initialized"
     )]
     signer_init_mode: String,
     /// Frame wire codec: json, bcs, or postcard.
@@ -178,6 +221,9 @@ struct Raw {
     /// Tunnel anchor implementation.
     #[arg(long, default_value = "memory", value_name = "memory|sui-sponsored")]
     anchor: String,
+    /// ANSI color output.
+    #[arg(long, default_value = "auto", value_name = "auto|always|never")]
+    color: String,
     /// Transcript recorder implementation: none or memory.
     #[arg(
         long = "transcript-recorder",
@@ -352,11 +398,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     }
 
     let signer_init_mode = match raw.signer_init_mode.as_str() {
-        "per-match" => SignerInitMode::PerMatch,
+        "per-tunnel" => SignerInitMode::PerTunnel,
         "pre-initialized" => SignerInitMode::PreInitialized,
         other => {
             return Err(format!(
-                "--signer-init-mode must be per-match|pre-initialized, got {other}"
+                "--signer-init-mode must be per-tunnel|pre-initialized, got {other}"
             ))
         }
     };
@@ -385,6 +431,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
                 "--anchor must be memory|sui-sponsored, got {other}"
             ))
         }
+    };
+
+    let color_mode = match raw.color.as_str() {
+        "auto" => ColorMode::Auto,
+        "always" => ColorMode::Always,
+        "never" => ColorMode::Never,
+        other => return Err(format!("--color must be auto|always|never, got {other}")),
     };
 
     let transcript_recorder = match raw.transcript_recorder.as_str() {
@@ -510,10 +563,23 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         None
     };
 
+    let tunnel_concurrency = match raw.tunnel_concurrency.as_str() {
+        "auto" => ConcurrencyMode::Auto,
+        other => {
+            let n = other.parse::<u64>().map_err(|_| {
+                format!("--tunnel-concurrency must be 'auto' or a positive integer, got {other}")
+            })?;
+            if n == 0 {
+                return Err("--tunnel-concurrency must be at least 1".to_string());
+            }
+            ConcurrencyMode::Fixed(n)
+        }
+    };
+
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
-        tunnel_concurrency: raw.tunnel_concurrency,
+        tunnel_concurrency,
         per_move_latency: raw.per_move_latency,
         trace: raw.trace,
         signer_init_mode,
@@ -521,6 +587,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         scenario,
         frame_codec,
         anchor_mode,
+        color_mode,
         transcript_recorder,
         sui_anchor,
     })
@@ -546,8 +613,8 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(o.duration_secs, 15);
-        assert_eq!(o.tunnel_concurrency, 64);
-        assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
+        assert_eq!(o.tunnel_concurrency, ConcurrencyMode::Auto);
+        assert_eq!(o.signer_init_mode, SignerInitMode::PerTunnel);
         assert_eq!(o.protocol_ids, vec!["blackjack.bet.v1"]);
         assert!(o.workers >= 1);
     }
@@ -571,21 +638,36 @@ mod tests {
             "--tunnel-concurrency",
             "10",
             "--signer-init-mode",
-            "per-match",
+            "per-tunnel",
         ])
         .unwrap();
         assert_eq!(o.workers, 1);
-        assert_eq!(o.tunnel_concurrency, 10);
-        assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
+        assert_eq!(o.tunnel_concurrency, ConcurrencyMode::Fixed(10));
+        assert_eq!(o.signer_init_mode, SignerInitMode::PerTunnel);
+    }
+
+    #[test]
+    fn color_mode_defaults_to_auto_and_parses_overrides() {
+        assert_eq!(parse_v(&[]).unwrap().color_mode, ColorMode::Auto);
+        assert_eq!(
+            parse_v(&["--color", "always"]).unwrap().color_mode,
+            ColorMode::Always
+        );
+        assert_eq!(
+            parse_v(&["--color", "never"]).unwrap().color_mode,
+            ColorMode::Never
+        );
+        let err = parse_v(&["--color", "sometimes"]).unwrap_err();
+        assert!(err.contains("--color must be auto|always|never"), "{err}");
     }
 
     #[test]
     fn pre_initialized_signers_uses_tunnel_concurrency_as_pool_size() {
-        // tunnel_concurrency always has a default (64), so pre-initialized no longer
-        // requires an explicit flag — the concurrency count drives the signer pool.
+        // tunnel_concurrency defaults to auto (duration-led); an explicit count
+        // pins the burst size and drives the pre-initialized signer pool.
         let o = parse_v(&["--signer-init-mode", "pre-initialized"]).unwrap();
         assert_eq!(o.signer_init_mode, SignerInitMode::PreInitialized);
-        assert_eq!(o.tunnel_concurrency, 64);
+        assert_eq!(o.tunnel_concurrency, ConcurrencyMode::Auto);
         let o = parse_v(&[
             "--signer-init-mode",
             "pre-initialized",
@@ -593,19 +675,19 @@ mod tests {
             "4",
         ])
         .unwrap();
-        assert_eq!(o.tunnel_concurrency, 4);
+        assert_eq!(o.tunnel_concurrency, ConcurrencyMode::Fixed(4));
     }
 
     #[test]
     fn scenario_is_varied_by_default_and_golden_opts_in() {
         assert_eq!(
-            parse_v(&["--signer-init-mode", "per-match"])
+            parse_v(&["--signer-init-mode", "per-tunnel"])
                 .unwrap()
                 .scenario,
             ScenarioMode::Varied
         );
         assert_eq!(
-            parse_v(&["--signer-init-mode", "per-match", "--scenario", "golden"])
+            parse_v(&["--signer-init-mode", "per-tunnel", "--scenario", "golden"])
                 .unwrap()
                 .scenario,
             ScenarioMode::Golden
@@ -678,13 +760,13 @@ mod tests {
     #[test]
     fn frame_codec_defaults_to_json_and_parses_each_variant() {
         assert_eq!(
-            parse_v(&["--signer-init-mode", "per-match"])
+            parse_v(&["--signer-init-mode", "per-tunnel"])
                 .unwrap()
                 .frame_codec,
             FrameCodecKind::Json
         );
         assert_eq!(
-            parse_v(&["--signer-init-mode", "per-match", "--frame-codec", "bcs"])
+            parse_v(&["--signer-init-mode", "per-tunnel", "--frame-codec", "bcs"])
                 .unwrap()
                 .frame_codec,
             FrameCodecKind::Bcs
@@ -692,7 +774,7 @@ mod tests {
         assert_eq!(
             parse_v(&[
                 "--signer-init-mode",
-                "per-match",
+                "per-tunnel",
                 "--frame-codec",
                 "postcard"
             ])
@@ -1047,9 +1129,30 @@ mod tests {
             "--trace",
         ])
         .unwrap();
-        assert_eq!(o.tunnel_concurrency, 255);
+        assert_eq!(o.tunnel_concurrency, ConcurrencyMode::Fixed(255));
         assert!(o.per_move_latency);
         assert!(o.trace);
+    }
+
+    #[test]
+    fn tunnel_concurrency_auto_is_default_and_numbers_pin_a_burst() {
+        assert_eq!(parse_v(&[]).unwrap().tunnel_concurrency, ConcurrencyMode::Auto);
+        assert_eq!(
+            parse_v(&["--tunnel-concurrency", "auto"])
+                .unwrap()
+                .tunnel_concurrency,
+            ConcurrencyMode::Auto
+        );
+        assert_eq!(
+            parse_v(&["--tunnel-concurrency", "128"])
+                .unwrap()
+                .tunnel_concurrency,
+            ConcurrencyMode::Fixed(128)
+        );
+        let err = parse_v(&["--tunnel-concurrency", "0"]).unwrap_err();
+        assert!(err.contains("at least 1"), "{err}");
+        let err = parse_v(&["--tunnel-concurrency", "lots"]).unwrap_err();
+        assert!(err.contains("auto"), "{err}");
     }
 
     #[test]
@@ -1096,14 +1199,14 @@ mod tests {
         assert!(help.contains("Run the local memory-anchored tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
         assert!(help.contains(
-            "fleet-bench --anchor memory --signer-init-mode per-match --tunnel-concurrency 50 --scenario golden --frame-codec postcard"
+            "fleet-bench --anchor memory --signer-init-mode per-tunnel --tunnel-concurrency 50 --scenario golden --frame-codec postcard"
         ));
         assert!(help.contains(
             "fleet-bench --protocol-ids blackjack.v2 --tunnel-concurrency 100 --scenario varied --transcript-recorder memory"
         ));
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
-        assert!(help.contains("per-match|pre-initialized"));
+        assert!(help.contains("per-tunnel|pre-initialized"));
         assert!(help.contains("--protocol-ids takes one ID, a comma-separated list, or `all`"));
         assert!(help
             .contains("fleet-bench --protocol-ids caro.v1,blackjack.v2 --tunnel-concurrency 100"));
@@ -1113,7 +1216,7 @@ mod tests {
         assert!(
             help.contains("memory: in-memory tunnel anchor for local throughput runs; no chain IO")
         );
-        assert!(help.contains("memory: retain committed transitions in memory during each match"));
+        assert!(help.contains("memory: retain committed transitions in memory during each tunnel"));
         assert!(help.contains("none|memory"));
     }
 

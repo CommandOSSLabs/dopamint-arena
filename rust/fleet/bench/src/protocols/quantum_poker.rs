@@ -1,18 +1,19 @@
 use super::{play_with_strategies, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind};
+use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::SuiSponsoredBenchContext;
-use crate::party_driver::{MatchResult, SeatKit};
+use crate::party_driver::{SeatKit, TunnelOutcome};
 use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
 
-pub(crate) fn play(
+pub(crate) async fn play(
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult {
+    telemetry: TunnelTelemetry,
+) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
         QuantumPoker::new(3),
@@ -21,12 +22,13 @@ pub(crate) fn play(
         codec,
         anchor_mode,
         sui_context,
-        transcript_recorder,
         seed,
         kit,
         tunnel_id,
         2_000,
         2_000,
         MAX_MOVES,
+        telemetry,
     )
+    .await
 }
