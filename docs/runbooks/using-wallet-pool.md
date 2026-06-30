@@ -338,64 +338,161 @@ pool.delete(&pool_id).await?;
 
 The offline pool writes blobs to a local directory. The **online** pool is
 identical in every feature — it stores the same encrypted blobs in an Amazon S3
-bucket so any caller with AWS credentials can reach a shared pool. Only the
-storage location differs.
+bucket so any caller with AWS credentials can reach a shared pool from any
+machine. Only the storage location differs; every operation (create, open, fund,
+sign, list, export/import, disable, delete) is unchanged.
 
-### Configure access
+Build the crate:
 
-Create (or have provisioned) a private S3 bucket and an IAM user whose policy is
-scoped to that bucket (`s3:ListBucket` + `s3:GetObject`/`PutObject`/`DeleteObject`
-on `…/*`). Then export:
+```bash
+cargo build -p wallet-pool-s3
+```
+
+### Environment variables
+
+`S3WalletPoolStore::from_env()` reads its config from the environment. What you
+need depends on whether you **operate** a pool (create/fund it) or just **use**
+one that already exists.
+
+**Storage — AWS / S3 (required by everyone):**
+
+| Variable | Required? | Purpose |
+|----------|-----------|---------|
+| `WALLET_POOL_S3_BUCKET` | yes | Bucket holding the pool blobs, e.g. `dev-env-dopamint-wallet-pool`. |
+| `AWS_ACCESS_KEY_ID` | yes | Access key id of an IAM user allowed to read/write the bucket. |
+| `AWS_SECRET_ACCESS_KEY` | yes | Secret access key for that IAM user. |
+| `AWS_REGION` | yes | Region the bucket lives in, e.g. `us-east-1`. |
+| `WALLET_POOL_S3_PREFIX` | no | Key prefix to namespace pools (default empty = flat layout, `{id}.json`). |
+
+The AWS SDK default credential chain resolves the keys, so any standard mechanism
+works: static env vars (above), a `~/.aws/credentials` profile, or an IAM role
+when hosted on EC2/ECS/Lambda. Scope the IAM policy to this one bucket only
+(`s3:ListBucket` + `s3:GetObject`/`PutObject`/`DeleteObject` on `…/*`).
+
+**Sui network (required by everyone):**
+
+| Variable | Required? | Purpose |
+|----------|-----------|---------|
+| `SUI_RPC_URL` | yes | Fullnode RPC URL, e.g. `https://fullnode.testnet.sui.io:443`. Passed to `ReqwestRpc`; not read by the store itself. |
+
+**Pool identity (required only to open an existing pool — obtained from whoever created it):**
+
+| Item | Required? | Purpose |
+|------|-----------|---------|
+| Pool id (`wp_…`) | yes | Identifies the pool's object key in the bucket. |
+| `access_value` | yes | Decrypts every member key. Treat it like a seed phrase. |
+| Network | yes | The network the pool was created on (`Testnet` / `Mainnet`). |
+
+> Operators (who create pools) additionally need the `sui` CLI with a funded
+> active address, to seed the master with SUI for gas and with the distribution
+> token. See the offline sections above for the funding commands.
+
+### Use an existing online pool (consumer)
+
+A consumer needs **only** the storage + Sui env vars and the pool id /
+`access_value` from the operator — no `sui` CLI, no funds:
 
 ```bash
 export AWS_ACCESS_KEY_ID=…
 export AWS_SECRET_ACCESS_KEY=…
 export AWS_REGION=us-east-1
 export WALLET_POOL_S3_BUCKET=dev-env-dopamint-wallet-pool
-# optional: namespace objects under a prefix
-export WALLET_POOL_S3_PREFIX=
+export SUI_RPC_URL=https://fullnode.testnet.sui.io:443
 ```
 
-The blobs are AES-256-GCM encrypted via the pool `access_value`, so the wallet
-keys stay safe even if the bucket is compromised. A leaked access key still
-exposes the plaintext address index and the ability to overwrite blobs — scope
-the IAM policy down and rotate keys if needed.
+```rust
+use std::sync::Arc;
+use wallet_pool::rpc::{ReqwestRpc, SuiRpc};
+use wallet_pool::{CacheMode, Network, OpenOptions, WalletPool};
+use wallet_pool_s3::S3WalletPoolStore;
 
-### Build and wire it
+let rpc = Arc::new(ReqwestRpc::new(&std::env::var("SUI_RPC_URL").unwrap()));
+let store = Arc::new(S3WalletPoolStore::from_env().await?);
+let pool = WalletPool::new(store, rpc);
 
-```bash
-cargo build -p wallet-pool-s3
+// pool id + access_value come from the pool's creator
+let mut handle = pool
+    .open(OpenOptions {
+        id: "wp_…".into(),
+        access_value: "…".into(),
+        network: Network::Testnet,
+        cache_mode: CacheMode::Default,
+    })
+    .await?;
+
+// Now use it: sign transactions as a member, list entries, read live balances,
+// export, disable members, etc. — exactly as in the offline sections above.
+handle.close(); // wipes decrypted keys from memory when done
 ```
 
-Construct the store from the environment and inject it exactly like the file
-store — every other operation is unchanged:
+### Create and fund a new online pool (operator)
+
+The operator provisions the bucket + scoped IAM user, then creates and funds the
+pool exactly like the offline flow — only the store differs. They then share the
+**pool id** and **access_value** with consumers.
 
 ```rust
 use std::sync::Arc;
 use wallet_pool::rpc::ReqwestRpc;
-use wallet_pool::WalletPool;
+use wallet_pool::{CreateOptions, Network, WalletPool};
 use wallet_pool_s3::S3WalletPoolStore;
 
 let rpc = Arc::new(ReqwestRpc::new("https://fullnode.testnet.sui.io:443"));
 let store = Arc::new(S3WalletPoolStore::from_env().await?);
 let pool = WalletPool::new(store, rpc);
 
-// create / open / fund / sign / list / export / import / delete work exactly
-// as in the offline examples above.
+let created = pool
+    .create(CreateOptions {
+        network: Network::Testnet,
+        member_count: 50,
+        ..Default::default()
+    })
+    .await?;
+// created.wallet_pool_id  -> share with consumers
+// created.access_value    -> share securely; it decrypts every member key
 ```
 
-Run the included demo to confirm the round-trip:
+Fund the master with SUI (gas) and the distribution token via the `sui` CLI, then
+fund members with `handle.fund(...)` — identical to the offline sections above.
+
+### Run the end-to-end demo over S3
+
+A quick store-only round-trip (no Sui network needed):
 
 ```bash
 cargo run -p wallet-pool-s3 --example s3_demo
 ```
 
-### Concurrency
+The **full** end-to-end lifecycle over S3 — create a 50-member pool in the
+bucket, fund the master with 1 BUCK + 1 SUI, fund all members, sign a
+member→master BUCK transfer, list/filter/query balances, exercise selection
+helpers, export/import (through S3), disable and re-enable a member, and delete —
+is in `s3_full_demo_buck`:
 
-Writes are last-writer-wins, same as the file store: if two processes mutate the
-same pool at once, one overwrites the other. Enable S3 bucket versioning (already
-on for `dev-env-dopamint-wallet-pool`) to recover from an accidental clobber.
-Safe concurrent mutation via S3 conditional writes is not yet wired.
+```bash
+sui client switch --env testnet
+export SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+export BUCK_OBJECT_ID=<a_buck_coin_owned_by_your_active_address>
+export AWS_ACCESS_KEY_ID=…
+export AWS_SECRET_ACCESS_KEY=…
+export AWS_REGION=us-east-1
+export WALLET_POOL_S3_BUCKET=dev-env-dopamint-wallet-pool
+cargo run -p wallet-pool-s3 --example s3_full_demo_buck
+```
+
+The demo asserts the blob is present in the bucket after create and gone after
+delete, proving the pool really lives in S3.
+
+### Security and concurrency
+
+- Blobs are AES-256-GCM encrypted via the pool `access_value`, so the wallet keys
+  stay safe even if the bucket is compromised. A leaked AWS key still exposes the
+  plaintext address index and the ability to overwrite/corrupt blobs — scope the
+  IAM policy to the bucket and rotate keys if needed.
+- Writes are last-writer-wins, same as the file store: if two processes mutate
+  the same pool at once, one overwrites the other. Bucket versioning (on for
+  `dev-env-dopamint-wallet-pool`) is the rollback safety net. Safe concurrent
+  mutation via S3 conditional writes is not yet wired.
 
 ## Security notes
 
@@ -414,3 +511,5 @@ Safe concurrent mutation via S3 conditional writes is not yet wired.
 | `NetworkMismatch` on open | `OpenOptions.network` does not match the stored blob | Open with the same `Network` used at creation time. |
 | `WrongAccessValueError` on open | Incorrect access value | Use the exact value returned by `create`. |
 | `sui client transfer-sui` fails | Active env points to wrong network | `sui client switch --env testnet` (or `mainnet`). |
+| `InvalidInput: WALLET_POOL_S3_BUCKET not set` | `S3WalletPoolStore::from_env()` called without the env var | `export WALLET_POOL_S3_BUCKET=…` (see [Online pool](#online-pool-s3-storage)). |
+| S3 `AccessDenied` / `store error: s3 …` | IAM policy missing the action, or wrong bucket/region | Confirm the IAM user may `s3:Get/Put/Delete/ListBucket` on the exact bucket and `AWS_REGION` matches the bucket's region. |
