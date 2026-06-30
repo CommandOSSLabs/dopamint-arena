@@ -86,6 +86,24 @@ export function CanvasView({
   const panOnly = tool === "hand" || engine.auto;
   const effectiveColor = tool === "erase" ? ERASER_COLOR : color;
 
+  // Wallet gate: the wall's two seat bots open a sponsored tunnel and paint immediately, so —
+  // like every other arena game — require a connected wallet before any of that runs. Until
+  // then the engine holds (no tunnel, no TPS) and we show a connect prompt instead of the wall.
+  if (!engine.connected) {
+    return (
+      <div style={connectWrapStyle}>
+        <div style={connectCardStyle}>
+          <div style={connectEyebrowStyle}>Wallet required</div>
+          <div style={connectTitleStyle}>Connect to paint</div>
+          <p style={connectNoteStyle}>
+            Connect a wallet to open the shared wall — gas is sponsored, so
+            watching the bots co-paint (or taking the wheel) is free.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const toolbar = (
     <FloatingToolbar
       tool={tool}
@@ -166,6 +184,51 @@ const autoCornerStyle: CSSProperties = {
   right: 14,
   zIndex: 60,
   pointerEvents: "none",
+};
+
+/** Wallet-gate panel — centered glass card on the canvas backdrop, shown until a wallet
+ *  connects (mirrors the arena's other "connect to play" on-ramps, in CanvasView's own
+ *  inline-style + WC-token idiom). */
+const connectWrapStyle: CSSProperties = {
+  height: "100%",
+  width: "100%",
+  display: "grid",
+  placeItems: "center",
+  padding: 24,
+  background: WC.bg,
+  boxSizing: "border-box",
+};
+
+const connectCardStyle: CSSProperties = {
+  maxWidth: "min(22rem, 92%)",
+  padding: "clamp(16px, 4cqmin, 28px)",
+  textAlign: "center",
+  border: `1px solid ${WC.glassBorder}`,
+  background: WC.glass,
+  boxShadow: WC.glow,
+  backdropFilter: "blur(8px)",
+  color: WC.text,
+};
+
+const connectEyebrowStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  opacity: 0.7,
+};
+
+const connectTitleStyle: CSSProperties = {
+  margin: "6px 0 8px",
+  fontSize: "clamp(18px, 5cqmin, 26px)",
+  fontWeight: 800,
+};
+
+const connectNoteStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  lineHeight: 1.5,
+  opacity: 0.85,
 };
 
 /** Derive a live throughput number from the monotonic co-signed paint count via a

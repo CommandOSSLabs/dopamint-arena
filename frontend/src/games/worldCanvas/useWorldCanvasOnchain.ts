@@ -55,6 +55,7 @@
  * cells — DISPLAY ONLY, no money, no winner.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { core, proof } from "sui-tunnel-ts";
 import {
   WorldCanvasProtocol,
@@ -335,6 +336,10 @@ export interface WorldCanvasOnchainStatus {
 
 export interface UseWorldCanvasOnchain {
   status: WorldCanvasOnchainStatus;
+  /** True once a real wallet is connected. The watch-bot wall only opens its tunnel and
+   *  starts painting while this holds — without it the view shows a connect prompt (no
+   *  tunnel, no TPS), exactly like every other arena game's solo on-ramp. */
+  connected: boolean;
   /** Live canvas: stable Map identity, mutated in place; re-read on `revision` bumps. */
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps (throttled) whenever the canvas changes, so consumers redraw. */
@@ -644,6 +649,8 @@ export function useWorldCanvasOnchain(
   // A stable "You" display identity (never co-signs — the funded seat-A keypair does
   // the signing; this address only TAGS the human's own cells for the "You" label).
   const { report } = useTelemetry();
+  // Gate the watch-bot wall behind a connected wallet (see the mount effect below).
+  const account = useCurrentAccount();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
   const humanAddress = bots.x.address;
@@ -1768,12 +1775,20 @@ export function useWorldCanvasOnchain(
     );
   }, []);
 
-  // Open the single tunnel on mount with two distinct funded seat bots; tear it down on
-  // unmount. Default Auto ON ⇒ both bots paint immediately (live TPS from the first
-  // frame). React StrictMode's double-mount is guarded by `identitiesRef` + the
-  // `runRef.current` check, so only one tunnel is ever opened; each open also pre-selects
-  // its stake coin (see startRun), so a stray concurrent open can't equivocate the faucet.
+  // Open the single tunnel with two distinct funded seat bots ONCE A WALLET IS CONNECTED;
+  // tear it down on unmount or disconnect. Default Auto ON ⇒ both bots paint immediately
+  // (live TPS from the first frame). React StrictMode's double-mount is guarded by
+  // `identitiesRef` + the `runRef.current` check, so only one tunnel is ever opened; each
+  // open also pre-selects its stake coin (see startRun), so a stray concurrent open can't
+  // equivocate the faucet.
+  //
+  // The wallet gate matches every other arena game (and the quantum-poker watch-bot fix):
+  // the two seats self-fund (faucet-minted MTPS + sponsored gas) and never touch the user's
+  // coins, but auto-opening sponsored tunnels on a bare page load would burn backend gas
+  // with no user in the loop. Require a connect first; on disconnect the cleanup below
+  // tears the wall down, and a reconnect re-runs this effect (runRef is null) to reopen.
   useEffect(() => {
+    if (!account) return;
     if (!identitiesRef.current) {
       identitiesRef.current = { a: makeIdentity(), b: makeIdentity() };
     }
@@ -1827,10 +1842,18 @@ export function useWorldCanvasOnchain(
       }
       runRef.current = null;
     };
-  }, [startRun, startSeatBot, syncAgentMarkers, flushHeartbeat, paintFrame]);
+  }, [
+    account,
+    startRun,
+    startSeatBot,
+    syncAgentMarkers,
+    flushHeartbeat,
+    paintFrame,
+  ]);
 
   return {
     status,
+    connected: !!account,
     paints: paintsRef.current,
     revision,
     game,
