@@ -11,6 +11,8 @@
 //! Optional environment variables:
 //!   - `WALLET_POOL_ID` — resume an existing pool instead of creating a new one.
 //!   - `SUI_RPC_URL` — defaults to `https://fullnode.testnet.sui.io:443`.
+//!   - `BATCH_SIZE` — members added per batch (default 50,000). Larger batches
+//!     reduce total runtime but use more memory per batch.
 //!
 //! The pool is sealed with `AccessMode::Passphrase`, so `ACCESS_VALUE` can be
 //! any passphrase you choose.
@@ -29,7 +31,7 @@ use wallet_pool_core::envelope::AccessMode;
 use wallet_pool_s3::S3WalletPoolStore;
 
 const TARGET_MEMBERS: u32 = 1_000_000;
-const BATCH_SIZE: u32 = 10_000;
+const DEFAULT_BATCH_SIZE: u32 = 50_000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,10 +86,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Master address: {master_address}");
     handle.close();
 
+    let batch_size: u32 = std::env::var("BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_BATCH_SIZE);
+    println!("Batch size: {batch_size}");
+
     // Add members in batches until we reach 1M.
     while current_members < TARGET_MEMBERS {
         let remaining = TARGET_MEMBERS - current_members;
-        let batch = BATCH_SIZE.min(remaining);
+        let batch = batch_size.min(remaining);
         let start = std::time::Instant::now();
 
         let result = pool
