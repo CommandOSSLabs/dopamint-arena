@@ -36,6 +36,11 @@ export interface BackendArgs {
   ollamaModel?: pulumi.Input<string>;
   // Tag of the ollama/ollama image to run as the sidecar.
   ollamaImageTag?: pulumi.Input<string>;
+  // Speed caps forwarded to Ollama by the backend proxy.
+  ollamaNumPredict?: pulumi.Input<number>;
+  ollamaNumCtx?: pulumi.Input<number>;
+  ollamaKeepAlive?: pulumi.Input<string>;
+  ollamaTopicPredict?: pulumi.Input<number>;
   // Browser origins allowed to call Ollama directly (Ollama OLLAMA_ORIGINS). Only
   // relevant when the sidecar is reached directly (e.g., local debugging); the ALB no
   // longer exposes /api/*. Omitted => no CORS allow-list.
@@ -72,18 +77,45 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
   const ollamaEnabled = pulumi.output(args.ollamaEnabled ?? false);
   const ollamaModel = pulumi.output(args.ollamaModel ?? "qwen2.5:1.5b");
   const ollamaImageTag = pulumi.output(args.ollamaImageTag ?? "0.6.2");
+  const ollamaNumPredict = pulumi.output(args.ollamaNumPredict ?? undefined);
+  const ollamaNumCtx = pulumi.output(args.ollamaNumCtx ?? undefined);
+  const ollamaKeepAlive = pulumi.output(args.ollamaKeepAlive ?? undefined);
+  const ollamaTopicPredict = pulumi.output(args.ollamaTopicPredict ?? undefined);
   const ollamaOrigins = pulumi.output(args.ollamaOrigins ?? undefined);
-  // pulumi.all's tuple overloads stop at 8 elements; bundling the ollama config
-  // (plus Redis and S3, which are unrelated but also bundled to keep the outer
-  // all an 8-tuple) keeps it heterogeneously typed.
+  // Bundle Ollama config into one output so the outer pulumi.all stays within
+  // the 8-tuple overload and keeps heterogeneous typing.
   const ollama = pulumi
-    .all([ollamaEnabled, ollamaModel, ollamaImageTag, ollamaOrigins])
-    .apply(([enabled, model, imageTag, origins]) => ({
-      enabled,
-      model,
-      imageTag,
-      origins,
-    }));
+    .all([
+      ollamaEnabled,
+      ollamaModel,
+      ollamaImageTag,
+      ollamaNumPredict,
+      ollamaNumCtx,
+      ollamaKeepAlive,
+      ollamaTopicPredict,
+      ollamaOrigins,
+    ])
+    .apply(
+      ([
+        enabled,
+        model,
+        imageTag,
+        numPredict,
+        numCtx,
+        keepAlive,
+        topicPredict,
+        origins,
+      ]) => ({
+        enabled,
+        model,
+        imageTag,
+        numPredict,
+        numCtx,
+        keepAlive,
+        topicPredict,
+        origins,
+      }),
+    );
   // Bundle the two Redis endpoints (related) so the outer tuple stays at 8 typed slots.
   const redis = pulumi
     .all([
@@ -121,6 +153,10 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           enabled: ollamaEnabled,
           model: ollamaModel,
           imageTag: ollamaImageTag,
+          numPredict: ollamaNumPredictCfg,
+          numCtx: ollamaNumCtxCfg,
+          keepAlive: ollamaKeepAliveCfg,
+          topicPredict: ollamaTopicPredictCfg,
           origins: ollamaOriginsCfg,
         } = ollama;
         const backendEnv: Array<{ name: string; value: string }> = [
@@ -214,6 +250,23 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           backendEnv.push(
             { name: "OLLAMA_URL", value: "http://localhost:11434" },
             { name: "OLLAMA_MODEL", value: ollamaModel },
+            ...(ollamaNumPredictCfg
+              ? [{ name: "OLLAMA_NUM_PREDICT", value: String(ollamaNumPredictCfg) }]
+              : []),
+            ...(ollamaNumCtxCfg
+              ? [{ name: "OLLAMA_NUM_CTX", value: String(ollamaNumCtxCfg) }]
+              : []),
+            ...(ollamaKeepAliveCfg
+              ? [{ name: "OLLAMA_KEEP_ALIVE", value: ollamaKeepAliveCfg }]
+              : []),
+            ...(ollamaTopicPredictCfg
+              ? [
+                  {
+                    name: "OLLAMA_TOPIC_PREDICT",
+                    value: String(ollamaTopicPredictCfg),
+                  },
+                ]
+              : []),
           );
         }
 

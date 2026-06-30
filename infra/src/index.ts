@@ -194,6 +194,10 @@ const backend = createBackend({
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,
   ollamaImageTag: cfg.ollamaImageTag,
+  ollamaNumPredict: cfg.ollamaNumPredict,
+  ollamaNumCtx: cfg.ollamaNumCtx,
+  ollamaKeepAlive: cfg.ollamaKeepAlive,
+  ollamaTopicPredict: cfg.ollamaTopicPredict,
   ollamaOrigins: cfg.ollamaOrigins,
   corsAllowedOrigins: cfg.corsAllowedOrigins,
 });

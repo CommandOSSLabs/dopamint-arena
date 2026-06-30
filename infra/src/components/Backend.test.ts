@@ -300,4 +300,55 @@ describe("backend component", () => {
       "OLLAMA_ORIGINS must be absent when origins are not configured",
     );
   });
+
+  it("passes configured Ollama speed caps to the backend", async () => {
+    const backend = createBackend(
+      makeBackendArgs({
+        ollamaEnabled: true,
+        ollamaModel: "qwen2.5:1.5b",
+        ollamaImageTag: "0.6.2",
+        ollamaNumPredict: 64,
+        ollamaNumCtx: 2048,
+        ollamaKeepAlive: "30m",
+        ollamaTopicPredict: 24,
+      }),
+    );
+
+    const defs = JSON.parse(
+      await awaitOutput(backend.taskDefinition.containerDefinitions),
+    );
+    const backendContainer = defs.find(
+      (c: { name: string }) => c.name === "backend",
+    );
+    const env = backendContainer.environment;
+
+    assert.ok(
+      env.some(
+        (e: { name: string; value: string }) =>
+          e.name === "OLLAMA_NUM_PREDICT" && e.value === "64",
+      ),
+      "OLLAMA_NUM_PREDICT must be set",
+    );
+    assert.ok(
+      env.some(
+        (e: { name: string; value: string }) =>
+          e.name === "OLLAMA_NUM_CTX" && e.value === "2048",
+      ),
+      "OLLAMA_NUM_CTX must be set",
+    );
+    assert.ok(
+      env.some(
+        (e: { name: string; value: string }) =>
+          e.name === "OLLAMA_KEEP_ALIVE" && e.value === "30m",
+      ),
+      "OLLAMA_KEEP_ALIVE must be set",
+    );
+    assert.ok(
+      env.some(
+        (e: { name: string; value: string }) =>
+          e.name === "OLLAMA_TOPIC_PREDICT" && e.value === "24",
+      ),
+      "OLLAMA_TOPIC_PREDICT must be set",
+    );
+  });
 });

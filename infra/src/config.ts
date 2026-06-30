@@ -38,6 +38,10 @@ export interface InfraConfig {
   ollamaEnabled: boolean;
   ollamaModel: string;
   ollamaImageTag: string;
+  ollamaNumPredict?: number;
+  ollamaNumCtx?: number;
+  ollamaKeepAlive?: string;
+  ollamaTopicPredict?: number;
   // Warning: Only relevant when Ollama is exposed directly. With the backend-proxy
   // architecture, this should remain unset in deployed stacks.
   // Comma-separated browser origins allowed to call Ollama directly
@@ -68,6 +72,10 @@ export function getConfig(): InfraConfig {
     ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
     ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.5b",
     ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",
+    ollamaNumPredict: config.getNumber("ollama-num-predict") ?? undefined,
+    ollamaNumCtx: config.getNumber("ollama-num-ctx") ?? undefined,
+    ollamaKeepAlive: config.get("ollama-keep-alive") || undefined,
+    ollamaTopicPredict: config.getNumber("ollama-topic-predict") ?? undefined,
     ollamaOrigins: config.get("ollama-origins") || undefined,
   };
 }
