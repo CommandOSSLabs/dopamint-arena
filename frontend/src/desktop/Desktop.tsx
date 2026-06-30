@@ -886,7 +886,7 @@ export function ArenaView() {
           const win = (
             <GameWindow
               title={mod.name}
-              icon={<GameTpsBadge gameId={gameOf(item.id)} />}
+              icon={<GameTpsBadge windowId={item.id} />}
               domId={item.id}
               dragHandleProps={
                 fl ? floatDragProps(item.id) : handle.dragHandleProps

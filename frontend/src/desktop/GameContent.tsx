@@ -18,20 +18,23 @@ import {
  * game effects that depend on it don't churn on each telemetry tick.
  */
 function GameTelemetryScope({
-  gameId,
+  windowId,
   children,
 }: {
-  gameId: string;
+  windowId: string;
   children: ReactNode;
 }) {
   const base = useTelemetry();
   const { report: baseReport, recordGameUpdate } = base;
+  // Tag per WINDOW (not gameId): each window's TPS chip shows its own worker's rate, and the
+  // aggregate (getGamesTotal) still sums across every open window. Two windows of the same game keep
+  // separate counters.
   const report = useMemo<TelemetryWriter>(
     () => ({
       ...baseReport,
-      recordActions: (n) => recordGameUpdate(gameId, n),
+      recordActions: (n) => recordGameUpdate(windowId, n),
     }),
-    [baseReport, recordGameUpdate, gameId],
+    [baseReport, recordGameUpdate, windowId],
   );
   const value = useMemo(() => ({ ...base, report }), [base, report]);
   return (
@@ -64,7 +67,7 @@ export const GameContent = memo(function GameContent({
   if (!mod) return null;
   const Content = mod.Window;
   return (
-    <GameTelemetryScope gameId={gameId}>
+    <GameTelemetryScope windowId={windowId}>
       <GameCabinet>
         <Content windowId={windowId} onClose={close} />
       </GameCabinet>

@@ -14,9 +14,10 @@
  *  - forwards `visibilitychange`/`pagehide` to `engineClient.setVisibility` so a hidden tab
  *    pauses the worker's snapshot flush.
  */
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { engineClient } from "../engineClient";
 import { useConfigureEngine } from "./EngineProvider";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import type { GameId, MatchSnapshot } from "../engineApi";
 
 export function useGameMatch(windowId: string, gameId: GameId): MatchSnapshot {
@@ -31,7 +32,10 @@ export function useGameMatch(windowId: string, gameId: GameId): MatchSnapshot {
   // Pause the worker's snapshot flush while the tab is hidden; resume when it returns.
   useEffect(() => {
     const forward = () => {
-      engineClient.setVisibility(windowId, document.visibilityState === "visible");
+      engineClient.setVisibility(
+        windowId,
+        document.visibilityState === "visible",
+      );
     };
     document.addEventListener("visibilitychange", forward);
     window.addEventListener("pagehide", forward);
@@ -41,8 +45,22 @@ export function useGameMatch(windowId: string, gameId: GameId): MatchSnapshot {
     };
   }, [windowId]);
 
-  return useSyncExternalStore(
+  const snap = useSyncExternalStore(
     (cb) => engineClient.subscribe(windowId, "pvp", cb),
     () => engineClient.getSnapshot(windowId, "pvp"),
   );
+
+  // Per-window local TPS: feed the delta of the match's co-signed updates (tunnel nonce) into the
+  // SCOPED `recordActions` (tagged with this window's id), so a PvP window's TPS chip shows its own
+  // rate. A drop in `moves` (a new match / reconnect re-based the nonce) just re-bases.
+  const { report } = useTelemetry();
+  const prevMoves = useRef(0);
+  useEffect(() => {
+    const moves = snap.moves ?? 0;
+    const delta = moves - prevMoves.current;
+    prevMoves.current = moves;
+    if (delta > 0) report.recordActions(delta);
+  }, [snap.moves, report]);
+
+  return snap;
 }

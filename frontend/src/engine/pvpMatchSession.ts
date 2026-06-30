@@ -12,11 +12,7 @@
  * absent in workers, and keeping records worker-side confines the ephemeral key + game secret to
  * this thread (design §5/§6); they never transit the main heap or the bridge.
  */
-import {
-  type MpClient,
-  type PvpChannel,
-  type Role,
-} from "@/pvp/mpClient";
+import { type MpClient, type PvpChannel, type Role } from "@/pvp/mpClient";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
@@ -174,7 +170,9 @@ export class PvpMatchSession {
     this.dirty = false;
     const dt = this.dt;
     const view =
-      dt && this.controller ? this.controller.deriveView(dt.displayState) : null;
+      dt && this.controller
+        ? this.controller.deriveView(dt.displayState)
+        : null;
     const snap: MatchSnapshot = {
       status: this.status,
       role: this.role,
@@ -187,6 +185,8 @@ export class PvpMatchSession {
       // The socket lifecycle is shared across all PvP windows (hub-tracked), so read it lazily.
       connStatus: this.deps.connStatus(),
       error: this.error,
+      // Cumulative co-signed updates (the tunnel nonce) so main can feed this window's local TPS.
+      moves: dt ? Number(dt.nonce) : 0,
     };
     // Comlink proxy: fire-and-forget (returns a Promise we ignore); coalesced upstream so the
     // per-call RPC cost is negligible (design §7).
@@ -274,7 +274,10 @@ export class PvpMatchSession {
       const ephemeral: KeyPair = generateKeyPair();
       const wallet = config.wallet;
       const mp = this.deps.mp; // shared, already connected by the hub
-      const match = await mp.quickMatch(gameId);
+      // Composite matchmaking key when the spec derives one from setup (ttt/caro board size, §13);
+      // else the bare gameId — so the in-scope games queue exactly as before.
+      const matchKey = spec.matchmakingKey?.(setup) ?? gameId;
+      const match = await mp.quickMatch(matchKey);
       if (this.gen !== myGen) return; // reset during matchmaking
       this.matchId = match.matchId;
       this.role = match.role;
@@ -294,7 +297,10 @@ export class PvpMatchSession {
       controller.initSetup(setup);
 
       // 1) exchange ephemeral pubkeys (the wallet is only a matchmaking label).
-      channel.sendPeer({ t: "hello", ephemeralPubkey: toHex(ephemeral.publicKey) });
+      channel.sendPeer({
+        t: "hello",
+        ephemeralPubkey: toHex(ephemeral.publicKey),
+      });
       const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
       const oppPub = fromHex(hello.ephemeralPubkey);
 
@@ -335,7 +341,11 @@ export class PvpMatchSession {
         const open = await waitPeer<{ tunnelId: string }>("open");
         if (this.gen !== myGen) return;
         tunnelId = open.tunnelId;
-        await bridge.depositStake({ tunnelId, amount: spec.stake, label: gameId });
+        await bridge.depositStake({
+          tunnelId,
+          amount: spec.stake,
+          label: gameId,
+        });
         if (this.gen !== myGen) return;
       }
       tFund();
@@ -350,7 +360,7 @@ export class PvpMatchSession {
         false,
       );
       const dt: AnyTunnel = new DistributedTunnel(
-        spec.makeProtocol(),
+        spec.makeProtocol(setup),
         {
           tunnelId,
           self,
@@ -477,7 +487,10 @@ export class PvpMatchSession {
       // Drive the controller BEFORE emitting: hidden-info games update view-local state
       // (e.g. battleship's lastEnemyShot) in onConfirmed, which the snapshot must reflect.
       transcript.append(u);
-      elog("move", "confirmed", { game: info.game, nonce: dt.nonce.toString() });
+      elog("move", "confirmed", {
+        game: info.game,
+        nonce: dt.nonce.toString(),
+      });
       controller.onConfirmed();
       this.emit();
       if (proto.isTerminal(dt.state) && !settling) {
@@ -547,11 +560,17 @@ export class PvpMatchSession {
       transcriptRoot: toHex(root),
       sig: toHex(half.sigSelf),
     });
-    const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+    const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
+      "settleHalf",
+    );
     if (other.transcriptRoot !== toHex(root)) {
       throw new Error("settlement transcript-root mismatch between parties");
     }
-    const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+    const co = dt.combineSettlementWithRoot(
+      half.settlement,
+      half.sigSelf,
+      fromHex(other.sig),
+    );
     if (this.role !== "A") return; // single submitter, mirrors the cooperative-close pattern
     try {
       await getControlPlaneClient().settle(

@@ -75,7 +75,7 @@ export function MobileFloor({
               <li key={item.id} className="h-[78vh] min-h-[480px]">
                 <GameWindow
                   title={mod.name}
-                  icon={<GameTpsBadge gameId={gameOf(item.id)} />}
+                  icon={<GameTpsBadge windowId={item.id} />}
                   domId={item.id}
                   onClose={() => onClose(item.id)}
                 >

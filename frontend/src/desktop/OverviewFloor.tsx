@@ -72,7 +72,7 @@ export function OverviewFloor({
                     <div key={id} className={TILE_H}>
                       <GameWindow
                         title={mod.name}
-                        icon={<GameTpsBadge gameId={gameOf(id)} />}
+                        icon={<GameTpsBadge windowId={id} />}
                         domId={id}
                         onClose={() => group.onClose(id)}
                       >
