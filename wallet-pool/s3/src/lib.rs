@@ -109,12 +109,53 @@ impl WalletPoolStore for S3WalletPoolStore {
         Ok(())
     }
 
-    // `list` and `delete` are implemented in Task 3.
     async fn list(&self) -> Result<Vec<String>> {
-        Err(Error::Store("s3 list not yet implemented".into()))
+        let mut ids = Vec::new();
+        let mut continuation: Option<String> = None;
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(&self.prefix);
+            if let Some(token) = continuation.take() {
+                req = req.continuation_token(token);
+            }
+            let out = req
+                .send()
+                .await
+                .map_err(|e| Error::Store(format!("s3 list failed: {e}")))?;
+
+            for object in out.contents() {
+                if let Some(key) = object.key() {
+                    if let Some(id) = key
+                        .strip_prefix(&self.prefix)
+                        .and_then(|s| s.strip_suffix(".json"))
+                    {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+            continuation = out.next_continuation_token().map(str::to_owned);
+            if continuation.is_none() {
+                break;
+            }
+        }
+        ids.sort();
+        Ok(ids)
     }
 
-    async fn delete(&self, _id: &str) -> Result<()> {
-        Err(Error::Store("s3 delete not yet implemented".into()))
+    async fn delete(&self, id: &str) -> Result<()> {
+        let key = self.key(id)?;
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| Error::Store(format!("s3 delete failed: {e}")))?;
+        // S3 DeleteObject on a missing key already returns success, so the
+        // idempotent "succeed if it did not exist" contract holds for free.
+        Ok(())
     }
 }

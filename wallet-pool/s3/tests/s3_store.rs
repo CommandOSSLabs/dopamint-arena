@@ -77,3 +77,41 @@ async fn write_then_read_round_trip() {
     // Object intentionally left under the isolated test-<nanos>/ prefix;
     // trivial dev-bucket data that does not affect other tests.
 }
+
+#[tokio::test]
+async fn list_returns_sorted_ids() {
+    let store = match gated_store().await {
+        Some(s) => s,
+        None => return,
+    };
+    store.write("wp_b", b"2").await.unwrap();
+    store.write("wp_a", b"1").await.unwrap();
+
+    let ids = store.list().await.unwrap();
+    // Isolated prefix => only this test's objects are listed.
+    assert_eq!(ids, vec!["wp_a".to_string(), "wp_b".to_string()]);
+
+    store.delete("wp_a").await.unwrap();
+    store.delete("wp_b").await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_missing_is_ok() {
+    let store = match gated_store().await {
+        Some(s) => s,
+        None => return,
+    };
+    // Deleting a key that was never written must succeed (idempotent).
+    store.delete("wp_never_existed").await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_removes_object() {
+    let store = match gated_store().await {
+        Some(s) => s,
+        None => return,
+    };
+    store.write("wp_gone", b"x").await.unwrap();
+    store.delete("wp_gone").await.unwrap();
+    assert!(store.read("wp_gone").await.unwrap().is_none());
+}
