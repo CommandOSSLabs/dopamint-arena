@@ -13,6 +13,7 @@ import {
   buildOpenAndFundSeatA as sdkOpenAndFundSeatA,
   buildOpenAndFundMany as sdkOpenAndFundMany,
   buildOpenAndFundOneReturnless as sdkOpenAndFundOneReturnless,
+  buildDepositMany as sdkDepositMany,
 } from "sui-tunnel-ts/onchain/createAndFund";
 import {
   buildDeposit as sdkDeposit,
@@ -45,6 +46,11 @@ const buildDepositFromGas = sdkDepositFromGas as unknown as (
 const buildDeposit = sdkDeposit as unknown as (
   tx: Transaction,
   p: Parameters<typeof sdkDeposit>[1],
+) => void;
+const buildDepositMany = sdkDepositMany as unknown as (
+  tx: Transaction,
+  specs: Parameters<typeof sdkDepositMany>[1],
+  opts: Parameters<typeof sdkDepositMany>[2],
 ) => void;
 const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tx: Transaction,
@@ -474,6 +480,63 @@ export async function openAndFundMany(opts: {
     return byPartyA;
   } catch (err) {
     if (err instanceof BatchCommittedError) throw err; // already wrapped, pass through
+    throw new BatchCommittedError(digest, err);
+  }
+}
+
+/** One arena tunnel's seat-A deposit spec for {@link depositSeatAMany}: the existing (fleet-opened,
+ *  ADR-0025) tunnel, its party-A wallet (the depositing sender, for result correlation), and seat
+ *  A's stake. */
+export interface TunnelDepositSeatASpec {
+  tunnelId: string;
+  partyA: PartyOnchain;
+  amount: bigint;
+}
+
+/**
+ * Arena one-signature JOIN (ADR-0025): deposit ONLY seat A into N tunnels the fleet already created
+ * + funded seat B for, in ONE PTB — the tunnel activates on this single signature. The deposit-only
+ * analog of the (superseded) seat-A open: there is no `create` here, so nothing is correlated from
+ * object changes — each spec already carries its `tunnelId`, returned keyed by normalized party-A so
+ * the batcher resolves each request. The summed stake is one source coin (an address-balance
+ * withdrawal, one `stakeCoinId`, or the gas coin); `buildDepositMany` splits each `amount` off it.
+ * `stakeFromBalance.amount` MUST equal the sum of every spec's `amount`.
+ */
+export async function depositSeatAMany(opts: {
+  reads: SuiReads;
+  signExec: SignExec;
+  specs: TunnelDepositSeatASpec[];
+  coinType?: string;
+  stakeFromBalance?: StakeFromBalance;
+  stakeCoinId?: string;
+}): Promise<Map<string, string>> {
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      const source = stakeCoinArg(tx, opts);
+      buildDepositMany(
+        tx,
+        opts.specs.map((s) => ({ tunnelId: s.tunnelId, amount: s.amount })),
+        { coinType: opts.coinType, sourceCoin: source },
+      );
+      consumeStakeRemainder(tx, opts, source);
+      return tx;
+    },
+    opts.signExec,
+    "depositSeatAMany",
+  );
+  // POST-COMMIT: the PTB has landed; the N seat-A deposits are consumed. Any failure below must NOT
+  // retry (would double-deposit) — surface it as BatchCommittedError. The tunnel ids are known
+  // inputs, so resolution needs no object-change read.
+  try {
+    await opts.reads.waitForTransaction({ digest });
+    const byPartyA = new Map<string, string>();
+    for (const s of opts.specs) {
+      byPartyA.set(normalizeSuiAddress(s.partyA.address), s.tunnelId);
+    }
+    return byPartyA;
+  } catch (err) {
+    if (err instanceof BatchCommittedError) throw err;
     throw new BatchCommittedError(digest, err);
   }
 }

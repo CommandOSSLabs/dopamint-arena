@@ -26,6 +26,9 @@ export interface BackendArgs {
   // Secrets Manager ARN for the Enoki PRIVATE api key, injected as ENOKI_API_KEY via ECS
   // `secrets`. Omitted => Enoki sponsorship is off and the settler is the sole gas source.
   enokiApiKeySecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the wallet-pool passphrase (PR #124), injected as WALLET_POOL_ACCESS_VALUE
+  // via ECS `secrets`. Omitted => the pool can't open and the arena opener degrades to Noop.
+  walletPoolAccessSecretArn?: pulumi.Input<string>;
   // Ollama sidecar for the chat-v2 feature. Defaults off so existing tests and
   // small environments keep the current 1024/2048 task size.
   ollamaEnabled?: pulumi.Input<boolean>;
@@ -50,11 +53,13 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       pulumi.output(args.settlerKeySecretArn ?? undefined),
       pulumi.output(args.faucetAdminTokenSecretArn ?? undefined),
       pulumi.output(args.enokiApiKeySecretArn ?? undefined),
+      pulumi.output(args.walletPoolAccessSecretArn ?? undefined),
     ])
-    .apply(([settler, faucetAdminToken, enoki]) => ({
+    .apply(([settler, faucetAdminToken, enoki, walletPoolAccess]) => ({
       settler,
       faucetAdminToken,
       enoki,
+      walletPoolAccess,
     }));
   const corsAllowedOrigins = pulumi.output(
     args.corsAllowedOrigins ?? undefined,
@@ -157,6 +162,25 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
                 },
               ]
             : []),
+          // Co-located arena fleet (ADR-0027) + funded seat-B wallet pool (PR #124). UNCONDITIONAL —
+          // unrelated to the Ollama sidecar below. COUNT x served-games <= WALLET_POOL_FUNDED_COUNT
+          // (each match consumes one funded seat-B wallet). GAMES is the served-set gate. The pool also
+          // needs WALLET_POOL_ACCESS_VALUE (Secrets Manager) + s3:GetObject on the task role; absent =>
+          // the opener degrades to Noop. AWS_REGION is required for the in-container S3 SDK (ECS does
+          // not auto-inject it); credentials still come from the task role.
+          { name: "FLEET_COLOCATED_COUNT", value: "5000" },
+          {
+            name: "FLEET_COLOCATED_GAMES",
+            value:
+              "quantum_poker,bomb_it,chicken_cross,world_canvas,blackjack,tic_tac_toe,caro,battleship",
+          },
+          { name: "WALLET_POOL_ID", value: "wp_cjmok4DQgZDpAooCGNjmqg" },
+          {
+            name: "WALLET_POOL_S3_BUCKET",
+            value: "dev-env-dopamint-wallet-pool",
+          },
+          { name: "WALLET_POOL_FUNDED_COUNT", value: "5000" },
+          { name: "AWS_REGION", value: aws.config.region ?? "us-east-1" },
         ];
 
         if (ollamaEnabled) {
@@ -185,6 +209,12 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           backendSecrets.push({
             name: "ENOKI_API_KEY",
             valueFrom: secretArns.enoki,
+          });
+        }
+        if (secretArns.walletPoolAccess) {
+          backendSecrets.push({
+            name: "WALLET_POOL_ACCESS_VALUE",
+            valueFrom: secretArns.walletPoolAccess,
           });
         }
 

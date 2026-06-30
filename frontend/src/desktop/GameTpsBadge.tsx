@@ -1,17 +1,28 @@
 import { useCallback } from "react";
 
+import { get as getGameModule } from "@/games/registry";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useSampledRate } from "@/telemetry/useSampledRate";
 import { fmtTps } from "@/lib/formatTps";
 import { cn } from "@/lib/utils";
 
 /**
- * The backend keys `perGame` by the `game` string a session registers under, which is not
- * always the frontend registry id. ttt registers as "tictactoe" (the canonical cross-system
- * id — see backend mp/ws.rs, agent kits, loadbench), so translate its registry id here or the
- * chip never matches its authoritative rate. Every other game's two ids already agree.
+ * The backend keys `perGame` by the `game` string the match registers under, which is NOT always
+ * the FE registry id. Two sources of drift, resolved in `backendGameKey`:
+ *   1. Arena one-sig games count under their underscore `arenaGameId` (e.g. `quantum_poker`) —
+ *      that is the key `routes.rs` seeds into the MatchRecord the relay counts against.
+ *   2. Legacy matchmaking games have no `arenaGameId`; tic-tac-toe counts under `tictactoe`.
+ * Without bridging both, the chip looks up the hyphen registry id, misses, and shows nothing.
  */
 const BACKEND_GAME_KEY: Record<string, string> = { "tic-tac-toe": "tictactoe" };
+
+function backendGameKey(gameId: string): string {
+  // arenaGameId may be an array when one module hosts multiple protocols (tic-tac-toe + caro); the
+  // chip can't tell which variant the window shows, so it keys off the first (the module's primary).
+  const arena = getGameModule(gameId)?.arenaGameId;
+  const arenaId = Array.isArray(arena) ? arena[0] : arena;
+  return arenaId ?? BACKEND_GAME_KEY[gameId] ?? gameId;
+}
 
 /**
  * Per-game throughput chip for the window header. The number is REAL, never mocked:
@@ -33,8 +44,7 @@ export function GameTpsBadge({
   className?: string;
 }) {
   const { backend, getGameTotal } = useTelemetry();
-  const backendTps =
-    backend?.perGame?.[BACKEND_GAME_KEY[gameId] ?? gameId]?.tps;
+  const backendTps = backend?.perGame?.[backendGameKey(gameId)]?.tps;
   // Local fallback: instantaneous state-updates/sec from this game's counter (authoritative
   // backend rate wins when present).
   const localTps = useSampledRate(

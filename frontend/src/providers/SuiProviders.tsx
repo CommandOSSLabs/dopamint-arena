@@ -9,6 +9,7 @@ import { getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
 
 import { RegisterEnokiWallets } from "@/wallet/enokiWallets";
 import { MtpsAutoFaucet } from "@/onchain/useMtpsAutoFaucet";
+import { ArenaAutoEnter } from "@/onchain/arenaAutoEnter";
 
 const { networkConfig } = createNetworkConfig({
   testnet: { url: getJsonRpcFullnodeUrl("testnet"), network: "testnet" },
@@ -27,6 +28,8 @@ export function SuiProviders({ children }: { children: ReactNode }) {
         <WalletProvider autoConnect>
           {/* App-wide background MTPS top-up: faucets the moment a wallet connects. */}
           <MtpsAutoFaucet />
+          {/* Centralized batched arena entry: one PTB funds every arena game's seat A on connect. */}
+          <ArenaAutoEnter />
           {children}
         </WalletProvider>
       </SuiClientProvider>

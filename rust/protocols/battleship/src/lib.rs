@@ -86,6 +86,7 @@ pub struct BattleshipState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BattleshipMove {
     Commit {
+        #[serde(with = "tunnel_harness::wire_hex::array32")]
         root: [u8; 32],
     },
     Shoot {
@@ -93,8 +94,11 @@ pub enum BattleshipMove {
     },
     Reveal {
         cell: u8,
+        #[serde(rename = "isShip")]
         is_ship: bool,
+        #[serde(with = "tunnel_harness::wire_hex::array32")]
         salt: [u8; 32],
+        #[serde(with = "tunnel_harness::wire_hex::vec_array32")]
         proof: Vec<[u8; 32]>,
     },
     /// Terminal proof: the party that sank the opponent reveals its OWN full board
@@ -1083,5 +1087,51 @@ mod tests {
         assert!(protocol
             .apply_move(&state, &BattleshipMove::Shoot { cell: 50 }, Seat::A)
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod move_wire_parity {
+    use super::*;
+
+    // The relayed move is JSON; the FE `battleshipMoveCodec` (battleship.v1) sends `type`-tagged moves
+    // with bare-hex for [u8;32] (root/salt), an array of bare-hex for `proof`, `isShip` (camelCase),
+    // and `cell` a number. The bot's `BattleshipMove` serde MUST match or commit/reveal can't decode.
+    #[test]
+    fn move_json_matches_fe_battleship_move_codec() {
+        assert_eq!(
+            serde_json::to_value(BattleshipMove::Commit { root: [0xab; 32] }).unwrap(),
+            serde_json::json!({ "type": "commit", "root": "ab".repeat(32) }),
+        );
+        assert_eq!(
+            serde_json::to_value(BattleshipMove::Reveal {
+                cell: 7,
+                is_ship: true,
+                salt: [0xcd; 32],
+                proof: vec![[0x11; 32], [0x22; 32]],
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "reveal",
+                "cell": 7,
+                "isShip": true,
+                "salt": "cd".repeat(32),
+                "proof": ["11".repeat(32), "22".repeat(32)],
+            }),
+        );
+        // And decodes the FE's exact bytes back.
+        let parsed: BattleshipMove = serde_json::from_value(serde_json::json!({
+            "type": "reveal", "cell": 0, "isShip": false,
+            "salt": "00".repeat(32), "proof": ["ff".repeat(32)],
+        }))
+        .unwrap();
+        assert!(matches!(
+            parsed,
+            BattleshipMove::Reveal {
+                cell: 0,
+                is_ship: false,
+                ..
+            }
+        ));
     }
 }

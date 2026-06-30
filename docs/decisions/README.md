@@ -77,10 +77,6 @@ _why_ survives after the people involved have moved on.
   chicken-cross, mirroring battleship's many-games-per-tunnel shape.
 - [0019](0019-batched-tunnel-open.md) — Batch connect-time self-play tunnel opens
   into one PTB instead of one sponsored open+fund per window.
-- [0020](0020-bot-fleet-topology-shared-core.md) — Two bot fleets over one
-  sans-IO core: a user-serving fleet (async/tokio, real PvP counterparty) and a
-  local self-competing bench fleet (sync/rayon), differing only in seam
-  implementations and runtime. Supersedes ADR-0001's self-play hot path.
 - [0021](0021-sans-io-synchronous-protocol-core.md) — Adopt sans-IO: the protocol
   core is synchronous and pure (no futures in the transition); async is confined
   to the IO seams (FrameTransport, MoveStrategy, future remote-KMS Signer).
@@ -93,6 +89,24 @@ _why_ survives after the people involved have moved on.
   `admin_mint` via an owned `AdminCap` (no public mint → no brick/griefing), a
   0-decimal whole-token currency via `coin_registry`; the faucet moves to the
   backend admin endpoint. Builds on 0010.
+- [0026](0026-arena-enter-one-sig-genuine-two-party.md) — Arena enter: one
+  sponsored PTB opens + funds-own-seat every game vs warm fleet bots; direct
+  allocation (not FIFO), user=A/bot=B, bot drives settle, genuine auto-play.
+  _(Open mechanics — who creates the tunnel — superseded by 0028.)_
+- [0028](0028-arena-bot-preopens-user-deposit-only.md) — Arena open: the bot
+  pre-creates + funds seat B at allocate; the user joins with a deposit-only PTB
+  (Active on one signature). Supersedes the open mechanics of 0026; makes
+  `allocate` on-chain-bound, so it **must** be authenticated + rate-limited.
+
+### Backend-local decisions
+
+Decisions internal to the backend (not crossing into the frontend, on-chain Move,
+or the protocol/SDK contract) live in
+[`backend/docs/decisions/`](../../backend/docs/decisions/), sharing this ADR
+numbering (no gaps reused). Currently:
+
+- 0020 — Two bot fleets over one sans-IO core (user-serving + local bench).
+- 0027 — Serving-fleet topology: WS-client for the demo → co-located at scale.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was

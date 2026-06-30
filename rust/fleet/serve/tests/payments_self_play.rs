@@ -4,8 +4,8 @@
 use std::sync::Arc;
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
-    Balances, InMemoryFrameTransport, LocalSigner, PartyDriver, PartyRuntime, RandomMoveStrategy,
-    Seat, TunnelContext,
+    Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, NullTranscriptRecorder,
+    PartyDriver, RandomMoveStrategy, Seat, SeatParts,
 };
 use tunnel_payments::Payments;
 
@@ -17,30 +17,32 @@ async fn payments_self_play_conserves_total() {
     let pk_b = keypair_from_secret(&sb).public_key();
     let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
-    let ctx = |seat| TunnelContext {
-        tunnel_id: "0xcd".into(),
-        initial: Balances { a: 100, b: 100 },
-        seat,
-    };
+    let anchor = InMemoryAnchor::with_fixed_id("0xcd");
     let driver_a = PartyDriver::new(
-        PartyRuntime::new(
-            Payments { max_transfers: 20 },
-            LocalSigner::from_secret(&sa),
-            pk_b,
-            ctx(Seat::A),
-        ),
+        SeatParts {
+            protocol: Payments { max_transfers: 20 },
+            signer: LocalSigner::from_secret(&sa),
+            opponent_pk: pk_b,
+            initial: Balances { a: 100, b: 100 },
+            seat: Seat::A,
+        },
         RandomMoveStrategy::new(Arc::new(Payments { max_transfers: 20 }), 1),
         ch_a,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
     let driver_b = PartyDriver::new(
-        PartyRuntime::new(
-            Payments { max_transfers: 20 },
-            LocalSigner::from_secret(&sb),
-            pk_a,
-            ctx(Seat::B),
-        ),
+        SeatParts {
+            protocol: Payments { max_transfers: 20 },
+            signer: LocalSigner::from_secret(&sb),
+            opponent_pk: pk_a,
+            initial: Balances { a: 100, b: 100 },
+            seat: Seat::B,
+        },
         RandomMoveStrategy::new(Arc::new(Payments { max_transfers: 20 }), 2),
         ch_b,
+        anchor.clone(),
+        NullTranscriptRecorder,
     );
 
     let mut ca = 0u64;
@@ -55,8 +57,8 @@ async fn payments_self_play_conserves_total() {
             cb
         }),
     );
-    let a = ra.unwrap();
-    let b = rb.unwrap();
+    let a = ra.unwrap().0;
+    let b = rb.unwrap().0;
     assert_eq!(a.final_balances.sum(), 200);
     assert_eq!(a.final_balances, b.final_balances);
     assert!(a.moves >= 20);

@@ -56,6 +56,10 @@ import {
 } from "sui-tunnel-ts/protocol/blackjack";
 import { blackjackMoveCodec } from "sui-tunnel-ts/protocol/blackjackCodec";
 
+/** Backend arena/`profile_for` id (= the FE registry id; single token, same both ways). Single source
+ *  of truth for the arena-store consumer (below) and `GameModule.arenaGameId` (index.ts). */
+export const BLACKJACK_ARENA_GAME_ID = "blackjack";
+
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
 // origin. Never hardcode localhost — a deployed https site would try ws://127.0.0.1 and fail.

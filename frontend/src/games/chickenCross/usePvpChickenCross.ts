@@ -15,6 +15,10 @@ import { makeCrossResumeAdapter } from "./crossResumeAdapter";
 
 export type { PvpStatus };
 
+/** Backend arena/`profile_for` id (underscore form of the registry id). Single source of truth for
+ *  both the engine's arena consumer (the spec below) and `GameModule.arenaGameId` (index.ts). */
+export const CHICKEN_CROSS_ARENA_GAME_ID = "chicken_cross";
+
 /** Chicken Cross's per-seat input is a hop direction; the engine wraps it into the acting seat's field. */
 const usePvpMatch = createPvpMatchHook<
   CrossState,
@@ -23,6 +27,7 @@ const usePvpMatch = createPvpMatchHook<
   CrossView
 >({
   game: "chicken-cross",
+  arenaGameId: CHICKEN_CROSS_ARENA_GAME_ID,
   stepMs: 300,
   stake: 500n, // per-seat MIST
   makeProtocol: () => new CrossProtocol(),
