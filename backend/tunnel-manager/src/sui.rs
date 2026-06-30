@@ -380,6 +380,41 @@ impl SuiSettler {
         Ok((tx_b64, sig.to_base64()))
     }
 
+    /// Sponsor gas for a backend-built arena seat-B open (ADR-0028): the BOT is the tx sender (its
+    /// SIP-58 MTPS balance funds seat B), the settler owns the SIP-58 gas — so the bot needs zero SUI.
+    /// Unlike `sponsor_open_fund` (untrusted client kind → returns bytes for the client to co-sign),
+    /// this is the trusted in-process fleet path: it returns the wrapped `Transaction` + the settler's
+    /// gas signature so the caller co-signs as the bot and executes. Reuses `build_sponsored_tx` — the
+    /// same open/fund allowlist, per-command budget, and `sponsor_nonce`, so every settler-gas
+    /// withdrawal (opens, faucet, `/settle`, user sponsors) draws from one monotonic nonce source.
+    /// Dry-runs before signing: a drained settler gas balance or an unfundable open never gets signed.
+    pub async fn sponsor_arena_open(
+        &self,
+        bot_sender: Address,
+        kind_bytes: &[u8],
+    ) -> anyhow::Result<(Transaction, UserSignature)> {
+        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
+        let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
+        let tx = build_sponsored_tx(
+            self.package_id,
+            &self.coin_type,
+            &self.example_packages,
+            bot_sender,
+            self.sender,
+            kind_bytes,
+            gas_price,
+            epoch,
+            chain,
+            self.sponsor_nonce.fetch_add(1, Ordering::Relaxed),
+        )?;
+        self.dry_run(&tx).await?;
+        let sig = self
+            .signer
+            .sign_transaction(&tx)
+            .map_err(|e| anyhow!("sign arena open gas: {e}"))?;
+        Ok((tx, sig))
+    }
+
     /// True iff the MTPS `AdminCap` id is configured. The faucet routes 503 when this is false, so
     /// they never claim a cooldown nor sign a mint they cannot complete.
     pub fn mint_configured(&self) -> bool {
@@ -1617,6 +1652,58 @@ mod tests {
         );
         // One command => one unit of the per-command budget.
         assert_eq!(tx.gas_payment.budget, SPONSOR_GAS_BUDGET_PER_COMMAND);
+    }
+
+    // The REAL arena seat-B open kind (create + redeem_funds + deposit_party_b + share) is a valid
+    // sponsorable open/fund: the settler can own its gas so the bot holds zero SUI (ADR-0028). This is
+    // the cross-module contract the zero-SUI fleet depends on — if the open kind drifts off the
+    // sponsor allowlist (a renamed fn, or a stake withdrawal that isn't `WithdrawFrom::Sender`), the
+    // wrap errs here, before anything reaches the chain. Built here, next to the validator it exercises.
+    #[test]
+    fn arena_open_kind_is_sponsorable_with_bot_sender_settler_gas() {
+        use crate::fleet::arena_opener::build_arena_open_kind;
+        let pkg = Address::from_str("0xabc").unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
+        let bot = Address::from_str("0xb0b").unwrap();
+        let settler = Address::from_str("0x5e7").unwrap();
+        let kind = build_arena_open_kind(
+            pkg,
+            coin.clone(),
+            Address::from_str("0x11").unwrap(),
+            vec![0xaa; 32],
+            bot,
+            vec![0xbb; 32],
+            1000,
+        )
+        .unwrap();
+        let kind_bytes = bcs::to_bytes(&kind).unwrap();
+        let tx = build_sponsored_tx(
+            pkg,
+            &coin,
+            &[],
+            bot,
+            settler,
+            &kind_bytes,
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
+        )
+        .expect("arena open kind passes the sponsor allowlist (sender-sourced stake, allowlisted calls)");
+        assert_eq!(tx.sender, bot, "bot is the sender — its MTPS funds seat B");
+        assert_eq!(
+            tx.gas_payment.owner, settler,
+            "settler owns + pays the SIP-58 gas (bot needs no SUI)"
+        );
+        assert!(
+            tx.gas_payment.objects.is_empty(),
+            "SIP-58 address-balance gas (empty objects)"
+        );
+        assert_eq!(
+            tx.gas_payment.budget,
+            4 * SPONSOR_GAS_BUDGET_PER_COMMAND,
+            "4-command open scales the gas budget"
+        );
     }
 
     // A batched open packs many commands into one PTB; the gas budget must scale with the command

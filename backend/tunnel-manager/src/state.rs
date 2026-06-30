@@ -9,7 +9,9 @@ pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
-    pub settler: crate::sui::SuiSettler,
+    /// Shared with the arena opener, which has the settler sponsor each bot open's gas (ADR-0028):
+    /// one settler instance (and one `sponsor_nonce`) backs opens, faucet, `/settle`, and sponsors.
+    pub settler: std::sync::Arc<crate::sui::SuiSettler>,
     /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
     /// `settler` as the fallback. `None` = settler-only.
     pub enoki: Option<crate::enoki::EnokiClient>,
@@ -85,7 +87,7 @@ impl AppState {
             control: Arc::new(InMemoryControlStore::default()),
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
-            settler: crate::sui::SuiSettler::noop(),
+            settler: Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(

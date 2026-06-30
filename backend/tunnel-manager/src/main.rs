@@ -45,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let bind_addr = config.bind_addr.clone();
 
-    let settler = sui::SuiSettler::new(
+    // Shared via Arc: the arena opener has the settler sponsor each bot open's gas (ADR-0028), so the
+    // settler instance — and its single `sponsor_nonce` — is the one gas payer behind opens, faucet,
+    // `/settle`, and user sponsors.
+    let settler = Arc::new(sui::SuiSettler::new(
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
@@ -53,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
         config.streaming_payment_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
         config.mtps_admin_cap_id.as_deref(),
-    )?;
+    )?);
     // Enoki is the primary gas sponsor when configured; the settler above is the fallback (ADR-0014).
     // The settler's close/fallback path pins a hard-coded testnet genesis digest (`sui.rs`), so guard
     // against a mainnet-Enoki / testnet-settler split-brain until that digest is config-driven.
@@ -163,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
                 pkg,
                 &config.coin_type,
                 pool.clone(),
+                settler.clone(),
             )
             .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
         ),

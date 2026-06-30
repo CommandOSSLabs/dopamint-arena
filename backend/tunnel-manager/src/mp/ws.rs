@@ -1273,7 +1273,7 @@ mod tests {
             control: Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: mp.clone(),
             bus: bus.clone(),
-            settler: crate::sui::SuiSettler::noop(),
+            settler: std::sync::Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(
@@ -1438,7 +1438,7 @@ mod tests {
             control: Arc::new(InMemoryControlStore::default()),
             mp,
             bus,
-            settler: crate::sui::SuiSettler::noop(),
+            settler: std::sync::Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(
