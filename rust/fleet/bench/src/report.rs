@@ -1,13 +1,11 @@
 //! Console report, format-parity with the loadbench swarm output. Pure string
 //! building — the binary prints the result.
 
-use crate::cli::{BenchOpts, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, BenchOpts, TranscriptRecorderMode};
 use crate::humanize;
 use crate::resources::ResourceSummary;
 use crate::swarm::SwarmOutcome;
 use tunnel_telemetry::{Distribution, StageId};
-
-const RUN_LABEL: &str = "local/memory";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderStyle {
@@ -60,6 +58,13 @@ pub fn frame_codec_id(codec: crate::cli::FrameCodecKind) -> &'static str {
         FrameCodecKind::Json => "json.distributed.v1",
         FrameCodecKind::Bcs => "bcs.v1",
         FrameCodecKind::Postcard => "postcard.v1",
+    }
+}
+
+fn run_label(anchor_mode: AnchorMode) -> &'static str {
+    match anchor_mode {
+        AnchorMode::Memory => "local/memory",
+        AnchorMode::SuiSponsored => "local/sui-sponsored",
     }
 }
 
@@ -250,7 +255,10 @@ pub fn render_with_style(
     let secs = simple.elapsed_ms as f64 / 1000.0;
     let mut out = format!(
         "{}\n{}\n\n{}\n  - moves              {}\n  - tunnels            {}\n  - wall move-TPS      {:.1}\n  - play-only move-TPS {:.1}\n\n{}\n  - opened={}  closed={}  failed={}  aborted={}  open-rate={:.1}/s  close-rate={:.1}/s\n  - moves/tunnel p50={:.1} p90={:.1} avg={:.1} peak={:.1}\n",
-        style.title(format!("{RUN_LABEL} fleet-bench {protocol_id}")),
+        style.title(format!(
+            "{} fleet-bench {protocol_id}",
+            run_label(opts.anchor_mode)
+        )),
         style.secondary(format!(
             "  codec={}  concurrency={}  workers={}  elapsed={:.1}s",
             frame_codec_id(opts.frame_codec),
@@ -299,7 +307,10 @@ pub fn render_with_style(
     ));
 
     // Anchor open/settle are per-tunnel headline latencies — always shown.
-    for (label, stage) in [("anchor open", StageId::Open), ("anchor settle", StageId::Settle)] {
+    for (label, stage) in [
+        ("anchor open", StageId::Open),
+        ("anchor settle", StageId::Settle),
+    ] {
         if let Some(line) = stage_latency_line(label, simple.telemetry.stage(stage)) {
             out.push_str(&line);
             out.push('\n');
@@ -396,6 +407,13 @@ mod tests {
         }
     }
 
+    fn opts_with_anchor(anchor_mode: AnchorMode) -> BenchOpts {
+        BenchOpts {
+            anchor_mode,
+            ..opts(4, SignerInitMode::PerTunnel)
+        }
+    }
+
     fn outcome(moves: u64, tunnels: u64, ms: u128) -> SwarmOutcome {
         SwarmOutcome {
             moves,
@@ -466,6 +484,18 @@ mod tests {
     }
 
     #[test]
+    fn render_title_identifies_sui_sponsored_anchor() {
+        let s = render(
+            &opts_with_anchor(AnchorMode::SuiSponsored),
+            "blackjack.v2",
+            &outcome(2000, 20, 3000),
+            &res(),
+        );
+
+        assert!(s.contains("local/sui-sponsored fleet-bench blackjack.v2"));
+    }
+
+    #[test]
     fn render_golden_new_metrics() {
         use crate::stats::summarize;
         let o = SwarmOutcome {
@@ -496,7 +526,9 @@ mod tests {
             &res(),
         );
         assert!(
-            s.contains("  - opened=3  closed=3  failed=0  aborted=0  open-rate=3.0/s  close-rate=3.0/s"),
+            s.contains(
+                "  - opened=3  closed=3  failed=0  aborted=0  open-rate=3.0/s  close-rate=3.0/s"
+            ),
             "got:\n{s}"
         );
         assert!(s.contains("  - tunnels            3"), "got:\n{s}");

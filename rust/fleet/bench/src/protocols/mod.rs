@@ -1,7 +1,7 @@
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::play_protocol_tunnel_with_strategies;
-use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::SeatKit;
+use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::{SuiSponsoredBenchContext, TunnelOutcome};
 use tunnel_core::protocol_id::{
     API_CREDITS_V1, BATTLESHIP_SERIES_V1, BATTLESHIP_V1, BLACKJACK_BET_V1, BLACKJACK_DUEL_V1,

@@ -1,7 +1,7 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
-use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::SuiSponsoredBenchContext;
+use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::{SeatKit, TunnelOutcome};
 use tunnel_tic_tac_toe::{
     TicTacToe, TicTacToeDifficulty, TicTacToeSeries, TicTacToeSeriesStrategy, TicTacToeStrategy,

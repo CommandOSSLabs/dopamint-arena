@@ -5,7 +5,7 @@
 //! guard that can end a run before all spawned tunnels complete.
 
 use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode};
-use crate::party_driver::{TunnelTelemetry, SeatKit, SuiSponsoredBenchContext};
+use crate::party_driver::{SeatKit, SuiSponsoredBenchContext, TunnelTelemetry};
 use crate::protocols::{play_tunnel_for, PlayTunnelRequest};
 use crate::stats::{summarize, Distribution};
 use std::time::{Duration, Instant};
@@ -149,6 +149,14 @@ async fn run_one_tunnel(
     kit: SeatKit,
 ) -> TunnelSample {
     let tunnel_id = tunnel_id_for(tunnel_index);
+    tracing::debug!(
+        tunnel_index,
+        tunnel_id,
+        protocol_id,
+        ?anchor_mode,
+        ?codec,
+        "tunnel task start"
+    );
     let r = play_tunnel_for(PlayTunnelRequest {
         protocol_id,
         codec,
@@ -160,6 +168,18 @@ async fn run_one_tunnel(
         telemetry,
     })
     .await;
+    tracing::debug!(
+        tunnel_index,
+        tunnel_id,
+        protocol_id,
+        moves = r.moves,
+        bytes = r.bytes,
+        open_ok = r.open_ok,
+        settle_ok = r.settle_ok,
+        e2e_ms = r.e2e_ns as f64 / 1_000_000.0,
+        play_ms = r.play_ns as f64 / 1_000_000.0,
+        "tunnel task done"
+    );
 
     TunnelSample {
         moves: r.moves,
@@ -234,7 +254,9 @@ async fn collect_spawned_tunnels(
 fn gas_delta(before: AnchorCostSnapshot, after: AnchorCostSnapshot) -> AnchorCostSnapshot {
     AnchorCostSnapshot {
         gas_funder_mist: after.gas_funder_mist.saturating_sub(before.gas_funder_mist),
-        gas_sponsor_mist: after.gas_sponsor_mist.saturating_sub(before.gas_sponsor_mist),
+        gas_sponsor_mist: after
+            .gas_sponsor_mist
+            .saturating_sub(before.gas_sponsor_mist),
     }
 }
 
@@ -267,6 +289,10 @@ where
         concurrency = tunnel_concurrency.len(),
         workers,
         protocol_id,
+        duration_secs,
+        ?anchor_mode,
+        ?codec,
+        ?scenario,
         "fleet run start"
     );
     let gas_before = gas_context
@@ -289,6 +315,16 @@ where
         }
         collect_spawned_tunnels(tasks, duration_secs).await
     });
+    if aborted > 0 {
+        tracing::warn!(
+            completed = samples.len(),
+            aborted,
+            duration_secs,
+            protocol_id,
+            ?anchor_mode,
+            "fleet duration guard aborted in-flight tunnels"
+        );
+    }
     let gas_after = gas_context
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
@@ -298,7 +334,10 @@ where
     tracing::info!(
         moves = outcome.moves,
         secs = outcome.elapsed_ms as f64 / 1000.0,
+        tunnels_opened = outcome.tunnels_opened,
         tunnels_settled = outcome.tunnels_settled,
+        tunnels_failed = outcome.tunnels_failed,
+        tunnels_aborted = outcome.tunnels_aborted,
         "fleet run done"
     );
     outcome
@@ -471,6 +510,10 @@ pub fn run_steady_state(
         workers,
         protocol_id,
         duration_secs,
+        ?anchor_mode,
+        ?codec,
+        ?scenario,
+        preinitialize,
         "fleet steady-state start"
     );
     let gas_before = gas_context
@@ -536,6 +579,16 @@ pub fn run_steady_state(
         tasks.abort_all();
         (samples, aborted)
     });
+    if aborted > 0 {
+        tracing::warn!(
+            completed = samples.len(),
+            aborted,
+            duration_secs,
+            protocol_id,
+            ?anchor_mode,
+            "fleet steady-state duration ended with in-flight tunnels"
+        );
+    }
     let gas_after = gas_context
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
@@ -546,7 +599,10 @@ pub fn run_steady_state(
         moves = outcome.moves,
         secs = outcome.elapsed_ms as f64 / 1000.0,
         tunnels = outcome.tunnels_claimed,
+        tunnels_opened = outcome.tunnels_opened,
         tunnels_settled = outcome.tunnels_settled,
+        tunnels_failed = outcome.tunnels_failed,
+        tunnels_aborted = outcome.tunnels_aborted,
         "fleet steady-state done"
     );
     outcome

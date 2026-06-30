@@ -192,6 +192,8 @@ where
                 "opened tunnel nonce cannot be closed".into(),
             ))
         })?;
+        let min_timestamp = opened.created_at_ms.unwrap_or(0);
+        let mut next_timestamp = || now().max(min_timestamp);
 
         let our_seat = parts.seat;
         let mut seat = PartyRuntime::<P, S, C>::with_codec(
@@ -235,7 +237,7 @@ where
             }
 
             if let Some(mv) = move_strategy.plan_move(seat.state(), our_seat, &ctx).await {
-                let frame = seat.propose(mv, now())?;
+                let frame = seat.propose(mv, next_timestamp())?;
                 frame_transport.send(frame).await?;
                 match frame_transport.recv().await? {
                     Some(bytes) => {
@@ -249,7 +251,7 @@ where
                             by: our_seat,
                             nonce: seat.nonce(),
                             move_index: moves,
-                            timestamp_ms: now(),
+                            timestamp_ms: next_timestamp(),
                         };
                         for o in observers.iter_mut() {
                             o.on_move_committed(&ev);
@@ -275,7 +277,7 @@ where
                         by: our_seat.other(),
                         nonce: seat.nonce(),
                         move_index: moves,
-                        timestamp_ms: now(),
+                        timestamp_ms: next_timestamp(),
                     };
                     for o in observers.iter_mut() {
                         o.on_move_committed(&ev);
@@ -291,15 +293,12 @@ where
 
         let play_ns = play_started.elapsed().as_nanos();
         let final_balances = seat.balances();
-        // The v2 cooperative close signs `timestamp` into the settlement message, and the remote
-        // (browser) half signs `timestamp = tunnel.created_at` (it reads it on-chain). So when the
-        // anchor surfaces the on-chain createdAt we MUST sign that exact value, or the two co-signing
-        // halves never combine. Anchors that don't surface it (in-memory self-play) fall back to the
-        // move-loop clock — both seats run this driver there, so they agree regardless.
-        let timestamp = match opened.created_at_ms {
-            Some(created_at) => created_at,
-            None if moves == 0 => now(),
-            None => last_timestamp,
+        // Chain-backed tunnels can reject close timestamps before their on-chain
+        // creation time; local anchors have no floor and keep the move-loop clock.
+        let timestamp = if moves == 0 {
+            next_timestamp()
+        } else {
+            last_timestamp.max(min_timestamp)
         };
         let settlement = Settlement {
             tunnel_id: seat.tunnel_id().to_string(),
@@ -670,6 +669,7 @@ mod tests {
     struct CapturingAnchor {
         tunnel_id: String,
         onchain_nonce: u64,
+        created_at_ms: Option<u64>,
         settlement_mode: SettlementMode,
         settled: Arc<AtomicU64>,
         requests: Arc<Mutex<Vec<TunnelSettleRequest>>>,
@@ -685,10 +685,16 @@ mod tests {
             Self {
                 tunnel_id: tunnel_id.into(),
                 onchain_nonce,
+                created_at_ms: None,
                 settlement_mode: SettlementMode::Rootless,
                 settled,
                 requests,
             }
+        }
+
+        fn with_created_at_ms(mut self, created_at_ms: u64) -> Self {
+            self.created_at_ms = Some(created_at_ms);
+            self
         }
 
         fn with_settlement_mode(mut self, settlement_mode: SettlementMode) -> Self {
@@ -710,7 +716,7 @@ mod tests {
                 tunnel_id: self.tunnel_id.clone(),
                 created: true,
                 onchain_nonce: self.onchain_nonce,
-                created_at_ms: None,
+                created_at_ms: self.created_at_ms,
             })
         }
 
@@ -770,6 +776,52 @@ mod tests {
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|r| r.final_nonce == 42));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settlement_timestamp_respects_opened_tunnel_creation_time() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests))
+            .with_created_at_ms(10_000);
+
+        let driver_a = PartyDriver::new(
+            parts(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::A,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        );
+        let driver_b = PartyDriver::new(
+            parts(Seat::B, &secret_b, pk_a),
+            TrackingStrategy::new(
+                Seat::B,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        );
+
+        let (out_a, out_b) = tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1));
+        out_a.unwrap();
+        out_b.unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.timestamp >= 10_000));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

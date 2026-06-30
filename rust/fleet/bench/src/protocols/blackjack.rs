@@ -1,7 +1,7 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
-use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::SeatKit;
+use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::{SeededBlackjack, SuiSponsoredBenchContext, TunnelOutcome};
 use tunnel_blackjack::duel::BlackjackDuel;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
