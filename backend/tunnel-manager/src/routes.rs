@@ -1001,12 +1001,10 @@ async fn require_session_auth(
     headers: &HeaderMap,
 ) -> Result<SessionRecord, Response> {
     let Some(rec) = state.control.get_session(session_id).await else {
-        return Err(ApiError::resp(
-            StatusCode::NOT_FOUND,
-            "unknown_session",
-            "no such session",
-        )
-        .into_response());
+        return Err(
+            ApiError::resp(StatusCode::NOT_FOUND, "unknown_session", "no such session")
+                .into_response(),
+        );
     };
     if !bearer_matches(headers, &rec.stats_token) {
         return Err(ApiError::resp(

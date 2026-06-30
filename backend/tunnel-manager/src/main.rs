@@ -249,8 +249,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/health/ready", get(routes::ready))
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
-        .route("/v1/sessions/:session_id/heartbeat", post(routes::heartbeat))
-        // Settlement carries the off-chain transcript as a v2 binary body (one fixed 250 B entry
+        .route(
+            "/v1/sessions/:session_id/heartbeat",
+            post(routes::heartbeat),
+        )
+        // Settlement carries the off-chain transcript as a v2 binary body (one fixed ~248 B entry
         // per co-signed move), archived to Walrus verbatim. Maximizing moves/tunnel amortizes the
         // on-chain close and Walrus per-blob cost, so a long self-play game ships tens of thousands
         // of moves. 32 MB for /settle only (≈134k moves) caps tunnel length; the body streams to
@@ -275,7 +278,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/faucet", post(routes::faucet))
         .route("/v1/faucet/internal", post(routes::faucet_admin))
         .route("/v1/sessions/:session_id/chat", post(routes::chat))
-        .route("/v1/sessions/:session_id/chat/topic", get(routes::chat_topic))
+        .route(
+            "/v1/sessions/:session_id/chat/topic",
+            get(routes::chat_topic),
+        )
         .route(
             "/v1/sessions/:session_id/chat/live/publish",
             post(routes::chat_publish),
