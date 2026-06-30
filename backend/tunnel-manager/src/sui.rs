@@ -111,6 +111,27 @@ pub struct CloseArgs {
     pub transcript_root: Vec<u8>,
 }
 
+/// Outcome of a settle attempt, split by whether the client should retry. `Transient` means
+/// the fullnode rate-limited us (after `GovernedRpc` exhausted its own retries) — the handler
+/// answers 503 + Retry-After. `Rejected` means the settlement itself is bad — the handler
+/// answers 422 and the client must not retry the same bytes.
+pub enum CloseError {
+    Transient {
+        msg: String,
+        retry_after: Option<u64>,
+    },
+    Rejected(String),
+}
+
+impl std::fmt::Display for CloseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CloseError::Transient { msg, .. } => write!(f, "{msg}"),
+            CloseError::Rejected(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
 /// A shared object's PTB reference: id + the version it was first shared at.
 #[derive(Clone)]
 struct SharedRef {
@@ -338,6 +359,25 @@ impl SuiSettler {
         self.execute(&tx, &sig).await
     }
 
+    /// Settle-path wrapper that surfaces the transient/rejected distinction the handler needs:
+    /// a fullnode rate-limit (retries exhausted in `GovernedRpc`) is `Transient` (→ 503 + a
+    /// Retry-After, tell the client to come back), while a bad settlement / on-chain abort is
+    /// `Rejected` (→ 422, no point retrying). Classification is by downcasting the preserved
+    /// `RpcError` source — not by string-matching the message.
+    pub async fn submit_close_typed(&self, args: CloseArgs) -> Result<String, CloseError> {
+        self.submit_close(args).await.map_err(|e| {
+            match e.downcast_ref::<crate::sui_rpc::RpcError>() {
+                Some(crate::sui_rpc::RpcError::Transient { retry_after, .. }) => {
+                    CloseError::Transient {
+                        msg: e.to_string(),
+                        retry_after: *retry_after,
+                    }
+                }
+                _ => CloseError::Rejected(e.to_string()),
+            }
+        })
+    }
+
     /// Sponsor gas (only) for a user's open/fund transaction (ADR-0009). The `user` is the tx
     /// SENDER; the settler is the gas owner, paying via SIP-58 address-balance gas from its own
     /// balance. Refuses anything but the allowlisted tunnel open/fund calls, dry-runs before
@@ -466,10 +506,9 @@ impl SuiSettler {
 
     // ---- JSON-RPC reads/execute (compile-verified; e2e-deferred, see module docs) ----
 
-    /// Legacy adapter for the mint/sponsor paths: delegate to the governed client and flatten
-    /// the transient/rejected taxonomy back to `anyhow` (those callers don't distinguish). The
-    /// settle path uses `RpcError` directly (see `submit_close_typed`) so it can map transient
-    /// 429s to a 503 instead of a terminal 422.
+    /// Adapter for all on-chain paths: delegate to the governed client. `with_context`
+    /// (not `anyhow!`) keeps the `RpcError` as the chain *source*, so `submit_close_typed`
+    /// can downcast it to tell a transient 429 (→ 503) from a genuine rejection (→ 422).
     async fn rpc(
         &self,
         method: &str,
@@ -478,7 +517,7 @@ impl SuiSettler {
         self.rpc
             .call(method, params)
             .await
-            .map_err(|e| anyhow!("rpc {method}: {e}"))
+            .with_context(|| format!("rpc {method}"))
     }
 
     async fn resolve_shared(&self, object_id: &str) -> anyhow::Result<SharedRef> {

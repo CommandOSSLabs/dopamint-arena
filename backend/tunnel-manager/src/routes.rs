@@ -465,7 +465,7 @@ pub(crate) async fn settle(
         timestamp: ts,
         transcript_root: p.transcript_root,
     };
-    match state.settler.submit_close(close).await {
+    match state.settler.submit_close_typed(close).await {
         Ok(digest) => {
             // The close landed on-chain: record it in the event-derived registry so a duplicate
             // /settle is rejected for free by the 409 guard above (no chain dry-run). Without this
@@ -510,12 +510,33 @@ pub(crate) async fn settle(
         }
         Err(e) => {
             tracing::warn!(tunnel_id = %tunnel_id, error = %e, "settle close failed");
-            ApiError::resp(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "settle_failed",
-                &e.to_string(),
+            close_error_to_response(e)
+        }
+    }
+}
+
+/// Map a settle outcome to its HTTP response: a transient fullnode rate-limit becomes a
+/// **503 + Retry-After** so the client backs off and retries (the settlement is valid, the
+/// node is just busy); a genuine rejection stays **422** (retrying the same bytes is futile).
+/// Defaults Retry-After to 1s when the node sent none.
+fn close_error_to_response(e: crate::sui::CloseError) -> Response {
+    match e {
+        crate::sui::CloseError::Transient { retry_after, .. } => {
+            let mut resp = ApiError::resp(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "settle_unavailable",
+                "fullnode is rate-limiting settlement; retry shortly",
             )
-            .into_response()
+            .into_response();
+            let secs = retry_after.unwrap_or(1);
+            if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                resp.headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, v);
+            }
+            resp
+        }
+        crate::sui::CloseError::Rejected(msg) => {
+            ApiError::resp(StatusCode::UNPROCESSABLE_ENTITY, "settle_failed", &msg).into_response()
         }
     }
 }
@@ -999,6 +1020,44 @@ fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
 mod tests {
     use super::test_support::test_state;
     use super::*;
+
+    // A transient fullnode rate-limit must NOT look like a bad settlement: the client needs a
+    // retry signal (503 + Retry-After), not a terminal 422 that makes it drop a valid settle.
+    #[test]
+    fn transient_close_error_maps_to_503_with_retry_after() {
+        let r = close_error_to_response(crate::sui::CloseError::Transient {
+            msg: "429".into(),
+            retry_after: Some(2),
+        });
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            r.headers().get(axum::http::header::RETRY_AFTER).unwrap(),
+            "2"
+        );
+    }
+
+    // A transient error with no server Retry-After still tells the client to retry (default 1s).
+    #[test]
+    fn transient_without_retry_after_defaults_to_one_second() {
+        let r = close_error_to_response(crate::sui::CloseError::Transient {
+            msg: "timeout".into(),
+            retry_after: None,
+        });
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            r.headers().get(axum::http::header::RETRY_AFTER).unwrap(),
+            "1"
+        );
+    }
+
+    // A genuine rejection (bad sig, already closed, balance mismatch) stays 422 — retrying the
+    // same bytes is futile, so do not hand the client a retry signal.
+    #[test]
+    fn rejected_close_error_maps_to_422() {
+        let r = close_error_to_response(crate::sui::CloseError::Rejected("bad sig".into()));
+        assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(r.headers().get(axum::http::header::RETRY_AFTER).is_none());
+    }
 
     // The binary /settle body the SDK codec (`encodeSettleBody`) emits — byte-identical to
     // the TS golden vector (settleBinary.test.ts). Pasting it here pins TS↔Rust wire parity: a
