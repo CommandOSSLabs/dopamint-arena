@@ -61,7 +61,7 @@ import {
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
 const STAKE_BALANCE = 1n; // locked per seat: 1 MTPS (0 decimals; ADR-0023)
-const STAKE_SHIFT = 200_000_000n; // 0.2 MTPS moves loser → winner on a decisive result
+const STAKE_SHIFT = 1n; // winner-take-all: the loser's 1 MTPS stake moves to the winner (0 decimals; ADR-0023)
 /** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
  *  stale/dead match (or a backend that predates resume support) never confirms, so we
  *  abandon to idle rather than hang on a frozen board. */
