@@ -71,16 +71,21 @@ const MP_URL =
 /** Default buy-in (bankroll) deposited on-chain per seat — whole MTPS (0-decimal; ADR-0023), shown
  *  1:1 as chips. Each player chooses their own before matchmaking; the bet protocol caps each round
  *  at min(both balances). */
-const DEFAULT_STAKE = 1000n;
+const DEFAULT_STAKE = 100n;
 /** Buy-in options offered before "Find match" — whole MTPS (0-decimal), shown 1:1 as chips. Stacks
- *  big enough for many rounds (min-bet 1, options up to 100); each fits a single faucet pull. */
-const FUND_OPTIONS = [500, 1000, 2500] as const;
+ *  big enough for many rounds (min-bet 1, bet options up to 10); each fits a single faucet pull. */
+const FUND_OPTIONS = [100, 250, 500] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const NEXT_MS = 900; // pause before auto-dealing the next round
 const DEFAULT_BET = Number(MIN_BET); // auto's starting bet until the player picks one
 
 /** Pacing for auto-driven commit/reveal plumbing moves (ms). */
 const PLUMBING_MS = 120;
+// Flat-out auto pacing: in-match auto moves/rounds fire on the next tick (0ms still defers, so the
+// confirmed-update sync runs first); the inter-match requeue keeps a short glimpse. Manual play
+// still uses BOT_MOVE_MS / NEXT_MS / PLUMBING_MS above.
+const AUTO_MOVE_MS = 0;
+const AUTO_REQUEUE_MS = 150;
 
 export type PvpPhase =
   | "idle"
@@ -409,7 +414,7 @@ export function usePvpBlackjack(): PvpView {
                   /* in flight */
                 }
               },
-              autoRef.current ? 50 : PLUMBING_MS,
+              autoRef.current ? AUTO_MOVE_MS : PLUMBING_MS,
             );
           return;
         }
@@ -428,7 +433,7 @@ export function usePvpBlackjack(): PvpView {
                 /* raced / in flight */
               }
             },
-            autoRef.current ? 100 : NEXT_MS,
+            autoRef.current ? AUTO_MOVE_MS : NEXT_MS,
           );
           return;
         }
@@ -444,7 +449,7 @@ export function usePvpBlackjack(): PvpView {
                   /* not my turn / in flight */
                 }
               },
-              autoRef.current ? 50 : BOT_MOVE_MS,
+              autoRef.current ? AUTO_MOVE_MS : BOT_MOVE_MS,
             );
         }
       };
@@ -877,7 +882,7 @@ export function usePvpBlackjack(): PvpView {
                 /* ignore */
               }
             },
-            autoRef.current ? 50 : BOT_MOVE_MS,
+            autoRef.current ? AUTO_MOVE_MS : BOT_MOVE_MS,
           );
       } else if (st.phase === "round_over") {
         const mv = bjBetMove(lastBetRef.current ?? Number(MIN_BET), st);
@@ -889,7 +894,7 @@ export function usePvpBlackjack(): PvpView {
               /* ignore */
             }
           },
-          autoRef.current ? 100 : NEXT_MS,
+          autoRef.current ? AUTO_MOVE_MS : NEXT_MS,
         );
       }
     },
@@ -1004,7 +1009,7 @@ export function usePvpBlackjack(): PvpView {
     if (phase !== "done" || !autoRef.current) return;
     const id = setTimeout(() => {
       if (autoRef.current) requeue();
-    }, NEXT_MS);
+    }, AUTO_REQUEUE_MS);
     return () => clearTimeout(id);
   }, [phase, requeue]);
 

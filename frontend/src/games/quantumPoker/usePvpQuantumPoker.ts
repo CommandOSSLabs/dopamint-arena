@@ -66,7 +66,7 @@ import {
   randomPokerPersona,
   type PokerSeatBot,
 } from "./pokerSelfPlay";
-import { POKER_BUYIN } from "./constants";
+import { POKER_BUYIN, QUANTUM_POKER_ANTE } from "./constants";
 import type { BotContext } from "@/agent/gameKit";
 
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
@@ -493,7 +493,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         typeof openAndFundSharedTunnel
       >[0]["reads"];
       const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
-      const proto = new QuantumPokerProtocol(HAND_CAP);
+      const proto = new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE);
       const transcript = new Transcript(dt.tunnelId);
       transcriptRef.current = transcript;
 
@@ -755,7 +755,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           }
 
           // 2) build the distributed poker engine over the relay transport.
-          const proto = new QuantumPokerProtocol(HAND_CAP);
+          const proto = new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE);
           const backend = defaultBackend();
           const self = makeEndpoint(backend, wallet, ephemeral, true);
           const opp = makeEndpoint(
@@ -1044,7 +1044,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           mp,
           GAME_ID,
           {
-            proto: new QuantumPokerProtocol(HAND_CAP),
+            proto: new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE),
             moveCodec: pokerMoveCodec,
             adapter: makePokerResumeAdapter({
               getSecret: () => restoredSecret!,

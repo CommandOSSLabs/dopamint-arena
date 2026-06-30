@@ -12,15 +12,22 @@ export const QUANTUM_POKER_HAND_CAP = 180n;
  */
 export const QUANTUM_POKER_HANDS_PER_TUNNEL = 2500n;
 
-/** Locked per seat for the PvP/agent tunnel lane. 5000 (was 2500) gives the bots room to bet across
- *  several streets without an early all-in — longer hands, more off-chain actions, and tunnels that
- *  more often reach HAND_CAP before a bust (fewer settle gaps → higher self-play TPS). */
-export const QUANTUM_POKER_STAKE = 5000n;
+/** Locked per seat for the PvP/agent tunnel lane, in whole MTPS (0 decimals; ADR-0023). 100 buy-in
+ *  at ante 1 keeps the 100:1 stack-to-ante ratio of the old 5000/50 economy, so the bots still bet
+ *  across streets and tunnels reach HAND_CAP before a bust — just denominated in whole tokens. */
+export const QUANTUM_POKER_STAKE = 100n;
 
 /**
- * Per-seat buy-in for the PvP lane, in chips. chips == raw MTPS (1:1), so this is also the raw
- * stake locked per seat per round. Kept equal to QUANTUM_POKER_STAKE. At 5000 a seat still busts
- * within HAND_CAP at ante 50, but is deep enough to bet across streets (more action before the
+ * Per-seat buy-in for the PvP lane, in chips. chips == raw MTPS (1:1, 0 decimals), so this is also
+ * the raw stake locked per seat per round. Kept equal to QUANTUM_POKER_STAKE. At 100/ante 1 a seat
+ * still busts within HAND_CAP, but is deep enough to bet across streets (more action before the
  * all-in) instead of shoving on the first raise.
  */
-export const POKER_BUYIN = 5000n;
+export const POKER_BUYIN = 100n;
+
+/**
+ * Per-hand ante posted by both seats, in whole MTPS (0 decimals; ADR-0023). The protocol defaults
+ * to a 9-decimal-era 50; the app passes this smaller value so the chip economy scales to whole-token
+ * stakes (buy-in 100 : ante 1 == the old 5000 : 50 ratio, preserving bot bust/hand-cap behavior).
+ */
+export const QUANTUM_POKER_ANTE = 1n;

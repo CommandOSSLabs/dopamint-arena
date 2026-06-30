@@ -76,9 +76,9 @@ const MP_URL =
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 // Per-seat deposit and per-game stake, mode-scaled. In MTPS mode (production path) both are
-// 1 MTPS (9 decimals), so an abandoner forfeits exactly one deposit. In the SUI dev fallback
-// the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
-const MTPS_PER_SEAT = 1_000_000_000n;
+// 1 MTPS (0 decimals; ADR-0023), so an abandoner forfeits exactly one deposit. In the SUI dev
+// fallback the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
+const MTPS_PER_SEAT = 1n;
 const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
 // MTPS mode (ADR-0023): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
@@ -87,8 +87,10 @@ const MTPS_BANKROLL = 1n;
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
 const MAX_GAMES = 1;
-const MOVE_MS = 600; // auto move cadence
-const NEXT_MS = 800; // pause before auto-advancing to the next game
+// Flat-out auto pacing: propose the next move/advance on the next tick (a 0ms setTimeout still
+// defers, which breaks re-entrant propose and lets the confirmed-update sync run first).
+const AUTO_MOVE_MS = 0;
+const NEXT_MS = 150; // pause before auto-requeuing the next match (flat-out: just enough to glimpse)
 // Settle-half exchange: both seats send their half at the same instant, so a single relay drop
 // would hang the close. Resend this often until the peer's half lands, and give up after the
 // timeout so a truly lost peer recovers (auto re-queues) instead of stranding the table forever.
@@ -453,7 +455,7 @@ export function usePvpTicTacToe(
               } catch {
                 /* raced */
               }
-            }, 100);
+            }, AUTO_MOVE_MS);
         } else if (st.inner.turn === info.role && autoRef.current) {
           const cell = (() => {
             const empties = st.inner.board
@@ -467,7 +469,7 @@ export function usePvpTicTacToe(
             } catch {
               /* not my turn / in flight */
             }
-          }, 50);
+          }, AUTO_MOVE_MS);
         }
       };
       t.onConfirmed = (u) => {
@@ -876,7 +878,7 @@ export function usePvpTicTacToe(
             } catch {
               /* ignore */
             }
-          }, 100);
+          }, AUTO_MOVE_MS);
       } else if (st.inner.turn === roleRef.current) {
         const cell = (() => {
           const empties = st.inner.board
@@ -890,7 +892,7 @@ export function usePvpTicTacToe(
           } catch {
             /* ignore */
           }
-        }, 50);
+        }, AUTO_MOVE_MS);
       }
     },
     [proto, variant],

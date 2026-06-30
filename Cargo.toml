@@ -15,6 +15,7 @@ members = [
   "rust/protocols/world-canvas",
   "rust/fleet/serve", "rust/fleet/bench", "rust/fleet/core",
   "rust/services/bot-fleet",
+  "wallet-pool", "wallet-pool/core", "wallet-pool/s3",
 ]
 
 [workspace.package]
@@ -72,6 +73,7 @@ rayon = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 sysinfo = "0.32"
 getrandom = "0.2"
+thiserror = "1"
 
 [profile.release]
 lto = "thin"
