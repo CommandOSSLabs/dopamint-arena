@@ -78,8 +78,6 @@ export function CanvasView({
     return () => observer.disconnect();
   }, []);
 
-  const tps = useRollingTps(engine.status.movesCoSigned);
-
   // The hand tool pans; the eraser renders the backdrop; everything else paints `color`.
   // The wall is pan-only (watch) while Auto is on or while the hand tool is picked — flip
   // Auto off to take the wheel and paint seat A.
@@ -127,7 +125,7 @@ export function CanvasView({
 
       {/* Toolbar top-left (right of the window-owned "← Menu"); the Auto toggle is a small
           pill pinned to the top-RIGHT corner — same height as the toolbar, not a wide box.
-          The live TPS · View readout lives in the Most-painted card (bottom-right). */}
+          The Most-painted leaderboard sits bottom-right; TPS shows in the window chrome. */}
       <div style={topBarStyle}>{toolbar}</div>
       <div style={autoCornerStyle}>
         <AutoToggle auto={engine.auto} onToggleAuto={engine.toggleAuto} />
@@ -135,7 +133,6 @@ export function CanvasView({
 
       <MostPainted
         painters={engine.painters}
-        tps={tps}
         auto={engine.auto}
         onViewPainter={engine.focusOnAgent}
       />
@@ -167,27 +164,3 @@ const autoCornerStyle: CSSProperties = {
   zIndex: 60,
   pointerEvents: "none",
 };
-
-/** Derive a live throughput number from the monotonic co-signed paint count via a
- *  short sliding window (sampled every 500 ms over ~3 s) — a coarse TPS dial. */
-function useRollingTps(movesCoSigned: number): number {
-  const [tps, setTps] = useState(0);
-  const samples = useRef<{ t: number; n: number }[]>([]);
-  const latest = useRef(movesCoSigned);
-  latest.current = movesCoSigned;
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const now = performance.now();
-      const s = samples.current;
-      s.push({ t: now, n: latest.current });
-      while (s.length > 1 && now - s[0].t > 3000) s.shift();
-      const first = s[0];
-      const dt = (now - first.t) / 1000;
-      setTps(dt > 0 ? Math.max(0, (latest.current - first.n) / dt) : 0);
-    }, 500);
-    return () => clearInterval(id);
-  }, []);
-
-  return tps;
-}

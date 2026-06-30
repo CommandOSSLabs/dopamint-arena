@@ -49,6 +49,7 @@ const useSoloSession = createSoloSessionHook<
   minStake: BOMB_IT_MIN_STAKE,
   participants: ["bomber-a", "bomber-b"],
   rematchMs: 700,
+  usesAddressBalance: true, // ADR-0013: stake from the player's MTPS address balance.
   // Bomb It is a REACTION game: manual play co-signs one tick per SOLO_STEP_MS so the fuse stays
   // legible (fuse ≈ FUSE_TICKS * SOLO_STEP_MS ≈ 1s); at the batched autopilot rate it would burn in
   // ~50ms, unplayable by hand. Autopilot still batches — the ~500 TPS throughput benchmark.

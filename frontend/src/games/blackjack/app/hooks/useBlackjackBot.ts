@@ -161,12 +161,11 @@ export interface BlackjackBotGame {
   pollBalances: (prev?: { a: bigint; b: bigint }) => Promise<void>;
 }
 
-// Buy-in (bankroll) each bot brings to the table per game, in MIST. Chips are 1:1 with MIST
-// (1 SUI = 1,000,000,000 chips), so this is also the starting chip stack. Sized so the table
-// can sustain the full rounds-per-tunnel target before either side is drained. Bots bet the
-// minimum (DEFAULT_BET = MIN_BET), so 50,000 chips covers far more than the rounds-per-tunnel
-// target while keeping the on-chain deposit — and thus the MIN_PLAY floor — tiny.
-const BUY_IN = 50_000n;
+// Buy-in (bankroll) each bot brings to the table per game. Chips are 1:1 with the on-chain stake, so
+// this is also the starting chip stack AND the MTPS staked per seat (0-decimal; ADR-0023). 1,000
+// chips = 1,000 whole MTPS — a stack big enough to play many rounds before a seat drains and the
+// funder rebuys (min-bet 1, options up to 100).
+const BUY_IN = 1_000n;
 // Animation cadence: in manual mode the dealer/betting auto-steps are paced to this so they're
 // watchable between the player's decisions.
 const STEP_MS = 900;
@@ -290,24 +289,29 @@ export function useBlackjackBot(): BlackjackBotGame {
   const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(Date.now());
 
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[blackjack bot] heartbeat failed:", e));
-  }, []);
+  const flushHeartbeat = useCallback(
+    (tunnelId: string, force: boolean) => {
+      const s = sessionRef.current;
+      if (!s || actionsRef.current === 0) return;
+      const now = Date.now();
+      const windowMs = now - lastHeartbeatRef.current;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = actionsRef.current;
+      actionsRef.current = 0;
+      lastHeartbeatRef.current = now;
+      // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+      report.recordActions(actionsDelta);
+      getControlPlaneClient()
+        .sendHeartbeat(s.sessionId, s.statsToken, {
+          tunnelId,
+          nonce: String(moveCountRef.current),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch((e) => console.error("[blackjack bot] heartbeat failed:", e));
+    },
+    [report],
+  );
 
   // Clamp the rounds-per-tunnel target to a sane range so a custom input can't request 0 or
   // an unbounded number of rounds in a single tunnel.
@@ -507,7 +511,6 @@ export function useBlackjackBot(): BlackjackBotGame {
                 coinType,
                 stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
-                  signExec: sponsoredSignExec(funder),
                   owner: funder.address,
                   need: 2n * BUY_IN,
                 }),

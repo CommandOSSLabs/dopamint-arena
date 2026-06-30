@@ -354,7 +354,7 @@ export function ArenaView() {
   const navigate = useNavigate();
   const section =
     (useSearch({ strict: false }) as { section?: MobileSection }).section ??
-    "games";
+    "all";
   // Which floor is on screen. `live`/`explorer` aren't floors, so they fall back to games
   // (the desktop never shows them as a floor; telemetry is the persistent bottom dock).
   const floorWs: Workspace =
@@ -537,11 +537,11 @@ export function ArenaView() {
         ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
     );
 
-  // Switch to a section/workspace, mirroring the tab links (games → no param).
+  // Switch to a section/workspace, mirroring the tab links (all → no param, it's the default).
   const goToSection = (target: MobileSection) =>
     navigate({
       to: "/",
-      search: target === "games" ? {} : { section: target },
+      search: target === "all" ? {} : { section: target },
     });
 
   // Add a fresh window to a given workspace's floor — duplicates allowed; that floor

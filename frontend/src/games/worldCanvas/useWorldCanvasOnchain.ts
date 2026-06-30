@@ -57,10 +57,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof } from "sui-tunnel-ts";
 import {
-  WorldCanvasProtocol,
   type WorldCanvasState,
   type WorldCanvasMove,
 } from "sui-tunnel-ts/protocol/worldCanvas";
+import { createWorldCanvasKit } from "@/agent/games/worldCanvas/kit";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -73,6 +73,8 @@ import { openAndFundSelfPlay, readCreatedAt } from "@/onchain/tunnelTx";
 import { settleViaBackend } from "@/backend/settle";
 import {
   isMtpsConfigured,
+  isMtpsAddressBalance,
+  ensureMtpsAddressBalance,
   ensureMtpsStakeCoin,
   MTPS_COIN_TYPE,
 } from "@/onchain/mtps";
@@ -108,9 +110,9 @@ const NUM_COLORS = 16;
 /** SUI-fallback per-seat stake (MIST) when MTPS env is unset. Collaborative free
  *  mode never shifts balances, so any close is a draw (each seat keeps its stake). */
 const STAKE = 1n;
-/** MTPS per-seat stake (1 token, 9 decimals) — the default on-chain path (ADR-0010):
+/** MTPS per-seat stake (1 token; 0 decimals, ADR-0023) — the default on-chain path (ADR-0010):
  *  faucet-minted, so painters need ZERO SUI; only gas is sponsored. Mirrors the other games. */
-const MTPS_STAKE_PER_SEAT = 1_000_000_000n;
+const MTPS_STAKE_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0023)
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
 const GAME = "world-canvas";
 /** Soft cap on retained painted cells; oldest are evicted so an endless wall keeps
@@ -657,12 +659,12 @@ export function useWorldCanvasOnchain(
   const movesPerGame = clampMovesPerGame(opts.movesPerGame ?? MOVES_PER_GAME);
   const movesPerGameRef = useRef(movesPerGame);
   movesPerGameRef.current = movesPerGame;
-  // One protocol instance shared by the tunnel (and its reopens).
-  const proto = useMemo(
-    () =>
-      new WorldCanvasProtocol({ chunkSize: CHUNK_SIZE, numColors: NUM_COLORS }),
-    [],
-  );
+  // One protocol instance shared by the tunnel (and its reopens), sourced from the CANONICAL
+  // kit (`createWorldCanvasKit` in src/agent) — the single source of truth the agent engine
+  // uses too — instead of constructing a protocol here. The kit's defaults (256-cell chunks,
+  // 16 colors) match this wall; its per-match cap is irrelevant here (the wall bounds itself
+  // via `movesPerGame`, and nothing in the solo path reads `isTerminal`).
+  const proto = useMemo(() => createWorldCanvasKit(STAKE).protocol, []);
 
   const [status, setStatus] = useState<WorldCanvasOnchainStatus>(EMPTY_STATUS);
   const [revision, setRevision] = useState(0);
@@ -905,24 +907,29 @@ export function useWorldCanvasOnchain(
 
   // Coarse throughput report — one call per ~1s window, never per paint. This is the
   // signal the dashboard turns into live TPS (it derives a rate from the action COUNT).
-  const flushHeartbeat = useCallback((run: CanvasRun, force: boolean) => {
-    const s = run.session;
-    if (!s || run.actions === 0) return;
-    const now = Date.now();
-    const windowMs = now - run.lastHeartbeat;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = run.actions;
-    run.actions = 0;
-    run.lastHeartbeat = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId: run.tunnelId,
-        nonce: String(run.moveCount),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
-  }, []);
+  const flushHeartbeat = useCallback(
+    (run: CanvasRun, force: boolean) => {
+      const s = run.session;
+      if (!s || run.actions === 0) return;
+      const now = Date.now();
+      const windowMs = now - run.lastHeartbeat;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = run.actions;
+      run.actions = 0;
+      run.lastHeartbeat = now;
+      // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+      report.recordActions(actionsDelta);
+      getControlPlaneClient()
+        .sendHeartbeat(s.sessionId, s.statsToken, {
+          tunnelId: run.tunnelId,
+          nonce: String(run.moveCount),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
+    },
+    [report],
+  );
 
   // Co-sign one paint through the tunnel; count only honest, both-signature-VERIFIED
   // steps (the TPS gate). One verified step = one action + one increment of the
@@ -1046,31 +1053,48 @@ export function useWorldCanvasOnchain(
       >[0]["reads"];
 
       try {
-        // Pre-select the MTPS stake coin BEFORE the open so concurrent (re)opens of
-        // the single tunnel — and React StrictMode's double-mount — don't equivocate at
-        // the shared faucet object. Funding each open against a coin that's already in
-        // hand is what lets us drop the old open serializer: the faucet pull (if any)
-        // happens here, off the hot open path, and the `create_and_fund` then only splits
-        // a ready coin (Sui's own object-version ordering settles any overlap). Mirrors
-        // chickenCross's `prepareStake` ahead of the open, but keyed to the ephemeral
-        // seat-A identity (a 0-SUI bot key, gas-sponsored), not a connected wallet. SUI
-        // fallback (MTPS env unset) has no such coin — the framework splits the stake
-        // from the gas coin inside openAndFundSelfPlay.
-        let stakeCoinId: string | undefined;
+        // Fund the stake BEFORE the open so concurrent (re)opens of the single tunnel — and
+        // React StrictMode's double-mount — never equivocate. ADR-0013: stake from the seat-A
+        // identity's MTPS *address balance* (withdrawn inside `create_and_fund`), topping it up
+        // off the hot open path (faucet/sweep) only when short — so the open just redeems a ready
+        // balance and Sui's own version ordering settles any overlap. Keyed to the ephemeral
+        // seat-A identity (a 0-SUI bot key, gas-sponsored), not a connected wallet. SUI fallback
+        // (MTPS env unset) has no such balance — the framework splits the stake from the gas coin
+        // inside openAndFundSelfPlay.
+        let stakeOpt: {
+          stakeCoinId?: string;
+          stakeFromBalance?: { amount: bigint; coinType: string };
+        } = {};
         if (mtpsOn) {
-          // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
-          stakeCoinId = await ensureMtpsStakeCoin({
-            client: client as never,
-            signExec: sponsoredSignExec,
-            owner: identities.a.address,
-            need: 2n * stakePerSeat,
-          });
+          // Self-play funds BOTH seats from one source → fund for the 2-seat total.
+          if (isMtpsAddressBalance) {
+            await ensureMtpsAddressBalance({
+              client: client as never,
+              signExec: sponsoredSignExec,
+              owner: identities.a.address,
+              need: 2n * stakePerSeat,
+            });
+            stakeOpt = {
+              stakeFromBalance: {
+                amount: 2n * stakePerSeat,
+                coinType: MTPS_COIN_TYPE,
+              },
+            };
+          } else {
+            stakeOpt = {
+              stakeCoinId: await ensureMtpsStakeCoin({
+                client: client as never,
+                owner: identities.a.address,
+                need: 2n * stakePerSeat,
+              }),
+            };
+          }
         }
 
         // ONE create_and_fund opens the tunnel AND funds BOTH distinct seats' stakes in a
-        // single signature (the shared, proven self-play helper). MTPS: gas-sponsored,
-        // staked from the pre-selected faucet coin. SUI fallback: sponsored first, then
-        // sender-pays (the seat-A key paying its own gas).
+        // single signature (the shared, proven self-play helper). MTPS: gas-sponsored, staked
+        // from the address balance (or a coin). SUI fallback: sponsored first, then sender-pays
+        // (the seat-A key paying its own gas).
         const openedTunnelId = mtpsOn
           ? await openAndFundSelfPlay({
               reads,
@@ -1080,7 +1104,7 @@ export function useWorldCanvasOnchain(
               aAmount: stakePerSeat,
               bAmount: stakePerSeat,
               coinType,
-              stakeCoinId,
+              ...stakeOpt,
             })
           : await withSponsorFallback(
               () =>
@@ -1705,7 +1729,10 @@ export function useWorldCanvasOnchain(
     setAgentTemplateState(id);
   }, []);
 
-  // Public: re-center the camera on the live seat bot painting at `painter` (📍).
+  // Public: re-center the camera on the live seat bot painting at `painter` (📍). Jumps at the
+  // WIDEST zoom (ZOOM.min) — same as the auto-follow cam — so you actually SEE the bot and its
+  // art, not nose-to-the-pixels at the default focus zoom (which framed a tiny spot you couldn't
+  // find as the bot wandered off).
   const focusOnAgent = useCallback((painter: string) => {
     for (const st of agentStatesRef.current.values()) {
       if (st.seat === "A" && !autoRef.current) continue; // paused seat-A bot has no marker
@@ -1714,6 +1741,7 @@ export function useWorldCanvasOnchain(
           gx: st.centerGx,
           gy: st.centerGy,
           seq: ++focusSeqRef.current,
+          scale: ZOOM.min,
         });
         return;
       }

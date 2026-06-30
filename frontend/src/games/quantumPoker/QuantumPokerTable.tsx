@@ -46,10 +46,10 @@ export function cardText(card: number): string {
   return `${RANKS[card % 13]}${SUITS[Math.floor(card / 13)]}`;
 }
 
-// Compact chip count: small stacks (PvBot's 2,500) stay exact; the watch-bot's
-// billion-unit stakes shrink to 1.2B so a hand-drawn seat isn't a wall of digits.
-// Thresholds carry the rounding margin so a value just under a unit reads as the
-// next one up (≈999.99M → "1.0B", never "1000.0M"; 999,999 → "1.0M", never "1000K").
+// Compact chip count. At 0-decimal MTPS (ADR-0023) stacks are small whole tokens (≤ ~10k), so
+// this returns the exact integer; the K/M/B abbreviation is a safety net for large COUNTS (a
+// number abbreviation, NOT a decimal conversion). Thresholds carry the rounding margin so a value
+// just under a unit reads as the next one up (≈999.99M → "1.0B"; 999,999 → "1.0M", never "1000K").
 function fmtChips(n: bigint): string {
   if (n >= 999_950_000n) return `${(Number(n) / 1e9).toFixed(1)}B`;
   if (n >= 999_500n) return `${(Number(n) / 1e6).toFixed(1)}M`;

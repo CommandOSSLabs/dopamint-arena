@@ -53,9 +53,12 @@ const MAX_BOARD_SIZE = 29;
 
 const SCORE_KEY = "caro_bot_score.v1";
 const STEP_MS = 350;
+// Flat-out (auto + "fast") co-signs back-to-back within one ~16ms frame — the poker/battleship
+// model — so TPS is CPU-bound instead of capped at one move per timer tick. 16ms ≈ one 60Hz frame.
+const FRAME_BUDGET_MS = 16;
 const MIN_PLAY_MIST = 20_000_000n;
-// MTPS mode: per-seat stake (1 MTPS, 9 decimals); both seats funded from one coin.
-const MTPS_PER_SEAT = 1_000_000_000n;
+// MTPS mode: per-seat stake (1 MTPS; 0 decimals, ADR-0023); both seats funded from one coin.
+const MTPS_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0023)
 // SUI-fallback per-seat stake (MIST), when the MTPS env is unset.
 const SUI_PER_SEAT = 1n;
 const NEXT_GAME_MS = 1200;
@@ -181,24 +184,29 @@ export function useCaroBotGame(
   const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(Date.now());
 
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[caro bot] heartbeat failed:", e));
-  }, []);
+  const flushHeartbeat = useCallback(
+    (tunnelId: string, force: boolean) => {
+      const s = sessionRef.current;
+      if (!s || actionsRef.current === 0) return;
+      const now = Date.now();
+      const windowMs = now - lastHeartbeatRef.current;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = actionsRef.current;
+      actionsRef.current = 0;
+      lastHeartbeatRef.current = now;
+      // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+      report.recordActions(actionsDelta);
+      getControlPlaneClient()
+        .sendHeartbeat(s.sessionId, s.statsToken, {
+          tunnelId,
+          nonce: String(moveCountRef.current),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch((e) => console.error("[caro bot] heartbeat failed:", e));
+    },
+    [report],
+  );
 
   const setMaxGames = useCallback((n: number) => {
     const clamped = Math.max(
@@ -358,7 +366,6 @@ export function useCaroBotGame(
                 coinType,
                 stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
-                  signExec: xSignExec,
                   owner: bots.x.address,
                   need: 2n * stakePerSeat,
                 }),
@@ -459,7 +466,14 @@ export function useCaroBotGame(
         setPaused(false);
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
-          const delay = difficultyRef.current === "fast" ? 30 : STEP_MS;
+          // Flat = bot-vs-bot at "fast" (the demo default): burst the loop. Strategic difficulties
+          // and manual play keep one watchable move per `delay`.
+          const flat = autoRef.current && difficultyRef.current === "fast";
+          const delay = flat
+            ? 0
+            : difficultyRef.current === "fast"
+              ? 30
+              : STEP_MS;
           const finish = () => {
             stopTimer();
             resolve();
@@ -557,7 +571,27 @@ export function useCaroBotGame(
               reject(err);
             }
           };
-          timerRef.current = setInterval(tick, delay);
+          // In flat mode, burst `tick` for up to one frame, then yield to the interval so the page
+          // still paints (React 19 batches the per-step setState into one render per frame, and
+          // pushLocalTxn's slice self-bounds the feed). `tick`→finish() nulls timerRef at terminal,
+          // which also breaks the burst. Otherwise it's a single paced tick.
+          const drive = () => {
+            if (!flat) {
+              tick();
+              return;
+            }
+            const frameEnd = Date.now() + FRAME_BUDGET_MS;
+            do {
+              tick();
+            } while (
+              timerRef.current !== null &&
+              !pausedRef.current &&
+              autoRef.current &&
+              difficultyRef.current === "fast" &&
+              Date.now() < frameEnd
+            );
+          };
+          timerRef.current = setInterval(drive, delay);
         });
 
         const finalInner = tunnel.state.inner;

@@ -1263,6 +1263,11 @@ mod tests {
             pair_hold_ms: 10_000, // long hold — neither expires via the join path
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            faucet_user_amount: 10_000,
+            faucet_internal_amount: 1_000_000,
+            faucet_cooldown_secs: 1_800,
+            faucet_max_per_window: 5,
+            faucet_admin_token: None,
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1414,6 +1419,11 @@ mod tests {
             pair_hold_ms,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            faucet_user_amount: 10_000,
+            faucet_internal_amount: 1_000_000,
+            faucet_cooldown_secs: 1_800,
+            faucet_max_per_window: 5,
+            faucet_admin_token: None,
         })
     }
 

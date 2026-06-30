@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-24
 - **Refs**: realizes the **affinity mechanism** deferred by
-  [ADR-0015](0015-data-plane-local-control-plane-redis.md) §Consequences / §Open
+  [ADR-0023](0015-data-plane-local-control-plane-redis.md) §Consequences / §Open
   questions and the affinity follow-up [ADR-0016](0016-mp-resume-protocol.md)
   §Consequences points to. Full design:
   the local-first-pairing design notes.

@@ -76,18 +76,6 @@ export default function App({ windowId }: { windowId: string }) {
         <ScaledWrapper>
           <AppContent windowId={windowId} />
         </ScaledWrapper>
-        <Toaster
-          position="top-right"
-          theme="dark"
-          toastOptions={{
-            style: {
-              background: "#09090b",
-              color: "#f4f4f5",
-              border: "1px solid #27272a",
-              borderRadius: "12px",
-            },
-          }}
-        />
       </div>
     </GameRouterProvider>
   );

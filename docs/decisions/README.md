@@ -89,6 +89,10 @@ _why_ survives after the people involved have moved on.
   snake_case segments separated by dots and an explicit `.vN` suffix; `.series`
   replaces new `.multi` wrapper IDs, with legacy aliases recorded in the port
   inventory.
+- [0023](0023-mtps-token-hardening.md) — Harden the MTPS stake token: admin-only
+  `admin_mint` via an owned `AdminCap` (no public mint → no brick/griefing), a
+  0-decimal whole-token currency via `coin_registry`; the faucet moves to the
+  backend admin endpoint. Builds on 0010.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was

@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         config.agent_allowance_package_id.as_deref(),
         config.streaming_payment_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
+        config.mtps_admin_cap_id.as_deref(),
     )?;
     // Enoki is the primary gas sponsor when configured; the settler above is the fallback (ADR-0014).
     // The settler's close/fallback path pins a hard-coded testnet genesis digest (`sui.rs`), so guard
@@ -132,6 +133,11 @@ async fn main() -> anyhow::Result<()> {
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
+        faucet_user_amount: config.faucet_user_amount,
+        faucet_internal_amount: config.faucet_internal_amount,
+        faucet_cooldown_secs: config.faucet_cooldown_secs,
+        faucet_max_per_window: config.faucet_max_per_window,
+        faucet_admin_token: config.faucet_admin_token.clone(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
@@ -167,6 +173,10 @@ async fn main() -> anyhow::Result<()> {
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
+        // MTPS faucet (ADR-0023): the public route is per-address rate limited; the internal route
+        // is unlimited and bearer-gated (fails closed when FAUCET_ADMIN_TOKEN is unset).
+        .route("/v1/faucet", post(routes::faucet))
+        .route("/v1/faucet/internal", post(routes::faucet_admin))
         .route("/v1/chat", post(routes::chat))
         .route("/v1/chat/topic", get(routes::chat_topic))
         .route("/v1/chat/live/publish", post(routes::chat_publish))

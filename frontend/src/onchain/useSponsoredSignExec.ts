@@ -92,7 +92,6 @@ export function useSponsoredSignExec(): SponsoredSignExec {
       }
       return ensureMtpsStakeCoin({
         client: reader as never,
-        signExec,
         owner: sender,
         need: minAmount,
       });
