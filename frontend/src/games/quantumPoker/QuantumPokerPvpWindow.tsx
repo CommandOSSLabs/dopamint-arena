@@ -40,7 +40,7 @@ export function QuantumPokerPvpWindow({
               className="sketch-btn sketch-btn--go"
               onClick={g.findMatch}
             >
-              Find match
+              Play
             </button>
             {onExit && (
               <button type="button" className="sketch-btn" onClick={onExit}>

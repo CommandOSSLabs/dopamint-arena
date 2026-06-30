@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -152,9 +153,9 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
-  // Default OFF: PvP is human-vs-human, so you play your own hands; tick Auto to let the bot
-  // play for you.
-  const [auto, setAutoState] = useState(false);
+  // Auto is ON for your first match this session (watch a bot play), then sticky to your last
+  // toggle — tick it off and new games stay human-vs-human. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto("blackjack"));
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -171,7 +172,7 @@ export function usePvpBlackjack(): PvpView {
     BlackjackMove
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(defaultAuto("blackjack"));
   const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
@@ -508,8 +509,9 @@ export function usePvpBlackjack(): PvpView {
       stoppingRef.current = false;
       setRounds([]);
       autoKickedRef.current = false;
-      autoRef.current = false; // default-off: you play your own hands until you tick Auto
-      setAutoState(false);
+      // Fresh match resets Auto to the session default (ON the first time, else your last toggle).
+      autoRef.current = defaultAuto("blackjack");
+      setAutoState(autoRef.current);
       bufferedSettleRef.current = null;
       bufferedStakeRef.current = null;
       bufferedHelloRef.current = null;
@@ -847,6 +849,7 @@ export function usePvpBlackjack(): PvpView {
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
+      rememberAuto("blackjack", on);
       const t = tunnelRef.current;
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       // Resume auto from the current state.
@@ -894,8 +897,9 @@ export function usePvpBlackjack(): PvpView {
   );
 
   // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
-  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto is ON
+  // by default on the first match, so this fires the opening bot move; it also covers ticking Auto
+  // pre-play.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -938,8 +942,8 @@ export function usePvpBlackjack(): PvpView {
     settledRef.current = false;
     stoppingRef.current = false;
     autoKickedRef.current = false;
-    autoRef.current = false;
-    setAutoState(false);
+    autoRef.current = defaultAuto("blackjack");
+    setAutoState(autoRef.current);
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;

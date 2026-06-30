@@ -2,7 +2,6 @@ import { memo, useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 
 import { get } from "../games/registry";
-import { GameCabinet } from "@/shell/cabinet/GameCabinet";
 import {
   TelemetryContext,
   useTelemetry,
@@ -42,10 +41,9 @@ function GameTelemetryScope({
 }
 
 /**
- * A game's `Window` wrapped in the shared arcade cabinet, memoized so a floor
- * re-render (a sibling drag, a telemetry tick) doesn't re-render this game. Inert
- * for games that don't register a CabinetController yet. Shared by the desktop
- * floor and the phone floor so both mount a game identically.
+ * A game's `Window`, memoized so a floor re-render (a sibling drag, a telemetry
+ * tick) doesn't re-render this game. Shared by the desktop floor and the phone
+ * floor so both mount a game identically.
  *
  * `onClose` takes the windowId (the floor closes by id); the memo holds across
  * re-renders only while `onClose` is stable (the floor passes a memoized setter).
@@ -65,9 +63,7 @@ export const GameContent = memo(function GameContent({
   const Content = mod.Window;
   return (
     <GameTelemetryScope gameId={gameId}>
-      <GameCabinet>
-        <Content windowId={windowId} onClose={close} />
-      </GameCabinet>
+      <Content windowId={windowId} onClose={close} />
     </GameTelemetryScope>
   );
 });
