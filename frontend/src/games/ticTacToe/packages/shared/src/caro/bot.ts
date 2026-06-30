@@ -9,7 +9,9 @@ import type { CaroState } from "./protocol";
 
 export type BotStrength = "strong" | "weak";
 
-// Run length + how many of its two ends are open, treating `idx` as if it held `mark`.
+// Run length and its two ends, treating `idx` as if it held `mark`. `openEnds` (empty
+// neighbour, edge excluded) drives extension scoring; `oppBlockedEnds` (an opponent stone,
+// edge excluded) decides whether a five actually wins — matching the protocol's win rule.
 function lineInfo(
   board: number[],
   size: number,
@@ -17,7 +19,7 @@ function lineInfo(
   dr: number,
   dc: number,
   mark: number,
-): { run: number; openEnds: number } {
+): { run: number; openEnds: number; oppBlockedEnds: number } {
   const r0 = Math.floor(idx / size);
   const c0 = idx % size;
   let run = 1;
@@ -29,6 +31,7 @@ function lineInfo(
     c += dc;
   }
   const fwdOpen = inBounds(size, r, c) && board[r * size + c] === 0;
+  const fwdOpp = inBounds(size, r, c) && board[r * size + c] !== 0;
   r = r0 - dr;
   c = c0 - dc;
   while (inBounds(size, r, c) && board[r * size + c] === mark) {
@@ -37,11 +40,22 @@ function lineInfo(
     c -= dc;
   }
   const bwdOpen = inBounds(size, r, c) && board[r * size + c] === 0;
-  return { run, openEnds: (fwdOpen ? 1 : 0) + (bwdOpen ? 1 : 0) };
+  const bwdOpp = inBounds(size, r, c) && board[r * size + c] !== 0;
+  return {
+    run,
+    openEnds: (fwdOpen ? 1 : 0) + (bwdOpen ? 1 : 0),
+    oppBlockedEnds: (fwdOpp ? 1 : 0) + (bwdOpp ? 1 : 0),
+  };
 }
 
-function patternValue(run: number, openEnds: number): number {
-  if (run >= 5) return 100000; // completes five -> win
+function patternValue(
+  run: number,
+  openEnds: number,
+  oppBlockedEnds: number,
+): number {
+  // Standard caro: only an exactly-five not flanked by the opponent on both ends wins.
+  if (run === 5) return oppBlockedEnds < 2 ? 100000 : 200;
+  if (run > 5) return 200; // overline: no win, just a dead cluster
   if (run === 4) return openEnds >= 1 ? 9000 : 200; // four (open or single-blocked)
   if (run === 3) return openEnds === 2 ? 1500 : 150; // open three vs blocked three
   if (run === 2) return openEnds === 2 ? 200 : 30;
@@ -57,8 +71,15 @@ function moveScore(
 ): number {
   let best = 0;
   for (const [dr, dc] of DIRS) {
-    const { run, openEnds } = lineInfo(board, size, idx, dr, dc, mark);
-    best = Math.max(best, patternValue(run, openEnds));
+    const { run, openEnds, oppBlockedEnds } = lineInfo(
+      board,
+      size,
+      idx,
+      dr,
+      dc,
+      mark,
+    );
+    best = Math.max(best, patternValue(run, openEnds, oppBlockedEnds));
   }
   return best;
 }

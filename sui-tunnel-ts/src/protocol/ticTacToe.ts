@@ -9,6 +9,10 @@
  *
  * This is the pure off-chain analog of `example_tic_tac_toe.move`; win detection
  * mirrors that module's `check_winner`.
+ *
+ * v2 adds a 32-byte `moveAccumulator` to the co-signed state. Each move folds a
+ * salted commitment (`computeCommitment(mover||moveIndex||cell, salt)`) into the
+ * accumulator so the full move history is unforgeable without replaying every move.
  */
 
 import {
@@ -19,7 +23,13 @@ import {
   protocolDomain,
 } from "./Protocol";
 import { concatBytes } from "../core/bytes";
+import { blake2b256 } from "../core/crypto";
 import { u64ToBeBytes } from "../core/wire";
+import {
+  computeCommitment,
+  DOMAIN_COMMIT_REVEAL,
+  MIN_SALT_LEN,
+} from "../core/commitment";
 
 /** Cell / mark values. 0 = empty, 1 = A (X), 2 = B (O). */
 export const EMPTY = 0;
@@ -43,14 +53,42 @@ export interface TicTacToeState {
   total: bigint;
   /** Amount shifted from loser to winner on a decisive result. */
   stake: bigint;
+  /**
+   * 32-byte running commitment accumulator. Initialized from the v2 protocol domain;
+   * each move folds in `computeCommitment(mover||moveIndex||cell, salt)` so the full
+   * move history is unforgeable and auditable without re-replaying every move.
+   */
+  moveAccumulator: Uint8Array;
 }
 
 export interface TicTacToeMove {
   /** Target cell index, 0..8. */
   cell: number;
+  /** Per-move salt, >= 16 bytes (enforced by computeCommitment). */
+  salt: Uint8Array;
 }
 
-const DOMAIN = protocolDomain("tic_tac_toe.v1");
+const DOMAIN = protocolDomain("tic_tac_toe.v2");
+
+/** `lp(x) = u64be(len(x)) || x` — length-prefixed chunk for the accumulator hash. */
+function lp(x: Uint8Array): Uint8Array[] {
+  return [u64ToBeBytes(x.length), x];
+}
+
+/** Initial accumulator value seeded from the v2 protocol domain. */
+function initialAccumulator(): Uint8Array {
+  return blake2b256(concatBytes([DOMAIN_COMMIT_REVEAL, ...lp(DOMAIN)]));
+}
+
+/** Fold one commitment into the running accumulator. */
+function advanceAccumulator(
+  prevAcc: Uint8Array,
+  commitment: Uint8Array
+): Uint8Array {
+  return blake2b256(
+    concatBytes([DOMAIN_COMMIT_REVEAL, ...lp(prevAcc), ...lp(commitment)])
+  );
+}
 
 /** The 8 winning lines (rows, columns, diagonals). */
 const LINES: readonly [number, number, number][] = [
@@ -82,7 +120,7 @@ function checkWinner(board: number[], movesCount: number): Winner {
 export class TicTacToeProtocol
   implements Protocol<TicTacToeState, TicTacToeMove>
 {
-  readonly name = "tic_tac_toe.v1";
+  readonly name = "tic_tac_toe.v2";
 
   /** Default stake used when the caller does not configure one. */
   private readonly defaultStake: bigint;
@@ -109,6 +147,7 @@ export class TicTacToeProtocol
       balanceB: ctx.initialBalances.b,
       total,
       stake,
+      moveAccumulator: initialAccumulator(),
     };
   }
 
@@ -119,11 +158,15 @@ export class TicTacToeProtocol
   ): TicTacToeState {
     if (state.winner !== 0) throw new Error("game already over");
     if (by !== state.turn) throw new Error(`not ${by}'s turn`);
-    const { cell } = move;
+    const { cell, salt } = move;
     if (!Number.isInteger(cell) || cell < 0 || cell > 8) {
       throw new Error(`cell out of range: ${cell}`);
     }
     if (state.board[cell] !== EMPTY) throw new Error(`cell ${cell} occupied`);
+    // salt length validated by computeCommitment (>= MIN_SALT_LEN)
+    if (!salt || salt.length < MIN_SALT_LEN) {
+      throw new Error(`salt must be >= ${MIN_SALT_LEN} bytes`);
+    }
 
     const board = state.board.slice();
     board[cell] = by === "A" ? MARK_A : MARK_B;
@@ -146,6 +189,18 @@ export class TicTacToeProtocol
     }
     // winner === 3 (draw) or 0 (ongoing): balances unchanged.
 
+    // Fold the salted commitment into the accumulator.
+    // value = u8(mover) || u64be(moveIndex) || u64be(cell)
+    // mover: 1 for A, 2 for B; moveIndex = movesCount after increment (the first placed mark = 1).
+    const moverByte = by === "A" ? 1 : 2;
+    const value = concatBytes([
+      Uint8Array.of(moverByte),
+      u64ToBeBytes(movesCount),
+      u64ToBeBytes(cell),
+    ]);
+    const commitment = computeCommitment(value, salt);
+    const moveAccumulator = advanceAccumulator(state.moveAccumulator, commitment);
+
     return {
       board,
       turn: by === "A" ? "B" : "A",
@@ -155,12 +210,15 @@ export class TicTacToeProtocol
       balanceB,
       total: state.total,
       stake: state.stake,
+      moveAccumulator,
     };
   }
 
   encodeState(state: TicTacToeState): Uint8Array {
     // Board is fixed-length (9), so a flat byte run is unambiguous; the trailing
     // fixed-width fields keep the whole encoding canonical and collision-free.
+    // The 32-byte moveAccumulator is appended last so v1 and v2 are distinguishable
+    // by domain and by length.
     const board = Uint8Array.from(state.board);
     return concatBytes([
       DOMAIN,
@@ -169,6 +227,7 @@ export class TicTacToeProtocol
       u64ToBeBytes(state.balanceA),
       u64ToBeBytes(state.balanceB),
       u64ToBeBytes(state.stake),
+      state.moveAccumulator,
     ]);
   }
 
@@ -194,6 +253,12 @@ export class TicTacToeProtocol
     const idx = Math.floor(rng() * empties.length);
     // Guard against rng() returning exactly 1 (out of spec but defensive).
     const cell = empties[idx < empties.length ? idx : empties.length - 1];
-    return { cell };
+    // Derive a 16-byte deterministic salt from the rng so randomMove stays idempotent
+    // given the same rng sequence. rng() returns floats in [0,1); pack two per u64be.
+    const saltBytes = new Uint8Array(16);
+    const saltView = new DataView(saltBytes.buffer);
+    saltView.setFloat64(0, rng(), false);
+    saltView.setFloat64(8, rng(), false);
+    return { cell, salt: saltBytes };
   }
 }

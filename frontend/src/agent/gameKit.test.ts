@@ -14,7 +14,7 @@ describe("GAME_KITS registry", () => {
   it("exposes the human-hook protocol domains", () => {
     assert.strictEqual(
       GAME_KITS.tictactoe.protocol.name,
-      "tic_tac_toe.multi.v1",
+      "tic_tac_toe.series.v2",
     );
     assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.v2");
     assert.strictEqual(GAME_KITS.battleship.protocol.name, "battleship.v1");

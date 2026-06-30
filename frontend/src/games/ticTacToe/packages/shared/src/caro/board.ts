@@ -34,9 +34,13 @@ export function isFull(board: CaroBoard): boolean {
 }
 
 /**
- * If the mark at `idx` completes a run of 5 OR MORE (free-style) along any axis,
- * return that mark; otherwise 0. Only scans around `idx`, so cost is O(1) per move.
- * Returns 0 if `idx` is out of range or empty.
+ * If the mark at `idx` completes a winning run along any axis, return that mark;
+ * otherwise 0. Only scans around `idx`, so cost is O(1) per move. Returns 0 if `idx`
+ * is out of range or empty.
+ *
+ * Standard caro rules (not free-style): the run must be EXACTLY five — an overline of
+ * six or more does not win — and it must not be flanked by the opponent on BOTH ends.
+ * The board edge is an open end, not a block: only an opponent stone blocks.
  */
 export function winnerAround(
   board: CaroBoard,
@@ -57,6 +61,9 @@ export function winnerAround(
       r += dr;
       c += dc;
     }
+    // (r, c) is the cell just past the forward end. A non-empty cell here is the
+    // opponent (the run stopped, so it is not `mark`); the edge leaves it in-bounds-false.
+    const forwardBlocked = inBounds(size, r, c) && board[r * size + c] !== 0;
     r = r0 - dr;
     c = c0 - dc;
     while (inBounds(size, r, c) && board[r * size + c] === mark) {
@@ -64,15 +71,16 @@ export function winnerAround(
       r -= dr;
       c -= dc;
     }
-    if (count >= 5) return mark;
+    const backwardBlocked = inBounds(size, r, c) && board[r * size + c] !== 0;
+    if (count === 5 && !(forwardBlocked && backwardBlocked)) return mark;
   }
   return 0;
 }
 
 /**
- * The cells forming the 5+ run through `idx` (the winning line), or `[]` if the mark at
- * `idx` does not complete a five. Naturally empty mid-game (a non-winning last move has no
- * 5-run), so the UI can call it every render and only highlights once a game is won.
+ * The cells of the winning five through `idx`, or `[]` if the last move does not win.
+ * Matches {@link winnerAround}'s standard-caro rule (exactly five, not flanked on both
+ * ends), so the UI can call it every render and only highlights an actual win.
  */
 export function winningLine(
   board: CaroBoard,
@@ -93,6 +101,7 @@ export function winningLine(
       r += dr;
       c += dc;
     }
+    const forwardBlocked = inBounds(size, r, c) && board[r * size + c] !== 0;
     r = r0 - dr;
     c = c0 - dc;
     while (inBounds(size, r, c) && board[r * size + c] === mark) {
@@ -100,7 +109,8 @@ export function winningLine(
       r -= dr;
       c -= dc;
     }
-    if (line.length >= 5) return line;
+    const backwardBlocked = inBounds(size, r, c) && board[r * size + c] !== 0;
+    if (line.length === 5 && !(forwardBlocked && backwardBlocked)) return line;
   }
   return [];
 }

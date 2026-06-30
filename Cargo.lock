@@ -7460,6 +7460,7 @@ dependencies = [
 name = "tunnel-caro"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "tokio",
  "tunnel-core",
@@ -7571,6 +7572,7 @@ dependencies = [
 name = "tunnel-tic-tac-toe"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
  "tokio",

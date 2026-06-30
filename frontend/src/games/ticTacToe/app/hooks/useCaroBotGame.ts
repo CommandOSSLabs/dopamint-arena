@@ -325,6 +325,11 @@ export function useCaroBotGame(
     // is preserved in the tunnel history.
     setScore({ x: 0, o: 0, draws: 0 });
 
+    // Derive mode before constructing the protocol so stakePerSeat can be passed in.
+    const mtpsOn = isMtpsConfigured;
+    const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : SUI_PER_SEAT;
+    // Self-play: no abandonment risk, so stake is money-neutral (0). Passing a real
+    // stake would drain the loser to 0 after one decisive game and collapse the series.
     const proto = new MultiGameCaroProtocol(maxGamesRef.current, N);
 
     void (async () => {
@@ -334,9 +339,7 @@ export function useCaroBotGame(
 
         // MTPS mode (ADR-0010): stake faucet-minted MTPS and sponsor bot X's open/close
         // gas (no SUI). SUI fallback (env unset): bot X funds the stakes from its own gas coin.
-        const mtpsOn = isMtpsConfigured;
         const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
-        const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : SUI_PER_SEAT;
         const xSignExec = mtpsOn ? botSponsoredSignExec(bots.x) : null;
 
         // 1) open + fund (both stakes) + activate in ONE tx (bot X signs). In MTPS mode both
@@ -413,7 +416,7 @@ export function useCaroBotGame(
         // 3) off-chain self-play tunnel (both keys local), driving MultiGameCaroProtocol.
         const tunnel = core.OffchainTunnel.selfPlay<
           MultiGameCaroState,
-          { cell: number }
+          { cell: number; salt: Uint8Array }
         >(
           proto,
           tunnelId,
@@ -520,9 +523,11 @@ export function useCaroBotGame(
                         strengthFor(difficultyRef.current, by),
                       );
               }
+              const stepSalt = new Uint8Array(16);
+              crypto.getRandomValues(stepSalt);
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
-              const r = tunnel.step({ cell }, by, {
+              const r = tunnel.step({ cell, salt: stepSalt }, by, {
                 mode: "full",
                 timestamp: createdAt,
               });
