@@ -136,6 +136,9 @@ async function runSponsoredFlowOnce(opts: {
   }
   const { provider, txBytes, sponsorSignature, digest } =
     (await res.json()) as SponsorResponse;
+  console.log(
+    `✍️ [PTB sign] sponsor · sender ${opts.sender.slice(0, 12)}… · provider=${provider} · ${kindBytes.length}b PTB kind`,
+  );
   // 3) The sender signs the sponsor-returned bytes (sender authorization). Same for both providers.
   let userSignature: string;
   try {
@@ -168,6 +171,7 @@ async function runSponsoredFlowOnce(opts: {
       throw new Error(`enoki execute failed (${execRes.status}): ${detail}`);
     }
     const executed = (await execRes.json()) as { digest: string };
+    console.log(`✅ [PTB sign] enoki executed · digest ${executed.digest}`);
     return { digest: executed.digest };
   }
 
@@ -195,6 +199,7 @@ async function runSponsoredFlowOnce(opts: {
       `sponsored transaction failed on-chain: ${result.effects?.status?.error ?? status}`,
     );
   }
+  console.log(`✅ [PTB sign] settler executed · digest ${result.digest}`);
   return { digest: result.digest };
 }
 

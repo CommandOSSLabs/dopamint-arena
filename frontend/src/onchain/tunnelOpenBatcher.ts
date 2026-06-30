@@ -171,6 +171,16 @@ export class TunnelOpenBatcher {
   ): Promise<void> {
     const specs = chunkPending.map((p) => specOf(p.req));
     const chunkTotal = specs.reduce((s, x) => s + x.aAmount + x.bAmount, 0n);
+    // Always-on visibility into each queued self-play PTB sign (how many opens collapse into ONE tx).
+    console.log(
+      `🧾 [PTB sign] self-play open · ${chunkPending.length} open(s) → ONE ${mode} PTB`,
+      chunkPending.map((p) => ({
+        partyA: p.req.partyA.address,
+        partyB: p.req.partyB.address,
+        aAmount: String(p.req.aAmount),
+        bAmount: String(p.req.bAmount),
+      })),
+    );
     try {
       const map = await this.openChunk(deps, mode, coinType, specs, chunkTotal);
       for (const p of chunkPending) {
