@@ -175,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
-        .layer(cors_layer())
+        .layer(cors_layer()?)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
@@ -189,9 +189,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build a CORS layer from `CORS_ALLOWED_ORIGINS`. When the env var is set, only the listed
-/// comma-separated origins are allowed; otherwise the layer remains permissive for local dev.
-fn cors_layer() -> CorsLayer {
+/// Build a CORS layer from `CORS_ALLOWED_ORIGINS`. Release deploys fail closed unless origins are
+/// explicit; local/debug runs can opt into permissive CORS by leaving the env var unset.
+fn cors_layer() -> anyhow::Result<CorsLayer> {
     match std::env::var("CORS_ALLOWED_ORIGINS") {
         Ok(origins) if !origins.is_empty() => {
             let origins: Vec<http::HeaderValue> = origins
@@ -202,13 +202,23 @@ fn cors_layer() -> CorsLayer {
                         .expect("invalid CORS_ALLOWED_ORIGINS value")
                 })
                 .collect();
-            CorsLayer::new()
+            Ok(CorsLayer::new()
                 .allow_origin(origins)
                 .allow_methods(Any)
-                .allow_headers(Any)
+                .allow_headers(Any))
         }
-        _ => CorsLayer::permissive(),
+        _ if allow_permissive_cors() => Ok(CorsLayer::permissive()),
+        _ => anyhow::bail!(
+            "CORS_ALLOWED_ORIGINS must be set for release builds; set ALLOW_PERMISSIVE_CORS=true only for local/dev runs"
+        ),
     }
+}
+
+fn allow_permissive_cors() -> bool {
+    cfg!(debug_assertions)
+        || std::env::var("ALLOW_PERMISSIVE_CORS")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
 }
 
 /// Drain the per-instance move counter into ControlStore once. At-most-once by design: the
