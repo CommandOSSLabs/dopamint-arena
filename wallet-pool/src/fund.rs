@@ -1,12 +1,15 @@
 //! Build and execute a fund PTB that splits the master's `Coin<T>` into
 //! per-recipient amounts and transfers them.
+//!
+//! When no single coin is large enough, multiple coins of the same type are
+//! merged first.
 
 use crate::error::{Error, Result};
 use crate::rpc::{ExecuteResponse, SuiRpc};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::Address;
-use sui_transaction_builder::{ObjectInput, TransactionBuilder};
+use sui_transaction_builder::{Argument, ObjectInput, TransactionBuilder};
 use wallet_pool_core::crypto::KeyPair;
 
 const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
@@ -32,8 +35,9 @@ pub struct FundOptions {
 /// Build, sign, and execute a single PTB that funds `opts.recipients` with
 /// `opts.amount_per_recipient` of `opts.coin_type`.
 ///
-/// For SUI the selected coin also pays gas. For other coin types a separate
-/// SUI gas coin is selected from the same master address.
+/// For SUI the selected coins also pay gas. For other coin types a separate
+/// SUI gas coin (or coins, merged if necessary) is selected from the same
+/// master address.
 pub async fn fund(
     rpc: &dyn SuiRpc,
     master_keypair: &KeyPair,
@@ -70,12 +74,10 @@ pub async fn fund(
         total_amount
     };
 
-    let selected_coin = coins
-        .into_iter()
-        .find(|c| c.balance >= required_coin_balance)
-        .ok_or_else(|| {
+    let selected_coins =
+        select_coins_for_amount(coins, required_coin_balance).ok_or_else(|| {
             Error::InsufficientFunds(format!(
-                "no {} coin with balance >= {}",
+                "no set of {} coins with aggregate balance >= {}",
                 opts.coin_type, required_coin_balance
             ))
         })?;
@@ -86,31 +88,25 @@ pub async fn fund(
     tx.set_gas_price(GAS_PRICE);
 
     let coin_arg = if is_sui {
-        tx.add_gas_objects([ObjectInput::owned(
-            object_id_from_str(&selected_coin.object_id)?,
-            selected_coin.version,
-            digest_from_str(&selected_coin.digest)?,
-        )]);
-        tx.gas()
+        add_gas_objects_from_coins(&mut tx, &selected_coins)?;
+        let gas_arg = tx.gas();
+        add_merge_command_if_needed(&mut tx, gas_arg, &selected_coins[1..]);
+        gas_arg
     } else {
         let gas_coins = rpc.get_coins(master_address, SUI_COIN_TYPE).await?;
-        let gas_coin = gas_coins
-            .into_iter()
-            .find(|c| c.balance >= GAS_BUDGET)
-            .ok_or_else(|| {
-                Error::InsufficientFunds(format!("no SUI gas coin with balance >= {}", GAS_BUDGET))
-            })?;
+        let selected_gas = select_coins_for_amount(gas_coins, GAS_BUDGET).ok_or_else(|| {
+            Error::InsufficientFunds(format!(
+                "no set of SUI coins with aggregate balance >= {}",
+                GAS_BUDGET
+            ))
+        })?;
+        add_gas_objects_from_coins(&mut tx, &selected_gas)?;
+        let gas_arg = tx.gas();
+        add_merge_command_if_needed(&mut tx, gas_arg, &selected_gas[1..]);
 
-        tx.add_gas_objects([ObjectInput::owned(
-            object_id_from_str(&gas_coin.object_id)?,
-            gas_coin.version,
-            digest_from_str(&gas_coin.digest)?,
-        )]);
-        tx.object(ObjectInput::owned(
-            object_id_from_str(&selected_coin.object_id)?,
-            selected_coin.version,
-            digest_from_str(&selected_coin.digest)?,
-        ))
+        let coin_arg = tx.object(coin_to_object_input(&selected_coins[0])?);
+        add_merge_command_if_needed(&mut tx, coin_arg, &selected_coins[1..]);
+        coin_arg
     };
 
     let amounts: Vec<_> = (0..opts.recipients.len())
@@ -146,6 +142,65 @@ pub async fn fund(
     }
 
     Ok(digest)
+}
+
+/// Select the smallest prefix of coins (sorted descending by balance) whose
+/// aggregate balance meets `amount`. Returns `None` if the total is insufficient.
+fn select_coins_for_amount(
+    coins: Vec<crate::rpc::Coin>,
+    amount: u64,
+) -> Option<Vec<crate::rpc::Coin>> {
+    let mut coins = coins;
+    coins.sort_by_key(|c| std::cmp::Reverse(c.balance));
+    let mut selected = Vec::new();
+    let mut sum = 0u64;
+    for coin in coins {
+        if sum >= amount {
+            break;
+        }
+        sum = sum.checked_add(coin.balance)?;
+        selected.push(coin);
+    }
+    if sum >= amount {
+        Some(selected)
+    } else {
+        None
+    }
+}
+
+fn coin_to_object_input(coin: &crate::rpc::Coin) -> Result<ObjectInput> {
+    Ok(ObjectInput::owned(
+        object_id_from_str(&coin.object_id)?,
+        coin.version,
+        digest_from_str(&coin.digest)?,
+    ))
+}
+
+fn add_gas_objects_from_coins(
+    tx: &mut TransactionBuilder,
+    coins: &[crate::rpc::Coin],
+) -> Result<()> {
+    let inputs: Vec<ObjectInput> = coins
+        .iter()
+        .map(coin_to_object_input)
+        .collect::<Result<_>>()?;
+    tx.add_gas_objects(inputs);
+    Ok(())
+}
+
+fn add_merge_command_if_needed(
+    tx: &mut TransactionBuilder,
+    target: Argument,
+    sources: &[crate::rpc::Coin],
+) {
+    if sources.is_empty() {
+        return;
+    }
+    let source_args: Vec<_> = sources
+        .iter()
+        .map(|c| tx.object(coin_to_object_input(c).expect("coin inputs already validated")))
+        .collect();
+    tx.merge_coins(target, source_args);
 }
 
 fn object_id_from_str(s: &str) -> Result<Address> {
@@ -232,7 +287,12 @@ mod tests {
                 owner: owner.into(),
                 coin_type: Some(coin_type.into()),
             });
-            Ok(state.coins.clone())
+            Ok(state
+                .coins
+                .iter()
+                .filter(|c| c.coin_type == coin_type)
+                .cloned()
+                .collect())
         }
 
         async fn execute_transaction(
@@ -279,11 +339,27 @@ mod tests {
     }
 
     fn sui_coin(balance: u64) -> Coin {
+        sui_coin_with_id(balance, 0x11)
+    }
+
+    fn sui_coin_with_id(balance: u64, id_byte: u8) -> Coin {
         Coin {
             coin_type: SUI_COIN_TYPE.into(),
-            object_id: "0x1111111111111111111111111111111111111111111111111111111111111111".into(),
+            object_id: format!("0x{id_byte:062x}"),
             version: 1,
             digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            balance,
+        }
+    }
+
+    fn usdc_coin(balance: u64, id_byte: u8) -> Coin {
+        Coin {
+            coin_type:
+                "0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC"
+                    .into(),
+            object_id: format!("0x{id_byte:062x}"),
+            version: 1,
+            digest: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into(),
             balance,
         }
     }
@@ -388,6 +464,139 @@ mod tests {
                 .iter()
                 .all(|c| c.method != "execute_transaction"),
             "execute_transaction should not be called"
+        );
+    }
+
+    #[tokio::test]
+    async fn fund_merges_multiple_coins_for_sui() {
+        let address = master_address();
+        let recipient = "0x2222222222222222222222222222222222222222222222222222222222222222";
+        // Required = 10M + 50M gas = 60M, so neither coin alone is enough.
+        let rpc = MockRpc::new(
+            vec![
+                sui_coin_with_id(40_000_000, 0x11),
+                sui_coin_with_id(40_000_000, 0x22),
+            ],
+            Some(ExecuteResponse {
+                digest: "merged".into(),
+                effects: None,
+            }),
+            false,
+        );
+
+        let opts = FundOptions {
+            coin_type: SUI_COIN_TYPE.into(),
+            amount_per_recipient: 10_000_000,
+            recipients: vec![recipient.into()],
+            await_effects: false,
+        };
+
+        let digest = fund(&rpc, &master_keypair(), &address, opts).await.unwrap();
+        assert_eq!(digest, "merged");
+
+        let transaction: sui_sdk_types::Transaction =
+            bcs::from_bytes(&rpc.recorded_execute().unwrap().0).unwrap();
+        let sui_sdk_types::TransactionKind::ProgrammableTransaction(ptb) = &transaction.kind else {
+            panic!("expected programmable transaction");
+        };
+        assert_eq!(
+            ptb.commands.len(),
+            3,
+            "expected merge_coins + split_coins + transfer_objects"
+        );
+        assert!(
+            matches!(ptb.commands[0], sui_sdk_types::Command::MergeCoins(_)),
+            "first command should merge coins"
+        );
+    }
+
+    #[tokio::test]
+    async fn fund_non_sui_coin_uses_separate_gas_and_merges_token_coins() {
+        let address = master_address();
+        let recipient = "0x2222222222222222222222222222222222222222222222222222222222222222";
+        let usdc_type =
+            "0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC";
+        // Required = 10M; neither USDC coin alone is enough.
+        let rpc = MockRpc::new(
+            vec![
+                usdc_coin(6_000_000, 0x33),
+                usdc_coin(6_000_000, 0x44),
+                sui_coin_with_id(100_000_000, 0x55),
+            ],
+            Some(ExecuteResponse {
+                digest: "usdc-fund".into(),
+                effects: None,
+            }),
+            false,
+        );
+
+        let opts = FundOptions {
+            coin_type: usdc_type.into(),
+            amount_per_recipient: 10_000_000,
+            recipients: vec![recipient.into()],
+            await_effects: false,
+        };
+
+        let digest = fund(&rpc, &master_keypair(), &address, opts).await.unwrap();
+        assert_eq!(digest, "usdc-fund");
+
+        let calls = rpc.calls();
+        let coin_types: Vec<_> = calls
+            .iter()
+            .filter(|c| c.method == "get_coins")
+            .map(|c| c.coin_type.as_deref())
+            .collect();
+        assert!(coin_types.contains(&Some(SUI_COIN_TYPE)));
+        assert!(coin_types.contains(&Some(usdc_type)));
+
+        let transaction: sui_sdk_types::Transaction =
+            bcs::from_bytes(&rpc.recorded_execute().unwrap().0).unwrap();
+        let sui_sdk_types::TransactionKind::ProgrammableTransaction(ptb) = &transaction.kind else {
+            panic!("expected programmable transaction");
+        };
+        assert!(
+            ptb.commands
+                .iter()
+                .any(|c| matches!(c, sui_sdk_types::Command::MergeCoins(_))),
+            "token coins should be merged"
+        );
+        assert!(
+            ptb.commands
+                .iter()
+                .any(|c| matches!(c, sui_sdk_types::Command::SplitCoins(_))),
+            "split_coins should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn fund_insufficient_aggregate_balance_fails() {
+        let address = master_address();
+        let recipient = "0x2222222222222222222222222222222222222222222222222222222222222222";
+        let rpc = MockRpc::new(
+            vec![usdc_coin(1_000, 0x66), usdc_coin(2_000, 0x77)],
+            Some(ExecuteResponse {
+                digest: "txdigest".into(),
+                effects: None,
+            }),
+            false,
+        );
+
+        let opts = FundOptions {
+            coin_type:
+                "0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC"
+                    .into(),
+            amount_per_recipient: 100_000_000,
+            recipients: vec![recipient.into()],
+            await_effects: false,
+        };
+
+        let err = fund(&rpc, &master_keypair(), &address, opts)
+            .await
+            .expect_err("should fail with insufficient aggregate funds");
+
+        assert!(
+            matches!(err, Error::InsufficientFunds(_)),
+            "expected InsufficientFunds, got {err}"
         );
     }
 }

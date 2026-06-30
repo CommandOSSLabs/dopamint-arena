@@ -131,13 +131,34 @@ let members = pool
 let recipients: Vec<String> = members.iter().map(|m| m.address.clone()).collect();
 let digest = handle
     .fund(FundOptions {
-        coin_type: Some("0x2::sui::SUI".into()),
+        coin_type: "0x2::sui::SUI".into(),
         amount_per_recipient: 1_000_000,
         recipients,
         await_effects: true,
     })
     .await?;
 ```
+
+#### Funding with non-SUI tokens
+
+`fund` accepts any fully-qualified coin type. The transaction fee is still paid in SUI, and if the master holds several small coins of the target type they are merged automatically before splitting.
+
+```rust
+let digest = handle
+    .fund(FundOptions {
+        coin_type: "0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC".into(),
+        amount_per_recipient: 1_000_000,
+        recipients,
+        await_effects: true,
+    })
+    .await?;
+```
+
+Requirements for non-SUI funding:
+
+- The master must own enough of the target coin to cover `amount_per_recipient * recipients.len()`.
+- The master must also own enough SUI to pay the gas budget (currently 50 MIST).
+- If no single coin is large enough, the library merges a prefix of the master's coins of that type before splitting.
 
 ### 4. Sign and execute a transaction as a member
 
