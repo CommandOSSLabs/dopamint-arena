@@ -55,8 +55,9 @@ bower_components
 # Compiled binary addons (https://nodejs.org/api/addons.html)
 build/Release
 
-# Dependency directories
-node_modules/
+# Dependency directories (no trailing slash: also ignores node_modules symlinks,
+# which pnpm worktrees create and which a trailing-slash pattern would miss)
+node_modules
 jspm_packages/
 
 # This repo uses pnpm exclusively — prevent accidental npm/yarn/bun lockfiles

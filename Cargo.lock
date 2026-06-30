@@ -1466,6 +1466,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bot-fleet"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fleet-core",
+ "futures-util",
+ "getrandom 0.2.17",
+ "hex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tracing",
+ "tunnel-blackjack",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2894,7 +2913,9 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "rayon",
+ "sui-tunnel-anchor",
  "sysinfo",
+ "tokio",
  "tunnel-api-credits",
  "tunnel-battleship",
  "tunnel-blackjack",
@@ -2905,6 +2926,29 @@ dependencies = [
  "tunnel-cross",
  "tunnel-harness",
  "tunnel-payments",
+ "tunnel-quantum-poker",
+ "tunnel-telemetry",
+ "tunnel-tic-tac-toe",
+ "tunnel-world-canvas",
+]
+
+[[package]]
+name = "fleet-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tunnel-battleship",
+ "tunnel-blackjack",
+ "tunnel-bomb-it",
+ "tunnel-caro",
+ "tunnel-core",
+ "tunnel-cross",
+ "tunnel-harness",
  "tunnel-quantum-poker",
  "tunnel-tic-tac-toe",
  "tunnel-world-canvas",
@@ -2964,6 +3008,21 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "foreign-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
+dependencies = [
+ "foreign-types-shared",
+]
+
+[[package]]
+name = "foreign-types-shared"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "form_urlencoded"
@@ -4517,6 +4576,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "native-tls"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87de3442987e9dbec73158d5c715e7ad9072fda936bb03d19d7fa10e00520f0e"
+dependencies = [
+ "libc",
+ "log",
+ "openssl",
+ "openssl-probe 0.1.6",
+ "openssl-sys",
+ "schannel",
+ "security-framework 2.11.1",
+ "security-framework-sys",
+ "tempfile",
+]
+
+[[package]]
 name = "neptune"
 version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4809,6 +4885,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openssl"
+version = "0.10.74"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24ad14dd45412269e1a30f52ad8f0664f0f4f4a89ee8fe28c3b3527021ebb654"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "foreign-types",
+ "libc",
+ "once_cell",
+ "openssl-macros",
+ "openssl-sys",
+]
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "openssl-probe"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4819,6 +4921,18 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.110"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a9f0075ba3c21b09f8e8b2026584b1d18d49388648f2fbbf3c97ea8deced8e2"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "outref"
@@ -7287,6 +7401,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sui-tunnel-anchor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bcs 0.2.1",
+ "bech32",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sui-crypto 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sui-rpc 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sui-sdk-types 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
+ "tonic",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "sui-types"
 version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui.git?branch=testnet#ff1fe0ec455153707136cffd0dc77dfb77ba9ad5"
@@ -7632,6 +7768,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-native-tls"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+dependencies = [
+ "native-tls",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-postgres"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7726,7 +7872,9 @@ checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
 dependencies = [
  "futures-util",
  "log",
+ "native-tls",
  "tokio",
+ "tokio-native-tls",
  "tungstenite 0.24.0",
 ]
 
@@ -8054,6 +8202,7 @@ dependencies = [
  "http 1.4.2",
  "httparse",
  "log",
+ "native-tls",
  "rand 0.8.6",
  "sha1 0.10.6",
  "thiserror 1.0.69",
@@ -8092,6 +8241,7 @@ name = "tunnel-battleship"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tokio",
  "tunnel-core",
  "tunnel-harness",
@@ -8127,6 +8277,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "tokio",
  "tunnel-core",
  "tunnel-harness",
@@ -8188,6 +8339,7 @@ dependencies = [
  "bcs 0.2.1",
  "dotenvy",
  "ed25519-dalek",
+ "fleet-core",
  "fred",
  "futures",
  "hex",
@@ -8207,7 +8359,12 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "tunnel-core",
+ "tunnel-harness",
  "uuid",
+ "wallet-pool",
+ "wallet-pool-core",
+ "wallet-pool-s3",
  "wiremock",
 ]
 
@@ -8228,10 +8385,15 @@ name = "tunnel-quantum-poker"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
+
+[[package]]
+name = "tunnel-telemetry"
+version = "0.1.0"
 
 [[package]]
 name = "tunnel-tic-tac-toe"

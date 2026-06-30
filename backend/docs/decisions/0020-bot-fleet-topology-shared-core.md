@@ -2,7 +2,7 @@
 
 - **Status**: Proposed
 - **Date**: 2026-06-27
-- **Refs**: supersedes the self-play hot path of [0001](0001-arena-baseline-architecture.md); relates to [0011](0011-local-first-pairing.md), [0012](0012-arena-attract-cabinet-seam.md)
+- **Refs**: supersedes the self-play hot path of [0001](../../../docs/decisions/0001-arena-baseline-architecture.md); relates to [0011](../../../docs/decisions/0011-local-first-pairing.md), [0012](../../../docs/decisions/0012-arena-attract-cabinet-seam.md)
 
 ## Context
 

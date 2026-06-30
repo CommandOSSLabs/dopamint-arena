@@ -54,6 +54,7 @@ pub struct TicTacToeState {
 pub struct TicTacToeMove {
     pub cell: u8,
     /// Per-move salt, >= 16 bytes (enforced by compute_commitment).
+    #[serde(with = "tunnel_harness::wire_hex::bytes")]
     pub salt: Vec<u8>,
 }
 
@@ -516,5 +517,31 @@ mod tests {
         assert!(proto
             .encode_state(&state)
             .starts_with(b"sui_tunnel::proto::tic_tac_toe.series.v2"));
+    }
+}
+
+#[cfg(test)]
+mod move_wire_parity {
+    use super::*;
+
+    // The relayed move is JSON; the FE `tttMoveCodec` sends `{cell:<number>, salt:"<bare-hex>"}`
+    // (lowercase hex, NO 0x). The bot's `TicTacToeMove` serde MUST match or the move loop can't decode.
+    // Pins the bare-hex contract (the salt serde regression guard).
+    #[test]
+    fn move_json_matches_fe_ttt_move_codec() {
+        let m = TicTacToeMove {
+            cell: 4,
+            salt: vec![0xab; 16],
+        };
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({ "cell": 4, "salt": "ab".repeat(16) }),
+        );
+        // Decodes the FE's exact bytes (bare hex); also tolerates an optional 0x prefix.
+        let parsed: TicTacToeMove =
+            serde_json::from_value(serde_json::json!({ "cell": 0, "salt": "00".repeat(16) }))
+                .unwrap();
+        assert_eq!(parsed.cell, 0);
+        assert_eq!(parsed.salt, vec![0u8; 16]);
     }
 }

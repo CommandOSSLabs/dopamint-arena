@@ -1,5 +1,6 @@
 use super::{play_with_strategies, CREATED_AT, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::FrameCodecKind;
+use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::{play_protocol_match_with_strategies, MatchResult, SeatKit};
 use tunnel_blackjack::duel::BlackjackDuel;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
@@ -11,17 +12,46 @@ pub(crate) fn play_bet(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     match codec {
-        FrameCodecKind::Json => play_bet_with_codec::<JsonFrameCodec>(card_seed, kit, tunnel_id),
-        FrameCodecKind::Bcs => play_bet_with_codec::<BcsFrameCodec>(card_seed, kit, tunnel_id),
-        FrameCodecKind::Postcard => {
-            play_bet_with_codec::<PostcardFrameCodec>(card_seed, kit, tunnel_id)
-        }
+        FrameCodecKind::Json => play_bet_with_codec::<JsonFrameCodec>(
+            card_seed,
+            kit,
+            tunnel_id,
+            anchor_mode,
+            sui_context,
+            transcript_recorder,
+        ),
+        FrameCodecKind::Bcs => play_bet_with_codec::<BcsFrameCodec>(
+            card_seed,
+            kit,
+            tunnel_id,
+            anchor_mode,
+            sui_context,
+            transcript_recorder,
+        ),
+        FrameCodecKind::Postcard => play_bet_with_codec::<PostcardFrameCodec>(
+            card_seed,
+            kit,
+            tunnel_id,
+            anchor_mode,
+            sui_context,
+            transcript_recorder,
+        ),
     }
 }
 
-fn play_bet_with_codec<C>(card_seed: Option<u64>, kit: &SeatKit, tunnel_id: &str) -> MatchResult
+fn play_bet_with_codec<C>(
+    card_seed: Option<u64>,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
+) -> MatchResult
 where
     C: FrameCodec<BjMove> + Default,
 {
@@ -35,6 +65,9 @@ where
         DEFAULT_BALANCE,
         CREATED_AT,
         MAX_MOVES,
+        anchor_mode,
+        sui_context,
+        transcript_recorder,
         |a, b| {
             if card_seed.is_some() {
                 a.with_state_mut(|s| s.card_seed = card_seed);
@@ -49,12 +82,18 @@ pub(crate) fn play_duel(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     play_with_strategies(
         BlackjackDuel,
         BlackjackDuelStrategy,
         BlackjackDuelStrategy,
         codec,
+        anchor_mode,
+        sui_context,
+        transcript_recorder,
         card_seed.unwrap_or(0),
         kit,
         tunnel_id,
@@ -69,6 +108,9 @@ pub(crate) fn play_v2(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
@@ -76,6 +118,9 @@ pub(crate) fn play_v2(
         BlackjackV2Strategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
         BlackjackV2Strategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,
+        anchor_mode,
+        sui_context,
+        transcript_recorder,
         seed,
         kit,
         tunnel_id,

@@ -26,6 +26,9 @@ export interface BackendArgs {
   // Secrets Manager ARN for the Enoki PRIVATE api key, injected as ENOKI_API_KEY via ECS
   // `secrets`. Omitted => Enoki sponsorship is off and the settler is the sole gas source.
   enokiApiKeySecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the wallet-pool passphrase (PR #124), injected as WALLET_POOL_ACCESS_VALUE
+  // via ECS `secrets`. Omitted => the pool can't open and the arena opener degrades to Noop.
+  walletPoolAccessSecretArn?: pulumi.Input<string>;
   // Ollama sidecar for the chat-v2 feature. Defaults off so existing tests and
   // small environments keep the current 1024/2048 task size.
   ollamaEnabled?: pulumi.Input<boolean>;
@@ -50,11 +53,13 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       pulumi.output(args.settlerKeySecretArn ?? undefined),
       pulumi.output(args.faucetAdminTokenSecretArn ?? undefined),
       pulumi.output(args.enokiApiKeySecretArn ?? undefined),
+      pulumi.output(args.walletPoolAccessSecretArn ?? undefined),
     ])
-    .apply(([settler, faucetAdminToken, enoki]) => ({
+    .apply(([settler, faucetAdminToken, enoki, walletPoolAccess]) => ({
       settler,
       faucetAdminToken,
       enoki,
+      walletPoolAccess,
     }));
   const corsAllowedOrigins = pulumi.output(
     args.corsAllowedOrigins ?? undefined,
@@ -161,6 +166,32 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
 
         if (ollamaEnabled) {
           backendEnv.push(
+            // Co-located arena fleet (ADR-0027): bots spawned on demand, capped at COUNT concurrent
+            // matches per served game. Sized to the funded wallet-pool prefix (~5k members) — each
+            // concurrent match consumes one funded seat-B wallet, so keep COUNT x served-games <=
+            // WALLET_POOL_FUNDED_COUNT. GAMES is the served-set gate (only games with a wired+funded
+            // path). Wallet-pool wiring (WALLET_POOL_* + the passphrase secret + S3 task-role access)
+            // is a separate change.
+            { name: "FLEET_COLOCATED_COUNT", value: "5000" },
+            {
+              name: "FLEET_COLOCATED_GAMES",
+              value:
+                "quantum_poker,bomb_it,chicken_cross,world_canvas,blackjack,tic_tac_toe,caro,battleship",
+            },
+            // Funded seat-B wallet pool (PR #124), non-secret env. The opener self-signs each open as
+            // a checked-out funded member (replaces FLEET_BOT_KEY). REQUIRES, additionally: the
+            // passphrase as a Secrets Manager secret (WALLET_POOL_ACCESS_VALUE via backendSecrets) and
+            // s3:GetObject on the bucket granted to the task role. Without those the open fails and the
+            // opener degrades to Noop (backend stays up). FUNDED_COUNT = the funded prefix size.
+            { name: "WALLET_POOL_ID", value: "wp_cjmok4DQgZDpAooCGNjmqg" },
+            {
+              name: "WALLET_POOL_S3_BUCKET",
+              value: "dev-env-dopamint-wallet-pool",
+            },
+            { name: "WALLET_POOL_FUNDED_COUNT", value: "5000" },
+            // The in-container AWS SDK (S3WalletPoolStore::from_env) needs an explicit region; ECS
+            // doesn't auto-inject one. Credentials still come from the task role. Bucket is us-east-1.
+            { name: "AWS_REGION", value: aws.config.region ?? "us-east-1" },
             { name: "OLLAMA_URL", value: "http://localhost:11434" },
             { name: "OLLAMA_MODEL", value: ollamaModel },
           );
@@ -185,6 +216,12 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           backendSecrets.push({
             name: "ENOKI_API_KEY",
             valueFrom: secretArns.enoki,
+          });
+        }
+        if (secretArns.walletPoolAccess) {
+          backendSecrets.push({
+            name: "WALLET_POOL_ACCESS_VALUE",
+            valueFrom: secretArns.walletPoolAccess,
           });
         }
 

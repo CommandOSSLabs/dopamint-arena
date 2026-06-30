@@ -111,6 +111,32 @@ test("queued-only client re-issues queue.join on reconnect", async () => {
   );
 });
 
+test("joinMatch sends arena.join with the matchId and resolves on its match.found", async () => {
+  const { mp } = mkClient();
+  await connect(mp);
+  const ws = FakeWebSocket.instances[0];
+  const got = mp.joinMatch("arena_7");
+  // The frame sent is arena.join carrying the matchId (ADR-0027/0028), NOT queue.join.
+  const sent = ws.sent.map((s) => JSON.parse(s));
+  assert.equal(
+    sent.some((m) => m.type === "arena.join" && m.matchId === "arena_7"),
+    true,
+    "expected an arena.join frame for arena_7",
+  );
+  // The server replies with match.found for the bound match; the waiter resolves with it.
+  ws.recv({
+    type: "match.found",
+    matchId: "arena_7",
+    role: "A",
+    opponentWallet: "0xbot",
+    game: "quantum_poker",
+  });
+  const info = await got;
+  assert.equal(info.matchId, "arena_7");
+  assert.equal(info.role, "A");
+  assert.equal(info.game, "quantum_poker");
+});
+
 test("relay handlers and match waiters survive the socket swap", async () => {
   const { mp } = mkClient();
   await connect(mp);

@@ -4,11 +4,13 @@
 //! harness seams.
 pub mod error;
 pub mod types;
-pub use error::{AnchorError, FrameTransportError, HarnessError, ProtocolError};
+pub use error::{FrameTransportError, HarnessError, ProtocolError, TunnelAnchorError};
 pub use types::{Balances, MoveStrategyContext, Seat, TunnelContext};
 
 pub mod protocol;
 pub use protocol::Protocol;
+
+pub mod wire_hex;
 
 pub mod frame;
 pub use frame::{
@@ -29,7 +31,20 @@ pub mod move_strategy;
 pub use move_strategy::{random::RandomMoveStrategy, MoveStrategy};
 
 pub mod party_driver;
-pub use party_driver::{DriverOutcome, PartyDriver};
+pub use party_driver::{DriverOutcome, PartyDriver, SeatParts};
 
 pub mod observer;
 pub use observer::{DriverObserver, DriverStart, MoveCommitted};
+
+pub mod transcript;
+pub use transcript::{
+    BcsTranscriptCodec, InMemoryTranscriptRecorder, JsonTranscriptCodec, NullTranscriptRecorder,
+    PostcardTranscriptCodec, Transcript, TranscriptCodec, TranscriptEntry, TranscriptError,
+    TranscriptRecorder,
+};
+
+pub mod anchor;
+pub use anchor::{
+    InMemoryAnchor, OpenedTunnel, SettledTunnel, SettlementMode, TranscriptSettleEntry,
+    TunnelAnchor, TunnelOpenRequest, TunnelSettleRequest,
+};

@@ -28,6 +28,27 @@ pub struct AppState {
     pub pairing: crate::stats_counter::MatchPairingMetrics,
     /// Shared transcript for the bot-vs-bot live chat feed, fanned out via SSE.
     pub chat: crate::chat_store::ChatTranscriptStore,
+    /// Arena bot pool for one-signature allocation (ADR-0026), backing on-demand co-located seat-fill.
+    /// Per-instance, in-memory.
+    pub fleet: crate::fleet::BotPool,
+    /// On-chain tunnel-open seam for the arena 1a flow (ADR-0028): the fleet creates + funds seat B at
+    /// allocate so the user's open is deposit-only. `SuiArenaOpener` when the wallet pool + on-chain
+    /// config are set, else `Noop` (dev/test).
+    pub arena_opener: std::sync::Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener>,
+    /// Binds the user's WS conn to its co-located bot's bus conn for an allocated arena match
+    /// (ADR-0027/0028), completing the `MatchRecord` so the relay can route between them.
+    pub arena: crate::fleet::arena_rendezvous::ArenaRendezvous,
+    /// Max co-located bots spawned on demand per game (config `FLEET_COLOCATED_COUNT`). The arena
+    /// admission ceiling: `reserve_or_spawn` spawns up to this many concurrent matches per game, then
+    /// returns nothing. `0` (default) serves no co-located bots.
+    pub arena_fleet_count: u32,
+    /// Games the co-located fleet serves (config `FLEET_COLOCATED_GAMES`). A game not in this set has
+    /// an effective cap of 0 — the trusted-subset gate (a `play_game` arm may exist before it's live).
+    pub arena_fleet_games: std::collections::HashSet<String>,
+    /// Funded seat-B identity source (PR #124): `Some` when `WALLET_POOL_ID` is configured, else
+    /// `None` (on-demand bots use the deterministic placeholder address). Shared (`Arc`) with the
+    /// `SuiArenaOpener`, which signs each open as the checked-out member.
+    pub wallet_pool: Option<std::sync::Arc<crate::wallet::WalletPoolSource>>,
     /// Whole-token MTPS one public-faucet pull mints (config `FAUCET_USER_AMOUNT`).
     pub faucet_user_amount: u64,
     /// Whole-token MTPS the internal faucet mints by default (config `FAUCET_INTERNAL_AMOUNT`);
@@ -49,6 +70,12 @@ impl AppState {
     /// `main.rs`: `InMemoryControlStore`, `InMemoryMpStore`, `LocalBus`. No network I/O; always
     /// synchronous and deterministic.
     pub fn in_memory_for_test() -> SharedState {
+        Self::in_memory_with_arena_fleet(0, Vec::new())
+    }
+
+    /// Like [`in_memory_for_test`] but with the co-located arena fleet configured, so tests can
+    /// exercise on-demand seat-fill (`reserve_or_spawn`) through `arena_allocate`.
+    pub fn in_memory_with_arena_fleet(count: u32, games: Vec<String>) -> SharedState {
         use std::sync::Arc;
 
         use crate::store::memory::{InMemoryControlStore, InMemoryMpStore, LocalBus};
@@ -71,6 +98,12 @@ impl AppState {
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
+            arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+            arena_fleet_count: count,
+            arena_fleet_games: games.into_iter().collect(),
+            wallet_pool: None,
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,

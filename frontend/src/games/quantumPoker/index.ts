@@ -11,4 +11,7 @@ register({
   icon: "🎴",
   image: "/games/poker.png",
   Window: QuantumPokerModeWindow,
+  // Wired into the co-located fleet (Rust↔TS parity verified, plays E2E). Underscore form = the
+  // backend profile_for/FLEET_COLOCATED id; the centralized batched entry deposits its seat A.
+  arenaGameId: "quantum_poker",
 });

@@ -244,6 +244,54 @@ test("rejects all pending when no wallet deps are available", async () => {
   await assert.rejects(() => batcher.request(req("0xA")), /no wallet/i);
 });
 
+test("deposit mode funds only seat A and coalesces into one PTB", async () => {
+  // The genuine-two-party arena JOIN (ADR-0025): the fleet already created the tunnel + funded
+  // seat B, so the user only deposits seat A into the existing tunnel. Proves the deposit path
+  // coalesces like self-play, splits only the seat-A stake (Σ amount, never Σ (a+b)), and resolves
+  // each request to its own pre-opened tunnel.
+  let signs = 0;
+  let stakeTotal: bigint | null = null;
+  const deps = fakeDeps({ onSign: () => (signs += 1) });
+  (deps as any).selectStakeCoin = async (need: bigint) => {
+    stakeTotal = need;
+    return "0xcoin";
+  };
+
+  const depositReq = (a: string, tunnel: string): TunnelOpenRequest => ({
+    partyA: party(a),
+    partyB: party(PARTY_B_ADDR),
+    aAmount: 300n,
+    bAmount: 700n, // must be IGNORED in deposit mode (the fleet funded seat B)
+    mode: "deposit",
+    tunnelId: tunnel,
+  });
+  const batcher = new TunnelOpenBatcher(() => deps, {
+    flushDelayMs: 0,
+    maxBatch: 16,
+  });
+  const [a, b] = await Promise.all([
+    batcher.request(depositReq("0xA", "tunnel-A")),
+    batcher.request(depositReq("0xB", "tunnel-B")),
+  ]);
+
+  assert.equal(signs, 1, "two deposits → one PTB");
+  assert.equal(
+    stakeTotal,
+    600n,
+    "deposit mode funds only seat A (2×300), never 2×(300+700)",
+  );
+  assert.equal(
+    a,
+    "tunnel-A",
+    "each request resolves to its own pre-opened tunnel",
+  );
+  assert.equal(
+    b,
+    "tunnel-B",
+    "each request resolves to its own pre-opened tunnel",
+  );
+});
+
 test("requests arriving within the debounce window share one flush", async () => {
   let signs = 0;
   const deps = fakeDeps({ onSign: () => (signs += 1) });

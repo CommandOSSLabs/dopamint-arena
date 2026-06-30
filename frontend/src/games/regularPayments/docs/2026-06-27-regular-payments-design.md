@@ -435,7 +435,7 @@ tunnel.propose({ from: "A", amount: priceMtps }, ...)
 - `frontend/src/designSystem/` — token tables (`tokens.ts`), live gallery (`DesignSystemPage.tsx` at `/design-system`)
 - `frontend/src/styles/index.css` — global `--wal-*` tokens and `.wal-*` helper classes
 - `docs/guide/frontend-integration.md` — `/v1/mp` relay contract
-- `docs/decisions/0020-bot-fleet-topology-shared-core.md` — bot fleet direction
+- `backend/docs/decisions/0020-bot-fleet-topology-shared-core.md` — bot fleet direction
 - `docs/design/frontend-tunnel-client-worker.md` — browser worker (remote branch; optional later)
 - `sui-tunnel-ts/src/protocol/payments.ts` — protocol reference
 - ADR-0010 (MTPS), ADR-0007 (settle), ADR-0013 (address balance stake)

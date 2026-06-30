@@ -30,6 +30,9 @@ export function makeWorldCanvasPvpResumeAdapter(
         digest: toHex(s.digest),
         cells: s.cells,
         paintCount: s.paintCount,
+        // Co-signed update count drives the auto-settle terminal — persist it so a resumed seat
+        // doesn't restart the cap count and diverge from the peer on when to settle.
+        updates: s.updates,
         // The per-seat idempotency cursor: persisted so a resumed seat keeps skipping cells it
         // already folded (it isn't recoverable from the digest alone).
         appliedSeqA: s.appliedSeqA,
@@ -44,6 +47,7 @@ export function makeWorldCanvasPvpResumeAdapter(
         digest: fromHex(o.digest as string),
         cells: (o.cells as PvpCanvasState["cells"]) ?? [],
         paintCount: (o.paintCount as number) ?? 0,
+        updates: (o.updates as number) ?? 0,
         appliedSeqA: (o.appliedSeqA as number) ?? 0,
         appliedSeqB: (o.appliedSeqB as number) ?? 0,
         winner: null,

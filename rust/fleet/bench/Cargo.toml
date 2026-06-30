@@ -11,8 +11,10 @@ name = "fleet-bench"
 path = "src/main.rs"
 
 [dependencies]
+tunnel-telemetry = { path = "../../engine/telemetry" }
 tunnel-core = { path = "../../engine/tunnel-core" }
 tunnel-harness = { path = "../../engine/tunnel-harness" }
+sui-tunnel-anchor = { path = "../../engine/sui-tunnel-anchor" }
 tunnel-api-credits = { path = "../../protocols/api-credits" }
 tunnel-battleship = { path = "../../protocols/battleship" }
 tunnel-blackjack = { path = "../../protocols/blackjack" }
@@ -28,6 +30,7 @@ rayon.workspace = true
 clap = { workspace = true }
 sysinfo.workspace = true
 getrandom.workspace = true
+tokio = { workspace = true }
 
 [dev-dependencies]
 hex.workspace = true

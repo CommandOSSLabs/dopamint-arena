@@ -17,7 +17,10 @@ import { rollingDigest, protocolDomain } from "./Protocol";
 import type { Protocol, Party, Balances, ProtocolContext } from "./Protocol";
 import { blake2b256 } from "../core/crypto";
 
-const NAME = "world-canvas-pvp";
+// MUST equal the Rust `WorldCanvasStroke` protocol name (rust/protocols/world-canvas) so the
+// co-signed genesis digest `blake2b256(protocolDomain(NAME))` is byte-identical on both sides —
+// the fleet bot (party B) co-signs against this. Renaming desyncs any in-flight human PvP match.
+const NAME = "world_canvas.stroke.v1";
 const NUM_COLORS = 16;
 /** Cells per chunk edge — matches the canonical protocol + the solo wall (single grid). */
 export const CHUNK_SIZE = 256;
@@ -27,6 +30,16 @@ const MAX_RENDER_CELLS = 8000;
 export const MAX_BATCH_CELLS = 128;
 /** Cells the bot lays down per co-sign — a short flowing run, not a single dot. */
 const BOT_RUN = 8;
+/**
+ * Auto-settle ceiling: the canvas is terminal once this many CO-SIGNED UPDATES (tunnel moves) have
+ * applied — the canonical per-tunnel update cap. worldCanvas has no winner, so without it the tunnel
+ * would grow unbounded and never cooperatively close. Counted by `updates`: incremented once per move
+ * that folds ≥1 FRESH cell, so it's replay-safe (a re-sent move folds nothing → never double-counts)
+ * and reconstructed identically on both parties — NOT in `encodeState`, so terminating on it stays
+ * co-sign-safe. MUST equal the Rust `WORLD_CANVAS_UPDATE_CAP`, and stay ≤ the harness `MAX_MOVES`, so
+ * the cooperative `isTerminal` fires before the unilateral max-moves backstop.
+ */
+export const WORLD_CANVAS_UPDATE_CAP = 100_000;
 
 /**
  * Live palette index the autopilot paints in — set from THIS player's toolbar (see
@@ -88,6 +101,11 @@ export interface PvpCanvasState {
   cells: PvpCell[];
   /** Monotonic count of cells folded (drives the GLOBAL `PvpCell.seq`). Render-only. */
   paintCount: number;
+  /** Co-signed UPDATES applied — incremented once per move that folds ≥1 fresh cell (so a replayed
+   *  move never double-counts). The auto-settle terminal reads this (see {@link WORLD_CANVAS_UPDATE_CAP}).
+   *  Reconstructed identically on both parties from the move stream; NOT in `encodeState`, but persisted
+   *  for resume. */
+  updates: number;
   /** Highest per-seat seq folded for each seat — the idempotency cursor. Parity-critical:
    *  both parties advance it identically, so the seq gate decides fold/skip the SAME way on
    *  both sides. Reconstructed only from the applied move stream (not from the digest), so it
@@ -172,6 +190,7 @@ export class WorldCanvasPvpProtocol implements Protocol<
       digest: blake2b256(protocolDomain(NAME)),
       cells: [],
       paintCount: 0,
+      updates: 0,
       appliedSeqA: 0,
       appliedSeqB: 0,
       winner: null,
@@ -224,6 +243,9 @@ export class WorldCanvasPvpProtocol implements Protocol<
       digest,
       cells: capped,
       paintCount,
+      // One co-signed update iff this move folded ≥1 fresh cell — so a replayed move (all cells
+      // skipped by the seq gate) never advances it, keeping `updates` identical on both parties.
+      updates: paintCount > state.paintCount ? state.updates + 1 : state.updates,
       appliedSeqA,
       appliedSeqB,
     };
@@ -237,9 +259,11 @@ export class WorldCanvasPvpProtocol implements Protocol<
     return { a: state.balanceA, b: state.balanceB };
   }
 
-  /** Endless co-draw — never terminal (no winner, no auto-settle; closing tears down). */
-  isTerminal(): boolean {
-    return false;
+  /** Terminal once the canvas hits the co-signed update cap — the auto-settle boundary for this
+   *  winner-less game (see {@link WORLD_CANVAS_UPDATE_CAP}). Both seats advance `updates` identically,
+   *  so they reach it on the same move and the cooperative close fires in lockstep. */
+  isTerminal(state: PvpCanvasState): boolean {
+    return state.updates >= WORLD_CANVAS_UPDATE_CAP;
   }
 
   /** Bot autopilot: continue THIS seat's stroke as a bounded random WALK, emitting a short

@@ -49,6 +49,10 @@ function readIntent(
   return m ?? undefined;
 }
 
+/** Backend arena/`profile_for` id (underscore form of the registry id). Single source of truth for
+ *  both the engine's arena consumer (the spec below) and `GameModule.arenaGameId` (index.ts). */
+export const WORLD_CANVAS_ARENA_GAME_ID = "world_canvas";
+
 const usePvpMatch = createPvpMatchHook<
   PvpCanvasState,
   PvpPaintMove,
@@ -56,6 +60,7 @@ const usePvpMatch = createPvpMatchHook<
   PvpCell[]
 >({
   game: "world-canvas",
+  arenaGameId: WORLD_CANVAS_ARENA_GAME_ID,
   stepMs: 80,
   stake: 1n, // 1 MIST per seat — free/draw, never shifts (each human funds its own seat)
   makeProtocol: () => new WorldCanvasPvpProtocol(),

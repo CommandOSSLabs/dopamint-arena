@@ -5,6 +5,7 @@ mod chat_store;
 mod config;
 mod enoki;
 mod error;
+mod fleet;
 mod mp;
 mod ollama;
 mod routes;
@@ -13,6 +14,7 @@ mod stats;
 mod stats_counter;
 mod store;
 mod sui;
+mod wallet;
 mod walrus;
 
 use std::sync::Arc;
@@ -120,6 +122,58 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(750);
+
+    // Funded seat-B wallet pool (PR #124): opened once if WALLET_POOL_ID is set, else None (bots use
+    // the placeholder identity, the off-chain/Noop dev path). Same RPC + network as the settler. A
+    // failed open (bad S3/passphrase/IAM) must NOT take down the whole backend — only arena opens lose
+    // funded seat-B; faucet/settle/stats stay up. Degrade to None (Noop opener) and log loudly.
+    let wallet_pool = match crate::wallet::build(
+        config.wallet_pool_id.as_deref(),
+        config.wallet_pool_access_value.as_deref(),
+        config.wallet_pool_funded_count,
+        config.sui_rpc_url.as_deref().unwrap_or_default(),
+        if config.sui_network == "mainnet" {
+            wallet_pool::Network::Mainnet
+        } else {
+            wallet_pool::Network::Testnet
+        },
+    )
+    .await
+    {
+        Ok(pool) => pool.map(Arc::new),
+        Err(e) => {
+            tracing::error!(
+                "wallet pool open failed — arena opener falls back to Noop/placeholder: {e:#}"
+            );
+            None
+        }
+    };
+
+    // Arena opener (ADR-0028): the real `SuiArenaOpener` — each open self-signs create + fund-seat-B as
+    // the checked-out pool member — when the wallet pool + on-chain package/RPC are configured; else
+    // `Noop` so the allocate contract + FE deposit path still work for tests/dev without the pool.
+    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> = match (
+        &wallet_pool,
+        &config.sui_rpc_url,
+        &config.package_id,
+    ) {
+        (Some(pool), Some(rpc), Some(pkg)) => Arc::new(
+            crate::fleet::arena_opener::SuiArenaOpener::new(
+                rpc.clone(),
+                pkg,
+                &config.coin_type,
+                pool.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
+        ),
+        _ => {
+            tracing::info!(
+                    "arena opener: Noop (set WALLET_POOL_ID + SUI_RPC_URL + TUNNEL_PACKAGE_ID for real on-chain opens)"
+                );
+            Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
+        }
+    };
+
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
@@ -133,6 +187,12 @@ async fn main() -> anyhow::Result<()> {
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
+        fleet: crate::fleet::BotPool::default(),
+        arena_opener,
+        arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+        arena_fleet_count: config.colocated_fleet_count,
+        arena_fleet_games: config.colocated_fleet_games.iter().cloned().collect(),
+        wallet_pool,
         faucet_user_amount: config.faucet_user_amount,
         faucet_internal_amount: config.faucet_internal_amount,
         faucet_cooldown_secs: config.faucet_cooldown_secs,
@@ -141,6 +201,9 @@ async fn main() -> anyhow::Result<()> {
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
+    // Co-located fleet (ADR-0027): bots are spawned on demand by `arena_allocate`
+    // (`reserve_or_spawn`), bounded by `arena_fleet_count`/`arena_fleet_games` on `AppState` — no
+    // startup pre-spawn. Inert unless `FLEET_COLOCATED_COUNT > 0`.
     // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
     // live feed reflects real settlements; without this the stats SSE never emits any.
     sui::spawn_event_indexer(state.clone());
@@ -185,6 +248,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
+        // Arena one-signature flow (ADR-0026): reserve warm bots, then map opened tunnels back to
+        // each bot so it deposits its seat. `/v1/fleet` is the bot's control socket into the pool.
+        .route("/v1/arena/allocate", post(routes::arena_allocate))
+        .route("/v1/arena/opened", post(routes::arena_opened))
+        .route("/v1/fleet", get(crate::fleet::ws::fleet_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
         .with_state(state);
