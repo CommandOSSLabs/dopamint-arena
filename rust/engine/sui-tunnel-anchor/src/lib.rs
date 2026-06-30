@@ -37,7 +37,7 @@ const ED25519_SCHEME_FLAG: u8 = 0x00;
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const MAX_SPONSORED_OPEN_BATCH_SIZE: usize = 255;
-const DEFAULT_DIRECT_GAS_BUDGET_MIST: u64 = 100_000_000;
+const DEFAULT_DIRECT_GAS_BUDGET_MIST: u64 = 1_000_000_000;
 
 /// Accumulated gas spend (MIST) split by who paid: the funder wallet
 /// (`SingleFunder`) or the backend sponsor.
@@ -3003,6 +3003,11 @@ mod tests {
             TransactionKind::ProgrammableTransaction(ptb) => ptb,
             other => panic!("expected PTB, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn direct_ptb_default_gas_budget_is_large_enough_for_batches() {
+        assert!(DEFAULT_DIRECT_GAS_BUDGET_MIST >= 1_000_000_000);
     }
 
     #[test]
