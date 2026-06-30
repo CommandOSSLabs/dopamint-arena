@@ -551,8 +551,8 @@ mod tests {
     use super::*;
     use crate::{PokerPhase, ANTE, SLOT_COUNT};
     use tunnel_harness::{
-        Balances, InMemoryFrameTransport, LocalSigner, PartyDriver, PartyRuntime, Protocol, Signer,
-        TunnelContext,
+        Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, NullTranscriptRecorder,
+        PartyDriver, Protocol, SeatParts, Signer, TunnelContext,
     };
 
     fn ctx() -> TunnelContext {
@@ -694,21 +694,18 @@ mod tests {
             .is_some());
     }
 
-    fn runtime(
+    fn parts(
         seat: Seat,
         signer: LocalSigner,
         opponent_pk: [u8; 32],
-    ) -> PartyRuntime<QuantumPoker, LocalSigner> {
-        PartyRuntime::new(
-            QuantumPoker::new(1),
+    ) -> SeatParts<QuantumPoker, LocalSigner> {
+        SeatParts {
+            protocol: QuantumPoker::new(1),
             signer,
             opponent_pk,
-            TunnelContext {
-                tunnel_id: "0xcd".into(),
-                initial: Balances { a: 1000, b: 1000 },
-                seat,
-            },
-        )
+            initial: Balances { a: 1000, b: 1000 },
+            seat,
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -721,20 +718,25 @@ mod tests {
         let pk_b = signer_b.public_key();
         let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
+        let anchor = InMemoryAnchor::with_fixed_id("0xcd");
         let driver_a = PartyDriver::new(
-            runtime(Seat::A, signer_a, pk_b),
+            parts(Seat::A, signer_a, pk_b),
             QuantumPokerStrategy::new(1),
             ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
         let driver_b = PartyDriver::new(
-            runtime(Seat::B, signer_b, pk_a),
+            parts(Seat::B, signer_b, pk_a),
             QuantumPokerStrategy::new(2),
             ch_b,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
 
         let (out_a, out_b) = tokio::join!(driver_a.run(200, || 1), driver_b.run(200, || 1));
-        let out_a = out_a.unwrap();
-        let out_b = out_b.unwrap();
+        let out_a = out_a.unwrap().0;
+        let out_b = out_b.unwrap().0;
 
         assert_eq!(out_a.final_balances.sum(), 2000);
         assert_eq!(out_a.final_balances, out_b.final_balances);

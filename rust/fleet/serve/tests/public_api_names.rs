@@ -2,8 +2,8 @@ use std::sync::Arc;
 use tunnel_blackjack::Blackjack;
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
-    Balances, FrameTransport, InMemoryFrameTransport, LocalSigner, MoveStrategy, PartyDriver,
-    PartyRuntime, RandomMoveStrategy, Seat, TunnelContext,
+    Balances, FrameTransport, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, MoveStrategy,
+    NullTranscriptRecorder, PartyDriver, RandomMoveStrategy, Seat, SeatParts,
 };
 
 #[tokio::test]
@@ -15,22 +15,25 @@ async fn public_api_uses_party_strategy_and_transport_names() {
     let (transport_a, _transport_b) = InMemoryFrameTransport::pair();
     transport_a.send(b"frame".to_vec()).await.unwrap();
 
-    let runtime = PartyRuntime::new(
-        Blackjack,
-        LocalSigner::from_secret(&secret_a),
-        pk_b,
-        TunnelContext {
-            tunnel_id: "0xab".into(),
-            initial: Balances { a: 200, b: 200 },
-            seat: Seat::A,
-        },
-    );
+    let parts = SeatParts {
+        protocol: Blackjack,
+        signer: LocalSigner::from_secret(&secret_a),
+        opponent_pk: pk_b,
+        initial: Balances { a: 200, b: 200 },
+        seat: Seat::A,
+    };
     let strategy = RandomMoveStrategy::new(Arc::new(Blackjack), 1);
 
     fn assert_strategy<S: MoveStrategy<Blackjack>>(_: &S) {}
     assert_strategy(&strategy);
 
-    let _driver = PartyDriver::new(runtime, strategy, transport_a);
+    let _driver = PartyDriver::new(
+        parts,
+        strategy,
+        transport_a,
+        InMemoryAnchor::with_fixed_id("0xab"),
+        NullTranscriptRecorder,
+    );
 }
 
 #[test]
@@ -61,7 +64,14 @@ fn telemetry_surface_is_public() {
     // whole telemetry surface pinned in one place. (`fn() -> u64` is a concrete
     // stand-in for the seam's `impl FnMut() -> u64` clock parameter.)
     type SeamFn = fn(
-        PartyDriver<Blackjack, RandomMoveStrategy<Blackjack>, InMemoryFrameTransport, LocalSigner>,
+        PartyDriver<
+            Blackjack,
+            RandomMoveStrategy<Blackjack>,
+            InMemoryFrameTransport,
+            LocalSigner,
+            InMemoryAnchor,
+            NullTranscriptRecorder,
+        >,
         fleet_serve::HeartbeatReporter,
         u64,
         fn() -> u64,

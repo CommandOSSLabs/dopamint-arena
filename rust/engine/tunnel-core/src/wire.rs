@@ -73,6 +73,55 @@ pub fn serialize_settlement_with_root(s: &Settlement, transcript_root: &[u8; 32]
     out
 }
 
+pub const SETTLE_BODY_VERSION: u8 = 0x01;
+pub const SETTLE_BODY_HEADER_LEN: usize = 229;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettleBodyEntry {
+    pub message: Vec<u8>,
+    pub sig_a: [u8; 64],
+    pub sig_b: [u8; 64],
+}
+
+/// TS-compatible `/settle` binary body. The backend archives these bytes verbatim,
+/// so entry order and integer widths are part of the public verification contract.
+pub fn encode_settle_body(
+    settlement: &Settlement,
+    transcript_root: &[u8; 32],
+    sig_a: &[u8; 64],
+    sig_b: &[u8; 64],
+    transcript_entries: &[SettleBodyEntry],
+) -> Vec<u8> {
+    let id = address_to_bytes32(&settlement.tunnel_id).expect("valid tunnel id");
+    let entries_len: usize = transcript_entries
+        .iter()
+        .map(|entry| 2 + entry.message.len() + 64 + 64)
+        .sum();
+    let mut out = Vec::with_capacity(SETTLE_BODY_HEADER_LEN + entries_len);
+    out.push(SETTLE_BODY_VERSION);
+    out.extend_from_slice(&id);
+    out.extend_from_slice(&u64_to_be_bytes(settlement.party_a_balance));
+    out.extend_from_slice(&u64_to_be_bytes(settlement.party_b_balance));
+    out.extend_from_slice(&u64_to_be_bytes(settlement.final_nonce));
+    out.extend_from_slice(&u64_to_be_bytes(settlement.timestamp));
+    out.extend_from_slice(transcript_root);
+    out.extend_from_slice(sig_a);
+    out.extend_from_slice(sig_b);
+    out.extend_from_slice(&(transcript_entries.len() as u32).to_be_bytes());
+    for entry in transcript_entries {
+        let len: u16 = entry
+            .message
+            .len()
+            .try_into()
+            .expect("transcript entry message length fits u16");
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&entry.message);
+        out.extend_from_slice(&entry.sig_a);
+        out.extend_from_slice(&entry.sig_b);
+    }
+    out
+}
+
 pub struct HtlcLock {
     pub tunnel_id: String,
     pub payment_hash: [u8; 32],
@@ -145,6 +194,52 @@ mod tests {
         };
         assert_eq!(hex::encode(serialize_settlement_with_root(&s, &state_hash_1_to_32())),
             "7375695f74756e6e656c3a3a736574746c656d656e745f763200000000000000000000000000000000000000000000000000000000000000ab00000000000003e800000000000007d0000000000000002b00000000499602d20102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    }
+
+    #[test]
+    fn settle_body_matches_ts_golden() {
+        let s = Settlement {
+            tunnel_id: "0x1".into(),
+            party_a_balance: 7,
+            party_b_balance: 3,
+            final_nonce: 5,
+            timestamp: 1234,
+        };
+        let entries = [
+            SettleBodyEntry {
+                message: vec![0x33; 120],
+                sig_a: [0x44; 64],
+                sig_b: [0x55; 64],
+            },
+            SettleBodyEntry {
+                message: vec![0x66; 120],
+                sig_a: [0x77; 64],
+                sig_b: [0x88; 64],
+            },
+        ];
+        let body = encode_settle_body(&s, &[0xaa; 32], &[0x11; 64], &[0x22; 64], &entries);
+        assert_eq!(body.len(), SETTLE_BODY_HEADER_LEN + 2 * (2 + 120 + 64 + 64));
+        assert_eq!(body[0], SETTLE_BODY_VERSION);
+        assert_eq!(u64::from_be_bytes(body[33..41].try_into().unwrap()), 7);
+        assert_eq!(u64::from_be_bytes(body[41..49].try_into().unwrap()), 3);
+        assert_eq!(u32::from_be_bytes(body[225..229].try_into().unwrap()), 2);
+        let mut expected = String::from(
+            "010000000000000000000000000000000000000000000000000000000000000001\
+             00000000000000070000000000000003000000000000000500000000000004d2",
+        );
+        expected.push_str(&"aa".repeat(32));
+        expected.push_str(&"11".repeat(64));
+        expected.push_str(&"22".repeat(64));
+        expected.push_str("00000002");
+        expected.push_str("0078");
+        expected.push_str(&"33".repeat(120));
+        expected.push_str(&"44".repeat(64));
+        expected.push_str(&"55".repeat(64));
+        expected.push_str("0078");
+        expected.push_str(&"66".repeat(120));
+        expected.push_str(&"77".repeat(64));
+        expected.push_str(&"88".repeat(64));
+        assert_eq!(hex::encode(body), expected.replace(' ', ""));
     }
 
     #[test]

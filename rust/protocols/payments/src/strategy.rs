@@ -37,8 +37,8 @@ mod tests {
     use super::*;
     use tunnel_core::crypto::keypair_from_secret;
     use tunnel_harness::{
-        Balances, InMemoryFrameTransport, LocalSigner, PartyDriver, PartyRuntime, Protocol,
-        TunnelContext,
+        Balances, InMemoryAnchor, InMemoryFrameTransport, LocalSigner, NullTranscriptRecorder,
+        PartyDriver, Protocol, SeatParts, TunnelContext,
     };
 
     fn ctx() -> TunnelContext {
@@ -138,21 +138,18 @@ mod tests {
         );
     }
 
-    fn runtime(
+    fn parts(
         seat: Seat,
         secret: &[u8; 32],
         opponent_pk: [u8; 32],
-    ) -> PartyRuntime<Payments, LocalSigner> {
-        PartyRuntime::new(
-            Payments { max_transfers: 4 },
-            LocalSigner::from_secret(secret),
+    ) -> SeatParts<Payments, LocalSigner> {
+        SeatParts {
+            protocol: Payments { max_transfers: 4 },
+            signer: LocalSigner::from_secret(secret),
             opponent_pk,
-            TunnelContext {
-                tunnel_id: "0xcd".into(),
-                initial: Balances { a: 100, b: 100 },
-                seat,
-            },
-        )
+            initial: Balances { a: 100, b: 100 },
+            seat,
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -163,20 +160,25 @@ mod tests {
         let pk_b = keypair_from_secret(&secret_b).public_key();
         let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
+        let anchor = InMemoryAnchor::with_fixed_id("0xcd");
         let driver_a = PartyDriver::new(
-            runtime(Seat::A, &secret_a, pk_b),
+            parts(Seat::A, &secret_a, pk_b),
             PaymentsStrategy::new(5).unwrap(),
             ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
         let driver_b = PartyDriver::new(
-            runtime(Seat::B, &secret_b, pk_a),
+            parts(Seat::B, &secret_b, pk_a),
             PaymentsStrategy::new(5).unwrap(),
             ch_b,
+            anchor.clone(),
+            NullTranscriptRecorder,
         );
 
         let (out_a, out_b) = tokio::join!(driver_a.run(100, || 1), driver_b.run(100, || 1));
-        let out_a = out_a.unwrap();
-        let out_b = out_b.unwrap();
+        let out_a = out_a.unwrap().0;
+        let out_b = out_b.unwrap().0;
 
         assert_eq!(out_a.final_balances.sum(), 200);
         assert_eq!(out_a.final_balances, out_b.final_balances);

@@ -2496,7 +2496,9 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "rayon",
+ "sui-tunnel-anchor",
  "sysinfo",
+ "tokio",
  "tunnel-api-credits",
  "tunnel-battleship",
  "tunnel-blackjack",
@@ -2508,6 +2510,7 @@ dependencies = [
  "tunnel-harness",
  "tunnel-payments",
  "tunnel-quantum-poker",
+ "tunnel-telemetry",
  "tunnel-tic-tac-toe",
  "tunnel-world-canvas",
 ]
@@ -6742,6 +6745,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sui-tunnel-anchor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bcs 0.2.1",
+ "bech32",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sui-crypto 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sui-rpc 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sui-sdk-types 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
+ "tonic",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "sui-types"
 version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui.git?branch=testnet#ff1fe0ec455153707136cffd0dc77dfb77ba9ad5"
@@ -7685,6 +7710,10 @@ dependencies = [
  "tunnel-core",
  "tunnel-harness",
 ]
+
+[[package]]
+name = "tunnel-telemetry"
+version = "0.1.0"
 
 [[package]]
 name = "tunnel-tic-tac-toe"

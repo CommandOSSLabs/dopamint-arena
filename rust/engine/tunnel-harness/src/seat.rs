@@ -12,7 +12,7 @@
 //! (e.g. the protocol's `actor_for`), which is what the serve/bench fleets do.
 
 use crate::frame::{AckFrame, FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame};
-use crate::{Balances, HarnessError, Protocol, Seat, Signer, TunnelContext};
+use crate::{Balances, HarnessError, Protocol, Seat, Signer, TranscriptEntry, TunnelContext};
 use tunnel_core::crypto::{blake2b256, verify};
 use tunnel_core::wire::{serialize_state_update, StateUpdate};
 
@@ -20,6 +20,12 @@ struct Pending<P: Protocol> {
     next: P::State,
     msg: Vec<u8>,
     nonce: u64,
+    mv: P::Move,
+    state_hash: [u8; 32],
+    timestamp: u64,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    sig_proposer: [u8; 64],
 }
 
 pub struct PartyRuntime<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFrameCodec> {
@@ -32,6 +38,7 @@ pub struct PartyRuntime<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFra
     state: P::State,
     nonce: u64,
     pending: Option<Pending<P>>,
+    last_committed: Option<TranscriptEntry<P::Move>>,
 }
 
 impl<P: Protocol, S: Signer, C: FrameCodec<P::Move> + Default> PartyRuntime<P, S, C> {
@@ -61,6 +68,7 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
             state,
             nonce: 0,
             pending: None,
+            last_committed: None,
         }
     }
 
@@ -81,6 +89,11 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     }
     pub fn balances(&self) -> Balances {
         self.protocol.balances(&self.state)
+    }
+    /// Take the transition committed by the most recent `handle_frame`, if any.
+    /// The driver maps this into its transcript; the seat itself never records.
+    pub fn take_last_committed(&mut self) -> Option<TranscriptEntry<P::Move>> {
+        self.last_committed.take()
     }
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
@@ -131,7 +144,20 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
             sig_proposer: sig,
         });
         let bytes = self.codec.encode(&frame);
-        self.pending = Some(Pending { next, msg, nonce });
+        let TunnelFrame::Move(MoveFrame { mv, .. }) = frame else {
+            unreachable!("constructed a Move frame above");
+        };
+        self.pending = Some(Pending {
+            next,
+            msg,
+            nonce,
+            mv,
+            state_hash: update.state_hash,
+            timestamp,
+            party_a_balance: update.party_a_balance,
+            party_b_balance: update.party_b_balance,
+            sig_proposer: sig,
+        });
         Ok(bytes)
     }
 
@@ -179,6 +205,17 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         let sig_responder = self.signer.sign(&msg);
         self.state = next;
         self.nonce = m.nonce;
+        self.last_committed = Some(TranscriptEntry {
+            nonce: m.nonce,
+            by,
+            mv: m.mv,
+            state_hash,
+            timestamp: m.timestamp,
+            party_a_balance: bals.a,
+            party_b_balance: bals.b,
+            sig_proposer: m.sig_proposer,
+            sig_responder,
+        });
         let ack: TunnelFrame<P::Move> = TunnelFrame::Ack(AckFrame {
             nonce: m.nonce,
             sig_responder,
@@ -199,6 +236,17 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         }
         self.state = p.next;
         self.nonce = p.nonce;
+        self.last_committed = Some(TranscriptEntry {
+            nonce: p.nonce,
+            by: self.seat,
+            mv: p.mv,
+            state_hash: p.state_hash,
+            timestamp: p.timestamp,
+            party_a_balance: p.party_a_balance,
+            party_b_balance: p.party_b_balance,
+            sig_proposer: p.sig_proposer,
+            sig_responder: a.sig_responder,
+        });
         Ok(Vec::new())
     }
 }
@@ -326,6 +374,29 @@ mod tests {
         assert_eq!(a.nonce(), 1);
         assert_eq!(a.balances(), Balances { a: 4, b: 6 });
         assert_eq!(a.balances(), b.balances());
+    }
+
+    #[test]
+    fn take_last_committed_yields_one_entry_per_commit_on_both_paths() {
+        let (mut a, mut b) = seats();
+        // A proposes; B applies it (peer-move path on B); A acks (our-move path on A).
+        let mv_frame = a.propose(TinyMove, 7).unwrap();
+        let ack = b.handle_frame(&mv_frame).unwrap();
+        // B committed a peer move authored by A.
+        let b_entry = b.take_last_committed().expect("b commit");
+        assert_eq!(b_entry.nonce, 1);
+        assert_eq!(b_entry.by, Seat::A);
+        assert_eq!(b_entry.timestamp, 7);
+        assert_eq!(b_entry.party_a_balance, 4);
+        assert_eq!(b_entry.party_b_balance, 6);
+        assert!(b.take_last_committed().is_none()); // taken once
+
+        a.handle_frame(&ack[0]).unwrap();
+        let a_entry = a.take_last_committed().expect("a commit");
+        assert_eq!(a_entry.nonce, 1);
+        assert_eq!(a_entry.by, Seat::A); // A authored it
+        assert_eq!(a_entry.timestamp, 7);
+        assert_eq!(a_entry.sig_responder, b_entry.sig_responder); // same ACK signature
     }
 
     #[test]

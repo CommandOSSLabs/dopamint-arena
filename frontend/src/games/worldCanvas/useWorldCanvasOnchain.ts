@@ -57,10 +57,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof } from "sui-tunnel-ts";
 import {
-  WorldCanvasProtocol,
   type WorldCanvasState,
   type WorldCanvasMove,
 } from "sui-tunnel-ts/protocol/worldCanvas";
+import { createWorldCanvasKit } from "@/agent/games/worldCanvas/kit";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -657,12 +657,12 @@ export function useWorldCanvasOnchain(
   const movesPerGame = clampMovesPerGame(opts.movesPerGame ?? MOVES_PER_GAME);
   const movesPerGameRef = useRef(movesPerGame);
   movesPerGameRef.current = movesPerGame;
-  // One protocol instance shared by the tunnel (and its reopens).
-  const proto = useMemo(
-    () =>
-      new WorldCanvasProtocol({ chunkSize: CHUNK_SIZE, numColors: NUM_COLORS }),
-    [],
-  );
+  // One protocol instance shared by the tunnel (and its reopens), sourced from the CANONICAL
+  // kit (`createWorldCanvasKit` in src/agent) — the single source of truth the agent engine
+  // uses too — instead of constructing a protocol here. The kit's defaults (256-cell chunks,
+  // 16 colors) match this wall; its per-match cap is irrelevant here (the wall bounds itself
+  // via `movesPerGame`, and nothing in the solo path reads `isTerminal`).
+  const proto = useMemo(() => createWorldCanvasKit(STAKE).protocol, []);
 
   const [status, setStatus] = useState<WorldCanvasOnchainStatus>(EMPTY_STATUS);
   const [revision, setRevision] = useState(0);
@@ -905,24 +905,29 @@ export function useWorldCanvasOnchain(
 
   // Coarse throughput report — one call per ~1s window, never per paint. This is the
   // signal the dashboard turns into live TPS (it derives a rate from the action COUNT).
-  const flushHeartbeat = useCallback((run: CanvasRun, force: boolean) => {
-    const s = run.session;
-    if (!s || run.actions === 0) return;
-    const now = Date.now();
-    const windowMs = now - run.lastHeartbeat;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = run.actions;
-    run.actions = 0;
-    run.lastHeartbeat = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId: run.tunnelId,
-        nonce: String(run.moveCount),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
-  }, []);
+  const flushHeartbeat = useCallback(
+    (run: CanvasRun, force: boolean) => {
+      const s = run.session;
+      if (!s || run.actions === 0) return;
+      const now = Date.now();
+      const windowMs = now - run.lastHeartbeat;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = run.actions;
+      run.actions = 0;
+      run.lastHeartbeat = now;
+      // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+      report.recordActions(actionsDelta);
+      getControlPlaneClient()
+        .sendHeartbeat(s.sessionId, s.statsToken, {
+          tunnelId: run.tunnelId,
+          nonce: String(run.moveCount),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
+    },
+    [report],
+  );
 
   // Co-sign one paint through the tunnel; count only honest, both-signature-VERIFIED
   // steps (the TPS gate). One verified step = one action + one increment of the
@@ -1705,7 +1710,10 @@ export function useWorldCanvasOnchain(
     setAgentTemplateState(id);
   }, []);
 
-  // Public: re-center the camera on the live seat bot painting at `painter` (📍).
+  // Public: re-center the camera on the live seat bot painting at `painter` (📍). Jumps at the
+  // WIDEST zoom (ZOOM.min) — same as the auto-follow cam — so you actually SEE the bot and its
+  // art, not nose-to-the-pixels at the default focus zoom (which framed a tiny spot you couldn't
+  // find as the bot wandered off).
   const focusOnAgent = useCallback((painter: string) => {
     for (const st of agentStatesRef.current.values()) {
       if (st.seat === "A" && !autoRef.current) continue; // paused seat-A bot has no marker
@@ -1714,6 +1722,7 @@ export function useWorldCanvasOnchain(
           gx: st.centerGx,
           gy: st.centerGy,
           seq: ++focusSeqRef.current,
+          scale: ZOOM.min,
         });
         return;
       }

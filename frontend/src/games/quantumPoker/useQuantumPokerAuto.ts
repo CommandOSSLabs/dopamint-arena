@@ -615,6 +615,8 @@ class AutoSession {
     const actionsDelta = this.heartbeatActions;
     this.heartbeatActions = 0;
     this.lastHeartbeatAt = now;
+    // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+    this.deps?.report.recordActions(actionsDelta);
     getControlPlaneClient()
       .sendHeartbeat(session.sessionId, session.statsToken, {
         tunnelId,
