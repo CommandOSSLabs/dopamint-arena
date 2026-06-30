@@ -46,12 +46,36 @@ cargo run -p wallet-pool --example full_demo
 The example:
 
 1. Creates a pool of 50 wallets.
-2. Transfers 0.5 SUI from the CLI active address into the pool master.
+2. Transfers 1 SUI from the CLI active address into the pool master.
 3. Funds all 50 members from the master.
 4. Signs and executes a member → master transfer.
 5. Lists, filters, and queries live balances.
 6. Demonstrates `pick`, `next`, and `lru` selection helpers.
 7. Exports, imports, disables, re-enables, and deletes the pool.
+
+### Run the arbitrary-token (BUCK) example
+
+There is also a demo that funds the pool with a non-SUI token:
+
+```bash
+sui client switch --env testnet
+export SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+export BUCK_OBJECT_ID=<a_buck_coin_owned_by_your_active_address>
+cargo run -p wallet-pool --example full_demo_buck
+```
+
+The BUCK example does everything the SUI example does, but:
+
+- It funds the master with 1 BUCK plus 1 SUI for gas.
+- It funds all members with BUCK.
+- It funds the signing member with SUI for gas.
+- It signs and executes a BUCK transfer from member → master.
+
+To find a token's fully-qualified coin type, inspect the object with `sui client objects --json` and look for `"Coin": { "struct": { "address", "module", "name" } }`. For BUCK it is:
+
+```text
+0x52fa24986ed45532b871326114454b711f99c7f7c57294a28d82cedc1fc78a70::test_buck::TEST_BUCK
+```
 
 ## Basic library usage
 
@@ -102,13 +126,23 @@ let master_address = ed25519_address(&master_key.public_key());
 println!("{master_address}");
 ```
 
-Then transfer SUI to it:
+Then transfer SUI to it for gas:
 
 ```bash
 sui client transfer-sui \
   --to <master_address> \
   --sui-coin-object-id <your_gas_coin> \
-  --amount 500000000 \
+  --amount 1000000000 \
+  --gas-budget 5000000
+```
+
+If you are funding members with a non-SUI token, also send the token to the master. For a `Coin<T>` object:
+
+```bash
+sui client pay \
+  --input-coins <token_object_id> \
+  --recipients <master_address> \
+  --amounts <amount_in_smallest_unit> \
   --gas-budget 5000000
 ```
 
@@ -157,8 +191,9 @@ let digest = handle
 Requirements for non-SUI funding:
 
 - The master must own enough of the target coin to cover `amount_per_recipient * recipients.len()`.
-- The master must also own enough SUI to pay the gas budget (currently 50 MIST).
+- The master must also own enough SUI to pay the gas budget (currently 200 MIST).
 - If no single coin is large enough, the library merges a prefix of the master's coins of that type before splitting.
+- Members that will sign transactions need their own SUI coins for gas.
 
 ### 4. Sign and execute a transaction as a member
 
@@ -185,6 +220,46 @@ tx.add_gas_objects([ObjectInput::owned(object_id, coin.version, digest)]);
 let coin_arg = tx.gas();
 let recipient_arg = tx.pure(&recipient);
 tx.transfer_objects(vec![coin_arg], recipient_arg);
+
+let transaction = tx.try_build()?;
+let ptb = match transaction.kind {
+    sui_sdk_types::TransactionKind::ProgrammableTransaction(ptb) => ptb,
+    _ => panic!("expected PTB"),
+};
+
+let digest = handle
+    .sign_and_execute(SignAndExecuteOptions {
+        by: By::Ordinal(1),
+        ptb,
+        await_effects: true,
+    })
+    .await?;
+```
+
+#### Signing a non-SUI token transfer
+
+The member pays gas in SUI, but transfers a different coin object:
+
+```rust
+let gas_coins = rpc.get_coins(&member_address, "0x2::sui::SUI").await?;
+let gas_coin = &gas_coins[0];
+let token_coins = rpc.get_coins(&member_address, "0x52fa24986ed45532b871326114454b711f99c7f7c57294a28d82cedc1fc78a70::test_buck::TEST_BUCK").await?;
+let token_coin = &token_coins[0];
+
+let gas_id = Address::from_hex(&gas_coin.object_id)?;
+let gas_digest = sui_sdk_types::Digest::from_base58(&gas_coin.digest)?;
+let token_id = Address::from_hex(&token_coin.object_id)?;
+let token_digest = sui_sdk_types::Digest::from_base58(&token_coin.digest)?;
+
+let mut tx = TransactionBuilder::new();
+tx.set_sender(sender);
+tx.set_gas_budget(50_000_000);
+tx.set_gas_price(1_000);
+tx.add_gas_objects([ObjectInput::owned(gas_id, gas_coin.version, gas_digest)]);
+
+let token_arg = tx.object(ObjectInput::owned(token_id, token_coin.version, token_digest));
+let recipient_arg = tx.pure(&recipient);
+tx.transfer_objects(vec![token_arg], recipient_arg);
 
 let transaction = tx.try_build()?;
 let ptb = match transaction.kind {
@@ -270,8 +345,9 @@ pool.delete(&pool_id).await?;
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `InsufficientFunds` when funding | Master coin balance < total + 50 MIST gas budget | Send more SUI to the master address, or reduce `amount_per_recipient` / recipient count. |
+| `InsufficientFunds` when funding | Master coin balance < total + 200 MIST gas budget | Send more SUI to the master address, or reduce `amount_per_recipient` / recipient count. |
 | `InsufficientFunds` when signing | Member gas coin < 50 MIST gas budget | Fund the signing member with at least ~60 MIST, or use a member that received more. |
+| `InsufficientFunds` when funding a token | Master has the token but not enough SUI for gas | Send SUI to the master address; gas is always paid in SUI. |
 | `NetworkMismatch` on open | `OpenOptions.network` does not match the stored blob | Open with the same `Network` used at creation time. |
 | `WrongAccessValueError` on open | Incorrect access value | Use the exact value returned by `create`. |
 | `sui client transfer-sui` fails | Active env points to wrong network | `sui client switch --env testnet` (or `mainnet`). |
