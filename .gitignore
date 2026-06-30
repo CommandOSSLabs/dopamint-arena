@@ -174,6 +174,9 @@ vite.config.ts.timestamp-*
 # Temp files
 temp/
 
+# Large exported wallet-pool address dumps
+wallet-pool-1m-addresses.txt
+
 # Sui Move build artifacts — resolved fresh per build; devs do not commit them
 Move.lock
 Published.toml
