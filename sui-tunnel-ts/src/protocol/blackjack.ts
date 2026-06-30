@@ -58,6 +58,9 @@ function dealerPartyForWith(
 }
 
 export const MIN_BET = 1n;
+// Default hard ceiling on rounds per tunnel (the off-chain terminal backstop; never enforced
+// on-chain). Override per-instance via the constructor's `roundCap` — e.g. the MTPS/flat-out
+// arena bot raises it so one tunnel co-signs a much larger move count before settling.
 export const ROUND_CAP = 1000n;
 const DEALER_STANDS_AT = 17;
 const BUST_AT = 21;
@@ -429,6 +432,9 @@ export class BlackjackProtocol implements Protocol<
 
   constructor(
     private readonly playerPartyFor: PlayerPartyFor = getPlayerParty,
+    // Rounds-per-tunnel ceiling for isTerminal. Not part of the encoded state, so it never
+    // affects wire/signature parity — two instances with different caps co-sign identical bytes.
+    private readonly roundCap: bigint = ROUND_CAP,
   ) {}
 
   initialState(ctx: ProtocolContext): BlackjackState {
@@ -550,7 +556,7 @@ export class BlackjackProtocol implements Protocol<
   }
 
   isTerminal(s: BlackjackState): boolean {
-    if (s.round >= ROUND_CAP) return true;
+    if (s.round >= this.roundCap) return true;
     return s.phase === "round_over" && !canStartRound(s);
   }
 

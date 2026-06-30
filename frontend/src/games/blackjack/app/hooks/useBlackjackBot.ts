@@ -194,13 +194,20 @@ const NEXT_GAME_MS = 2500;
 // before giving up rather than reading the stale pre-fund value once.
 const POLL_BALANCES_MS = 1500;
 const POLL_BALANCES_TRIES = 8;
-// Safety bound: the protocol caps rounds, but never spin forever on a logic bug.
-const MAX_STEPS = 5000;
-// Default number of rounds to play off-chain in one tunnel before auto-settling.
-const DEFAULT_MAX_ROUNDS = 100;
-// User-selectable range for the "rounds per tunnel" control.
+// Safety bound: the protocol caps rounds, but never spin forever on a logic bug. Each v2 round
+// co-signs ~25 updates (every card is a 2-party commit-reveal: commit×2 + reveal×2), so this must
+// clear maxRounds × ~25 with margin — at 2600 rounds (~65k updates) 80k is comfortable.
+const MAX_STEPS = 80_000;
+// Default rounds to play off-chain in one tunnel before auto-settling. Each update is 250 B on the
+// /settle body, and that route is hard-capped at 16 MB (≈67k updates) by the backend — past it the
+// settle 413s and falls back to a no-proof close (transcript not archived). ~24.9 updates/round
+// (measured), so 2600 rounds ≈ 64.7k updates ≈ 15.4 MB — the most we can run and stay verifiable.
+const DEFAULT_MAX_ROUNDS = 2600;
+// User-selectable range for the "rounds per tunnel" control. The ceiling also drives the protocol's
+// roundCap (see the kit construction below) AND must keep the /settle body under 16 MB (see above),
+// so isTerminal won't cut a tunnel short and the settle won't fall back to no-proof.
 export const MIN_ROUNDS_PER_TUNNEL = 1;
-export const MAX_ROUNDS_PER_TUNNEL = 500;
+export const MAX_ROUNDS_PER_TUNNEL = 2600;
 
 function viewFromState(state: State): BlackjackBotView {
   const round = Number(state.round);
@@ -235,7 +242,13 @@ export function useBlackjackBot(): BlackjackBotGame {
   // the live auto-play drives its hit/stand from the SAME kit bot the harness uses, instead of a
   // second copy. Pin the player to seat A (no role rotation) so "Play vs Bot" stays one human vs
   // the dealer bot and the table never inverts. The bet stays user-driven (see the loop below).
-  const kit = useMemo(() => createBlackjackKit(BUY_IN, FIXED_PLAYER_A), []);
+  // Raise the protocol's roundCap to the UI ceiling so isTerminal never cuts a tunnel short of the
+  // requested rounds (the default 1000 would cap one tunnel at ~25k updates; we want ~65k).
+  const kit = useMemo(
+    () =>
+      createBlackjackKit(BUY_IN, FIXED_PLAYER_A, BigInt(MAX_ROUNDS_PER_TUNNEL)),
+    [],
+  );
   const proto = kit.protocol;
   const botBySeat = useMemo(
     () => ({

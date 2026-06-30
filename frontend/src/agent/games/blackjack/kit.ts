@@ -53,8 +53,11 @@ class BlackjackBot implements GameBot<BlackjackState, BlackjackMove> {
 export function createBlackjackKit(
   stake: bigint,
   playerPartyFor: PlayerPartyFor = getPlayerParty,
+  // Optional rounds-per-tunnel ceiling (off-chain terminal backstop). Omit to keep the protocol
+  // default (1000); the flat-out arena bot raises it to push one tunnel's co-signed move count.
+  roundCap?: bigint,
 ): GameKit<BlackjackState, BlackjackMove> {
-  const protocol = new BlackjackProtocol(playerPartyFor);
+  const protocol = new BlackjackProtocol(playerPartyFor, roundCap);
 
   return {
     id: "blackjack",
