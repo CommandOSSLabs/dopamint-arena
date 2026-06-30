@@ -5,10 +5,8 @@ interface ImportMetaEnv {
   // MP relay base for PvP matchmaking (resolveMpWsUrl appends /v1/mp). Optional — derived from
   // VITE_BACKEND_URL / the page origin when unset.
   readonly VITE_MP_URL?: string;
-  // Warning: When set, the frontend calls Ollama directly and bypasses backend auth.
-  // Leave unset in deployed stacks to keep chat behind the authenticated backend proxy.
   // Direct-to-Ollama chat (bypasses the authenticated backend /v1/sessions/:sessionId/chat proxy). Set
-  // VITE_OLLAMA_URL to enable; empty = use the backend proxy, a full URL = direct
+  // VITE_OLLAMA_URL to enable; empty/unset = use the backend proxy, a full URL = direct
   // Ollama access (cross-origin, requires OLLAMA_ORIGINS on the Ollama side).
   readonly VITE_OLLAMA_URL?: string;
   readonly VITE_OLLAMA_MODEL?: string;

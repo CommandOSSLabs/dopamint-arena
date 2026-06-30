@@ -343,7 +343,7 @@ class ChatSession {
           });
         } catch (e) {
           console.error("[chat] registerSession failed:", e);
-          if (!import.meta.env.VITE_OLLAMA_URL) {
+          if (this.api.requiresSession()) {
             throw new Error("chat registration failed; please try again");
           }
         }

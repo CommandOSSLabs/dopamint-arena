@@ -55,6 +55,33 @@ export class ChatApiClient {
     this.statsToken = statsToken;
   }
 
+  /** True when the client operates in backend-proxy mode (session auth required). */
+  requiresSession(): boolean {
+    return !this.ollama;
+  }
+
+  private requireSession(): { sessionId: string; statsToken: string } {
+    if (!this.sessionId || !this.statsToken) {
+      throw new Error("chat session not registered");
+    }
+    return { sessionId: this.sessionId, statsToken: this.statsToken };
+  }
+
+  private async backendProxy(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<Response> {
+    const { sessionId, statsToken } = this.requireSession();
+    const headers: Record<string, string> = {
+      ...((init.headers as Record<string, string>) ?? {}),
+      Authorization: `Bearer ${statsToken}`,
+    };
+    return this.fetch(`${this.baseUrl}/v1/sessions/${sessionId}${path}`, {
+      ...init,
+      headers,
+    });
+  }
+
   async chat(messages: ChatApiMessage[]): Promise<string> {
     if (this.ollama) {
       return this.chatViaOllama(
@@ -62,20 +89,11 @@ export class ChatApiClient {
         this.ollama.maxTokens ?? DEFAULT_MAX_TOKENS,
       );
     }
-    if (!this.sessionId || !this.statsToken) {
-      throw new Error("chat session not registered");
-    }
-    const res = await this.fetch(
-      `${this.baseUrl}/v1/sessions/${this.sessionId}/chat`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.statsToken}`,
-        },
-        body: JSON.stringify({ messages }),
-      },
-    );
+    const res = await this.backendProxy("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
     if (!res.ok)
       throw new Error(`chat failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { content: string };
@@ -90,15 +108,7 @@ export class ChatApiClient {
       );
       return reply.trim();
     }
-    if (!this.sessionId || !this.statsToken) {
-      throw new Error("chat session not registered");
-    }
-    const res = await this.fetch(
-      `${this.baseUrl}/v1/sessions/${this.sessionId}/chat/topic`,
-      {
-        headers: { Authorization: `Bearer ${this.statsToken}` },
-      },
-    );
+    const res = await this.backendProxy("/chat/topic");
     if (!res.ok)
       throw new Error(`topic failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { topic: string };
@@ -156,7 +166,7 @@ export function createChatApiClient(
   const ollama: OllamaDirectConfig | null = ollamaUrl
     ? {
         url: ollamaUrl,
-        model: import.meta.env.VITE_OLLAMA_MODEL ?? "qwen2.5:1.5b",
+        model: import.meta.env.VITE_OLLAMA_MODEL?.trim() || "qwen2.5:1.5b",
         ...(import.meta.env.VITE_OLLAMA_MAX_TOKENS
           ? { maxTokens: Number(import.meta.env.VITE_OLLAMA_MAX_TOKENS) }
           : {}),

@@ -1,6 +1,5 @@
 /// <reference types="vite/client" />
 interface ImportMetaEnv {
-  readonly VITE_API_URL: string;
   readonly VITE_BLS_PUBLIC_KEY: string;
   readonly VITE_SUI_NETWORK: string;
   readonly VITE_SUI_NETWORK_NAME: "mainnet" | "testnet" | "devnet";
