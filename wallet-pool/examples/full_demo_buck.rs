@@ -1,21 +1,21 @@
-//! Live end-to-end demo of the Rust wallet-pool library.
+//! Live end-to-end demo of wallet-pool funding with a non-SUI token (BUCK).
 //!
 //! This example:
 //! 1. Creates a pool with 50 member wallets.
-//! 2. Funds the pool master with 0.5 SUI taken from the local `sui client gas` coin.
-//! 3. Funds the 50 members from the master (one member gets enough to sign a tx).
-//! 4. Signs and executes a member-to-master transfer PTB.
-//! 5. Lists entries with filters and live balances.
-//! 6. Exercises selection helpers (pick / next / lru).
-//! 7. Exports, imports, disables, re-enables, and deletes the pool.
+//! 2. Funds the pool master with 1 BUCK + a small amount of SUI for gas.
+//! 3. Funds the 50 members with BUCK from the master.
+//! 4. Funds the signing member with SUI for gas.
+//! 5. Signs and executes a BUCK member-to-master transfer PTB.
+//! 6. Lists entries with BUCK balance filters.
+//! 7. Exercises selection helpers.
+//! 8. Exports, imports, disables, re-enables, and deletes the pool.
 //!
-//! Run against a local network started with:
-//!   sui start --with-faucet --force-regenesis
-//!
-//! Then:
-//!   SUI_RPC_URL=http://127.0.0.1:9000 cargo run -p wallet-pool --example full_demo
+//! Run:
+//!   sui client switch --env testnet
+//!   export SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+//!   export BUCK_OBJECT_ID=<your_buck_coin_object_id>
+//!   cargo run -p wallet-pool --example full_demo_buck
 
-use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,9 +30,14 @@ use wallet_pool::{
 use wallet_pool_core::crypto::ed25519_address;
 
 const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
-const MASTER_FUND_MIST: u64 = 1_000_000_000; // 1 SUI
-const MEMBER_FUND_MIST: u64 = 1_000_000; // 0.001 SUI for 49 members
-const SIGNER_FUND_MIST: u64 = 100_000_000; // 0.1 SUI for the signing member
+const BUCK_COIN_TYPE: &str =
+    "0x52fa24986ed45532b871326114454b711f99c7f7c57294a28d82cedc1fc78a70::test_buck::TEST_BUCK";
+const BUCK_DECIMALS: u64 = 1_000_000_000;
+const MASTER_FUND_BUCK: u64 = BUCK_DECIMALS; // 1 BUCK
+const MASTER_FUND_GAS_MIST: u64 = 1_000_000_000; // 1 SUI for gas
+const MEMBER_FUND_BUCK: u64 = 10_000_000; // 0.01 BUCK for 49 members
+const SIGNER_FUND_BUCK: u64 = 50_000_000; // 0.05 BUCK for the signing member
+const SIGNER_GAS_MIST: u64 = 100_000_000; // 0.1 SUI for the signing member
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -41,9 +46,10 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-async fn wait_for_balance(
+async fn wait_for_token_balance(
     rpc: &dyn wallet_pool::rpc::SuiRpc,
     address: &str,
+    coin_type: &str,
     min_balance: u64,
     attempts: usize,
 ) {
@@ -52,11 +58,14 @@ async fn wait_for_balance(
             Ok(balances) => {
                 let total: u64 = balances
                     .iter()
-                    .filter(|b| b.coin_type == SUI_COIN_TYPE)
+                    .filter(|b| b.coin_type == coin_type)
                     .map(|b| b.total_balance)
                     .sum();
                 if total >= min_balance {
-                    println!("  balance ready: {} MIST after {} attempt(s)", total, i + 1);
+                    println!(
+                        "  {coin_type} balance ready: {total} after {} attempt(s)",
+                        i + 1
+                    );
                     return;
                 }
             }
@@ -64,7 +73,7 @@ async fn wait_for_balance(
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    panic!("balance did not reach {min_balance} for {address}");
+    panic!("{coin_type} balance did not reach {min_balance} for {address}");
 }
 
 fn cli_gas_coin() -> String {
@@ -91,9 +100,9 @@ fn cli_gas_coin() -> String {
         .to_string()
 }
 
-fn fund_master_from_cli(master_address: &str, amount: u64) -> String {
+fn fund_master_sui_from_cli(master_address: &str, amount: u64) -> String {
     let coin_id = cli_gas_coin();
-    println!("Funding master from CLI coin {coin_id} with {amount} MIST");
+    println!("Funding master SUI from CLI coin {coin_id} with {amount} MIST");
     let output = Command::new("sui")
         .args([
             "client",
@@ -121,23 +130,63 @@ fn fund_master_from_cli(master_address: &str, amount: u64) -> String {
     json["digest"].as_str().expect("digest missing").to_string()
 }
 
-fn build_transfer_ptb(
+fn fund_master_buck_from_cli(master_address: &str, buck_object_id: &str, amount: u64) -> String {
+    println!("Funding master BUCK from CLI object {buck_object_id} with {amount} units");
+    let output = Command::new("sui")
+        .args([
+            "client",
+            "pay",
+            "--input-coins",
+            buck_object_id,
+            "--recipients",
+            master_address,
+            "--amounts",
+            &amount.to_string(),
+            "--gas-budget",
+            "5000000",
+            "--json",
+        ])
+        .output()
+        .expect("sui client pay failed");
+    if !output.status.success() {
+        panic!(
+            "sui client pay failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("failed to parse sui client pay output");
+    json["digest"].as_str().expect("digest missing").to_string()
+}
+
+fn build_buck_transfer_ptb(
     sender: Address,
     recipient: Address,
     gas_coin: &wallet_pool::rpc::Coin,
+    buck_coin: &wallet_pool::rpc::Coin,
 ) -> sui_sdk_types::ProgrammableTransaction {
-    let object_id = Address::from_hex(&gas_coin.object_id).expect("valid gas object id");
-    let digest = sui_sdk_types::Digest::from_base58(&gas_coin.digest).expect("valid digest");
+    let gas_object_id = Address::from_hex(&gas_coin.object_id).expect("valid gas object id");
+    let gas_digest = sui_sdk_types::Digest::from_base58(&gas_coin.digest).expect("valid digest");
+    let buck_object_id = Address::from_hex(&buck_coin.object_id).expect("valid buck object id");
+    let buck_digest = sui_sdk_types::Digest::from_base58(&buck_coin.digest).expect("valid digest");
 
     let mut tx = TransactionBuilder::new();
     tx.set_sender(sender);
     tx.set_gas_budget(50_000_000);
     tx.set_gas_price(1_000);
-    tx.add_gas_objects([ObjectInput::owned(object_id, gas_coin.version, digest)]);
+    tx.add_gas_objects([ObjectInput::owned(
+        gas_object_id,
+        gas_coin.version,
+        gas_digest,
+    )]);
 
-    let coin_arg = tx.gas();
+    let buck_arg = tx.object(ObjectInput::owned(
+        buck_object_id,
+        buck_coin.version,
+        buck_digest,
+    ));
     let recipient_arg = tx.pure(&recipient);
-    tx.transfer_objects(vec![coin_arg], recipient_arg);
+    tx.transfer_objects(vec![buck_arg], recipient_arg);
 
     let transaction = tx.try_build().expect("build PTB");
     match transaction.kind {
@@ -148,8 +197,12 @@ fn build_transfer_ptb(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_url = std::env::var("SUI_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".into());
+    let rpc_url = std::env::var("SUI_RPC_URL")
+        .unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".into());
+    let buck_object_id = std::env::var("BUCK_OBJECT_ID")
+        .expect("set BUCK_OBJECT_ID to a testnet BUCK coin owned by the CLI active address");
     println!("Connecting to {rpc_url}");
+    println!("Using BUCK object {buck_object_id}");
 
     let dir = tempfile::tempdir()?;
     let store = Arc::new(FileWalletPoolStore::new(dir.path()));
@@ -187,14 +240,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let master_address = ed25519_address(&master_key.public_key());
     println!("   master address: {master_address}");
 
-    // 3. Fund master from sui client gas.
-    println!("\n3. Funding master with 1 SUI from sui client gas");
-    let fund_master_digest = fund_master_from_cli(&master_address, MASTER_FUND_MIST);
-    println!("   CLI transfer digest: {fund_master_digest}");
-    wait_for_balance(rpc.as_ref(), &master_address, MASTER_FUND_MIST, 30).await;
+    // 3. Fund master with SUI for gas and BUCK for distribution.
+    println!("\n3. Funding master with {MASTER_FUND_GAS_MIST} MIST for gas");
+    let fund_gas_digest = fund_master_sui_from_cli(&master_address, MASTER_FUND_GAS_MIST);
+    println!("   CLI SUI transfer digest: {fund_gas_digest}");
+    wait_for_token_balance(
+        rpc.as_ref(),
+        &master_address,
+        SUI_COIN_TYPE,
+        MASTER_FUND_GAS_MIST,
+        30,
+    )
+    .await;
 
-    // 4. List all entries.
-    println!("\n4. Listing all {} entries", member_count + 1);
+    println!("\n4. Funding master with 1 BUCK");
+    let fund_buck_digest =
+        fund_master_buck_from_cli(&master_address, &buck_object_id, MASTER_FUND_BUCK);
+    println!("   CLI BUCK pay digest: {fund_buck_digest}");
+    wait_for_token_balance(
+        rpc.as_ref(),
+        &master_address,
+        BUCK_COIN_TYPE,
+        MASTER_FUND_BUCK,
+        30,
+    )
+    .await;
+
+    // 5. List all entries.
+    println!("\n5. Listing all {} entries", member_count + 1);
     let all = pool
         .list(ListOptions {
             id: wallet_pool_id.clone(),
@@ -203,8 +276,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("   returned {} entries", all.len());
 
-    // 5. Filter to members only.
-    println!("\n5. Filtering to members only");
+    // 6. Filter to members only.
+    println!("\n6. Filtering to members only");
     let members = pool
         .list(ListOptions {
             id: wallet_pool_id.clone(),
@@ -217,48 +290,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("   members: {}", members.len());
 
-    // 6. Fund members: one signer gets enough for gas, the rest get 0.001 SUI.
-    println!("\n6. Funding members from master");
+    // 7. Fund members with BUCK: signer gets more, rest get 0.01 BUCK.
+    println!("\n7. Funding members from master with BUCK");
     let recipients: Vec<String> = members.iter().map(|m| m.address.clone()).collect();
-    // Fund the first member (ordinal 1) with more SUI so it can sign a tx.
     let signer_address = recipients[0].clone();
-    let mut amounts: HashMap<String, u64> = HashMap::new();
-    amounts.insert(signer_address.clone(), SIGNER_FUND_MIST);
-    for addr in &recipients[1..] {
-        amounts.insert(addr.clone(), MEMBER_FUND_MIST);
-    }
-    // Use per-recipient funding by calling fund twice: once for signer, once for the rest.
+
     let signer_fund_digest = handle
         .fund(FundOptions {
-            coin_type: Some(SUI_COIN_TYPE.into()),
-            amount_per_recipient: SIGNER_FUND_MIST,
+            coin_type: Some(BUCK_COIN_TYPE.into()),
+            amount_per_recipient: SIGNER_FUND_BUCK,
             recipients: vec![signer_address.clone()],
             await_effects: true,
         })
         .await?;
-    println!("   signer fund digest: {signer_fund_digest}");
+    println!("   signer BUCK fund digest: {signer_fund_digest}");
 
     let rest: Vec<String> = recipients[1..].to_vec();
     let rest_fund_digest = handle
         .fund(FundOptions {
-            coin_type: Some(SUI_COIN_TYPE.into()),
-            amount_per_recipient: MEMBER_FUND_MIST,
+            coin_type: Some(BUCK_COIN_TYPE.into()),
+            amount_per_recipient: MEMBER_FUND_BUCK,
             recipients: rest,
             await_effects: true,
         })
         .await?;
-    println!("   remaining members fund digest: {rest_fund_digest}");
+    println!("   remaining members BUCK fund digest: {rest_fund_digest}");
 
-    wait_for_balance(rpc.as_ref(), &signer_address, SIGNER_FUND_MIST, 30).await;
+    wait_for_token_balance(
+        rpc.as_ref(),
+        &signer_address,
+        BUCK_COIN_TYPE,
+        SIGNER_FUND_BUCK,
+        30,
+    )
+    .await;
 
-    // 7. Sign and execute a member-to-master transfer.
-    println!("\n7. Signing and executing member -> master transfer");
-    let _signer_key = handle.get_member_key(By::Address(signer_address.clone()))?;
+    // 8. Fund the signer with SUI for gas.
+    println!("\n8. Funding signer with SUI for gas");
+    let signer_gas_fund_digest = handle
+        .fund(FundOptions {
+            coin_type: Some(SUI_COIN_TYPE.into()),
+            amount_per_recipient: SIGNER_GAS_MIST,
+            recipients: vec![signer_address.clone()],
+            await_effects: true,
+        })
+        .await?;
+    println!("   signer SUI gas fund digest: {signer_gas_fund_digest}");
+
+    wait_for_token_balance(
+        rpc.as_ref(),
+        &signer_address,
+        SUI_COIN_TYPE,
+        SIGNER_GAS_MIST,
+        30,
+    )
+    .await;
+
+    // 9. Sign and execute a BUCK member-to-master transfer.
+    println!("\n9. Signing and executing member -> master BUCK transfer");
     let signer_address_obj = Address::from_hex(&signer_address)?;
     let master_address_obj = Address::from_hex(&master_address)?;
-    let signer_coins = rpc.get_coins(&signer_address, SUI_COIN_TYPE).await?;
-    let gas_coin = signer_coins.first().expect("signer should have a SUI coin");
-    let ptb = build_transfer_ptb(signer_address_obj, master_address_obj, gas_coin);
+    let signer_sui_coins = rpc.get_coins(&signer_address, SUI_COIN_TYPE).await?;
+    let gas_coin = signer_sui_coins
+        .first()
+        .expect("signer should have a SUI coin");
+    let signer_buck_coins = rpc.get_coins(&signer_address, BUCK_COIN_TYPE).await?;
+    let buck_coin = signer_buck_coins
+        .first()
+        .expect("signer should have a BUCK coin");
+    let ptb = build_buck_transfer_ptb(signer_address_obj, master_address_obj, gas_coin, buck_coin);
     let sign_digest = handle
         .sign_and_execute(SignAndExecuteOptions {
             by: By::Address(signer_address.clone()),
@@ -266,10 +366,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             await_effects: true,
         })
         .await?;
-    println!("   sign-and-execute digest: {sign_digest}");
+    println!("   sign-and-execute BUCK digest: {sign_digest}");
 
-    // 8. Live balances for the signer.
-    println!("\n8. Viewing live balances for signer");
+    // 10. Live BUCK balances for the signer.
+    println!("\n10. Viewing live BUCK balances for signer");
     let balances = pool
         .view_balance(BalanceOptions {
             id: wallet_pool_id.clone(),
@@ -278,14 +378,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("   {:#?}", balances);
 
-    // 9. List with live-balance filter.
-    println!("\n9. Listing members with non-zero SUI balance");
+    // 11. List with live BUCK balance filter.
+    println!("\n11. Listing members with non-zero BUCK balance");
+    let all_balances = pool
+        .view_balance(BalanceOptions {
+            id: wallet_pool_id.clone(),
+            address: None,
+        })
+        .await?;
+    let buck_balances: Vec<_> = all_balances
+        .iter()
+        .filter_map(|(addr, bals)| bals.get(BUCK_COIN_TYPE).map(|b| (addr.clone(), *b)))
+        .collect();
+    println!("   BUCK balance entries: {}", buck_balances.len());
+    for (addr, bal) in buck_balances.iter().take(5) {
+        println!("      {addr}: {bal}");
+    }
+
     let funded = pool
         .list(ListOptions {
             id: wallet_pool_id.clone(),
             filter: Filter {
                 role: Some(WalletRole::Member),
-                coin_type: Some(SUI_COIN_TYPE.into()),
+                coin_type: Some(BUCK_COIN_TYPE.into()),
                 balance_min: Some(1),
                 ..Default::default()
             },
@@ -293,10 +408,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .await?;
-    println!("   members with SUI balance >= 1: {}", funded.len());
+    println!("   members with BUCK balance >= 1: {}", funded.len());
 
-    // 10. Selection helpers.
-    println!("\n10. Selection helpers");
+    // 12. Selection helpers.
+    println!("\n12. Selection helpers");
     let now = now_ms();
     let cursor = &mut 0u32;
     let pick = wallet_pool_core::select::pick(
@@ -331,16 +446,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   next ordinal: {:?}", next.map(|e| e.ordinal));
     println!("   lru ordinal: {:?}", lru.map(|e| e.ordinal));
 
-    // 11. Export and import.
-    println!("\n11. Export / import round-trip");
+    // 13. Export and import.
+    println!("\n13. Export / import round-trip");
     let exported = pool.export(&wallet_pool_id).await?;
     let imported_id = pool.import(&exported).await?;
     println!("   exported {} bytes", exported.len());
     println!("   import returned id: {imported_id}");
     assert_eq!(imported_id, wallet_pool_id);
 
-    // 12. Disable and re-enable signer.
-    println!("\n12. Disable and re-enable member");
+    // 14. Disable and re-enable signer.
+    println!("\n14. Disable and re-enable member");
     pool.set_enabled(SetEnabledOptions {
         id: wallet_pool_id.clone(),
         by: By::Address(signer_address.clone()),
@@ -380,14 +495,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         re_enabled[0].enabled
     );
 
-    // 13. Delete pool.
-    println!("\n13. Deleting pool");
+    // 15. Delete pool.
+    println!("\n15. Deleting pool");
     pool.delete(&wallet_pool_id).await?;
     let remaining = pool.list_pools().await?;
     println!("   pools remaining after delete: {}", remaining.len());
 
-    // 14. Close handle to clear in-memory secrets.
+    // 16. Close handle to clear in-memory secrets.
     handle.close();
-    println!("\nDemo complete.");
+    println!("\nBUCK demo complete.");
     Ok(())
 }

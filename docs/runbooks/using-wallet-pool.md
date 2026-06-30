@@ -131,7 +131,7 @@ let members = pool
 let recipients: Vec<String> = members.iter().map(|m| m.address.clone()).collect();
 let digest = handle
     .fund(FundOptions {
-        coin_type: "0x2::sui::SUI".into(),
+        coin_type: Some("0x2::sui::SUI".into()),
         amount_per_recipient: 1_000_000,
         recipients,
         await_effects: true,
@@ -146,7 +146,7 @@ let digest = handle
 ```rust
 let digest = handle
     .fund(FundOptions {
-        coin_type: "0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC".into(),
+        coin_type: Some("0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC".into()),
         amount_per_recipient: 1_000_000,
         recipients,
         await_effects: true,

@@ -13,7 +13,7 @@ use sui_transaction_builder::{Argument, ObjectInput, TransactionBuilder};
 use wallet_pool_core::crypto::KeyPair;
 
 const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
-const GAS_BUDGET: u64 = 50_000_000;
+const GAS_BUDGET: u64 = 200_000_000;
 const GAS_PRICE: u64 = 1_000;
 
 /// Options for building a fund transaction.
@@ -471,11 +471,12 @@ mod tests {
     async fn fund_merges_multiple_coins_for_sui() {
         let address = master_address();
         let recipient = "0x2222222222222222222222222222222222222222222222222222222222222222";
-        // Required = 10M + 50M gas = 60M, so neither coin alone is enough.
+        // Required = 10M + 200M gas = 210M, so no single coin is enough.
         let rpc = MockRpc::new(
             vec![
-                sui_coin_with_id(40_000_000, 0x11),
-                sui_coin_with_id(40_000_000, 0x22),
+                sui_coin_with_id(100_000_000, 0x11),
+                sui_coin_with_id(100_000_000, 0x22),
+                sui_coin_with_id(100_000_000, 0x33),
             ],
             Some(ExecuteResponse {
                 digest: "merged".into(),
@@ -516,12 +517,12 @@ mod tests {
         let recipient = "0x2222222222222222222222222222222222222222222222222222222222222222";
         let usdc_type =
             "0x5d4b302506645c37ff133b98c13b0012de9d11ff5cbac74af62a8c1c90e0b0a2::usdc::USDC";
-        // Required = 10M; neither USDC coin alone is enough.
+        // Required = 10M; neither USDC coin alone is enough. SUI gas needs >= 200M.
         let rpc = MockRpc::new(
             vec![
                 usdc_coin(6_000_000, 0x33),
                 usdc_coin(6_000_000, 0x44),
-                sui_coin_with_id(100_000_000, 0x55),
+                sui_coin_with_id(300_000_000, 0x55),
             ],
             Some(ExecuteResponse {
                 digest: "usdc-fund".into(),
