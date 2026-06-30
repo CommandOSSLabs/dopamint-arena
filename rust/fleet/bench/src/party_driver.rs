@@ -159,15 +159,29 @@ fn block_ready<F: Future>(future: F) -> F::Output {
     }
 }
 
-thread_local! {
-    static ANCHOR_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .expect("anchor runtime");
+// One process-wide multi-threaded runtime drives all chain IO, shared by every
+// rayon worker. It must be multi-threaded (not per-worker current-thread) for two
+// reasons: `enable_all` gives the IO driver that network calls need, and the
+// runtime's worker pool always polls spawned tasks — so a shared tonic channel's
+// background connection task is never stranded on whichever worker happened to
+// build it. Workers call `block_on` concurrently; each blocks its own thread while
+// the shared pool drives the futures. A small fixed pool suffices: the chain work
+// is IO-bound, so the workers mostly park on epoll.
+static ANCHOR_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn anchor_runtime() -> &'static tokio::runtime::Runtime {
+    ANCHOR_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .thread_name("fleet-bench-anchor")
+            .build()
+            .expect("anchor runtime")
+    })
 }
 
 fn block_anchor<F: Future>(future: F) -> F::Output {
-    ANCHOR_RUNTIME.with(|rt| rt.block_on(future))
+    anchor_runtime().block_on(future)
 }
 
 enum BenchTranscriptRecorder<M> {

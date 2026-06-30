@@ -2498,6 +2498,50 @@ mod tests {
             .is_none());
     }
 
+    // Opt-in live reproduction of the fleet-bench wiring: one shared client and
+    // one shared multi-threaded runtime, with many OS threads each blocking on a
+    // chain read concurrently. Guards the channel-affinity hazard — a single
+    // tonic channel cached in the client must serve every worker, not strand on
+    // whichever thread built it. A multi-threaded runtime (the bench's choice)
+    // keeps the channel's background task always polled; the per-call timeout
+    // turns a regression (stranded channel) into a fast failure instead of a hang.
+    #[test]
+    #[ignore = "hits the live Sui testnet fullnode; run with --ignored"]
+    fn grpc_shared_channel_serves_concurrent_workers() {
+        let runtime = std::sync::Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(2)
+                .build()
+                .expect("runtime"),
+        );
+        let client = Arc::new(
+            GrpcSuiChainClient::new("https://mysten-rpc.testnet.sui.io:443").expect("client"),
+        );
+        let clock: Address = CLOCK_ADDRESS.parse().expect("clock address");
+
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let runtime = runtime.clone();
+                let client = client.clone();
+                std::thread::spawn(move || {
+                    runtime.block_on(async {
+                        tokio::time::timeout(Duration::from_secs(20), client.get_object_ref(clock))
+                            .await
+                            .expect("chain read did not strand")
+                            .expect("get_object_ref")
+                    })
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            let object_ref = worker.join().expect("worker thread");
+            assert_eq!(object_ref.object_id(), &clock);
+            assert!(object_ref.version() > 0);
+        }
+    }
+
     #[test]
     fn decodes_sui_bech32_ed25519_private_key() {
         let encoded = test_bech32_key();
