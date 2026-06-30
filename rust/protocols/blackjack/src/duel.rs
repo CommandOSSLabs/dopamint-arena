@@ -4,6 +4,8 @@ use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub use crate::strategy::BlackjackDuelStrategy;
+
 use crate::hand_value;
 
 pub const STAKE: u64 = 10_000_000;
@@ -60,6 +62,7 @@ pub enum DuelOutcome {
     Push,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct BlackjackDuel;
 
 fn draw_rank(seed: &[u8; 32], draw_index: u64) -> u8 {

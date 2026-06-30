@@ -5,10 +5,11 @@
  *   0,1 = A holes; 2,3 = B holes; 4,5,6 = flop; 7 = turn; 8 = river.
  *
  * Each slot is a commit-reveal from both parties. A card is derived by combining the
- * two reveals into a seed, Fisher-Yates shuffling a fresh 52-card deck, and taking
- * deck[0]. There is no traditional dealer deck. Board cards are de-duplicated by
- * re-deriving the slot with a counter; hidden cards may duplicate each other or the
- * board, and hidden cards equal to board cards are burned at showdown.
+ * two reveals into a seed and reducing it modulo 52 (the whitepaper's
+ * `Card = Random() mod 52`) — one hash per card, no shuffle and no hidden dealer deck.
+ * Board cards are de-duplicated by re-deriving the slot with a counter; hidden cards
+ * may duplicate each other or the board, and hidden cards equal to board cards are
+ * burned at showdown.
  */
 
 import { bytesEqual, concatBytes } from "../core/bytes";
@@ -18,7 +19,6 @@ import {
   verifyCommitment,
 } from "../core/commitment";
 import { blake2b256 } from "../core/crypto";
-import { seedFromBytes, shuffle } from "../core/randomness";
 import { u64ToBeBytes } from "../core/wire";
 import type { Balances, Party, Protocol, ProtocolContext } from "./Protocol";
 import { otherParty, protocolDomain } from "./Protocol";
@@ -129,6 +129,7 @@ export type PokerMove =
   | { kind: "check" }
   | { kind: "call" }
   | { kind: "fold" }
+  | { kind: "forfeit" }
   | { kind: "next_hand" };
 
 const PHASE_CODE: Record<PokerPhase, number> = {
@@ -163,7 +164,7 @@ function cloneRevealSlots(slots: (SlotReveal | null)[]): (SlotReveal | null)[] {
 }
 
 function cloneSecretSlots(
-  slots: (SlotSecret | null)[] | null
+  slots: (SlotSecret | null)[] | null,
 ): (SlotSecret | null)[] | null {
   return slots ? slots.map((r) => (r ? copyReveal(r) : null)) : null;
 }
@@ -225,7 +226,7 @@ function revealArrayFor(s: PokerState, party: Party): (SlotReveal | null)[] {
 
 function localSecretArrayFor(
   s: PokerState,
-  party: Party
+  party: Party,
 ): (SlotSecret | null)[] | null {
   return party === "A" ? s.localSecretsA : s.localSecretsB;
 }
@@ -237,7 +238,7 @@ function commitArrayFor(s: PokerState, party: Party): Uint8Array[] | null {
 function hasRevealed(
   s: PokerState,
   party: Party,
-  slots: readonly number[]
+  slots: readonly number[],
 ): boolean {
   const reveals = revealArrayFor(s, party);
   return slots.every((slot) => reveals[slot] !== null);
@@ -245,7 +246,7 @@ function hasRevealed(
 
 export function expectedQuantumPokerRevealSlots(
   s: PokerState,
-  by: Party
+  by: Party,
 ): number[] {
   const revealIfMissing = (slots: readonly number[]) =>
     slots.filter((slot) => !revealArrayFor(s, by)[slot]);
@@ -317,7 +318,7 @@ function scoreToU64(score: number | null): Uint8Array {
 
 /** Compute the nine public commitments for a party's private slot secrets. */
 export function commitSlotSecrets(
-  secrets: readonly SlotSecret[]
+  secrets: readonly SlotSecret[],
 ): Uint8Array[] {
   if (secrets.length !== SLOT_COUNT) {
     throw new Error(`expected ${SLOT_COUNT} slot secrets`);
@@ -327,7 +328,7 @@ export function commitSlotSecrets(
 
 function validateLocalSecretsForCommit(
   commitments: readonly Uint8Array[],
-  secrets: readonly SlotSecret[]
+  secrets: readonly SlotSecret[],
 ): SlotSecret[] {
   if (secrets.length !== SLOT_COUNT) {
     throw new Error(`expected ${SLOT_COUNT} local slot secrets`);
@@ -344,11 +345,21 @@ function validateLocalSecretsForCommit(
 /**
  * Derive a single Quantum Poker card from two slot reveals. Counter 0 is the base
  * slot seed; higher counters are used only to retry board collisions.
+ *
+ * Per the Quantum Games design, every slot is an *independent sample*: combine both
+ * reveals into a 32-byte seed and reduce it modulo 52 — the whitepaper's
+ * `Card = Random() mod 52`. This is one hash per card, not a 51-swap Fisher-Yates over
+ * a fresh 52-card deck. There is no hidden global deck; board uniqueness is enforced by
+ * the caller via `counter`, and the showdown burn rule resolves any hidden/board
+ * collisions. We reduce the *full* 256-bit seed modulo 52 (big-endian, byte-by-byte
+ * Horner fold) so the whole hash contributes its entropy; the residual modulo bias is
+ * bounded by 52 / 2^256 (~2^-250) — unobservable — with no extra hash. Must stay
+ * byte-for-byte identical to Rust `derive_quantum_card`.
  */
 export function deriveQuantumCard(
   revealA: SlotReveal,
   revealB: SlotReveal,
-  counter = 0
+  counter = 0,
 ): number {
   if (!Number.isInteger(counter) || counter < 0) {
     throw new Error(`invalid card derivation counter ${counter}`);
@@ -357,15 +368,15 @@ export function deriveQuantumCard(
     revealA.value,
     revealA.salt,
     revealB.value,
-    revealB.salt
+    revealB.salt,
   );
   const seedBytes =
     counter === 0
       ? slotSeed
       : blake2b256(concatBytes([slotSeed, u64ToBeBytes(counter)]));
-  const deck = Array.from({ length: 52 }, (_, i) => i);
-  shuffle(seedFromBytes(seedBytes), deck);
-  return deck[0];
+  let acc = 0;
+  for (let i = 0; i < seedBytes.length; i++) acc = (acc * 256 + seedBytes[i]) % 52;
+  return acc;
 }
 
 export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
@@ -376,13 +387,18 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   readonly movesCarrySecrets = true;
   private readonly randomDrivers = new Map<Party, QuantumPokerSeatDriver>();
 
-  constructor(private readonly handCap: bigint = DEFAULT_HAND_CAP) {}
+  // `ante` is the fixed per-hand wager unit; it defaults to ANTE so existing callers/tests are
+  // unchanged, and the app passes a smaller value to scale the chip economy to whole-token stakes.
+  constructor(
+    private readonly handCap: bigint = DEFAULT_HAND_CAP,
+    private readonly ante: bigint = ANTE,
+  ) {}
 
   initialState(ctx: ProtocolContext): PokerState {
     const total = ctx.initialBalances.a + ctx.initialBalances.b;
     return {
       phase:
-        ctx.initialBalances.a >= ANTE && ctx.initialBalances.b >= ANTE
+        ctx.initialBalances.a >= this.ante && ctx.initialBalances.b >= this.ante
           ? "commit"
           : "done",
       handNo: 0n,
@@ -420,6 +436,10 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
 
   applyMove(state: PokerState, move: PokerMove, by: Party): PokerState {
     const s = cloneState(state);
+    // A seat that has met every reveal it owes can claim the contested pot when the opponent
+    // withholds a reveal it owes (the F1 abandonment gap). Withholding is an implicit fold, so
+    // a non-zero create-time `penalty_amount` then backs the on-chain force-close.
+    if (move.kind === "forfeit") return this.claimForfeit(s, by);
     switch (s.phase) {
       case "commit":
         return this.applyCommit(s, move, by);
@@ -464,15 +484,15 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private applyRevealSlots(
     s: PokerState,
     move: PokerMove,
-    by: Party
+    by: Party,
   ): PokerState {
     if (move.kind !== "reveal_slots") throw new Error("expected reveal_slots");
     const expected = this.expectedRevealSlots(s, by);
     if (!sameNumberSet(move.slots, expected)) {
       throw new Error(
         `expected ${by} to reveal slots ${expected.join(
-          ","
-        )}, got ${move.slots.join(",")}`
+          ",",
+        )}, got ${move.slots.join(",")}`,
       );
     }
     if (move.reveals.length !== move.slots.length) {
@@ -534,17 +554,17 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   }
 
   private postAntesAndBeginStreet(s: PokerState, phase: "preflop_bet"): void {
-    if (s.balanceA < ANTE || s.balanceB < ANTE) {
+    if (s.balanceA < this.ante || s.balanceB < this.ante) {
       throw new Error("insufficient balance for ante");
     }
-    s.totalBetA = ANTE;
-    s.totalBetB = ANTE;
+    s.totalBetA = this.ante;
+    s.totalBetB = this.ante;
     this.beginStreet(s, phase);
   }
 
   private beginStreet(
     s: PokerState,
-    phase: "preflop_bet" | "flop_bet" | "turn_bet" | "river_bet"
+    phase: "preflop_bet" | "flop_bet" | "turn_bet" | "river_bet",
   ): void {
     s.phase = phase;
     s.streetBetA = 0n;
@@ -557,7 +577,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private tryRevealBoardThenBet(
     s: PokerState,
     slots: readonly number[],
-    nextPhase: "flop_bet" | "turn_bet" | "river_bet"
+    nextPhase: "flop_bet" | "turn_bet" | "river_bet",
   ): void {
     if (!hasRevealed(s, "A", slots) || !hasRevealed(s, "B", slots)) return;
     const used = new Set(s.board);
@@ -575,8 +595,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
         nextPhase === "flop_bet"
           ? "reveal_turn"
           : nextPhase === "turn_bet"
-          ? "reveal_river"
-          : "showdown";
+            ? "reveal_river"
+            : "showdown";
       return;
     }
     this.beginStreet(s, nextPhase);
@@ -586,18 +606,18 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     s: PokerState,
     party: Party,
     slot: number,
-    allowLocal: boolean
+    allowLocal: boolean,
   ): SlotReveal | null {
     const publicReveal = revealArrayFor(s, party)[slot];
     if (publicReveal) return publicReveal;
-    return allowLocal ? localSecretArrayFor(s, party)?.[slot] ?? null : null;
+    return allowLocal ? (localSecretArrayFor(s, party)?.[slot] ?? null) : null;
   }
 
   private deriveSlotCard(
     s: PokerState,
     slot: number,
     counter: number,
-    allowLocal: boolean
+    allowLocal: boolean,
   ): number | null {
     const revealA = this.revealForDerivation(s, "A", slot, allowLocal);
     const revealB = this.revealForDerivation(s, "B", slot, allowLocal);
@@ -608,7 +628,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private deriveUniqueBoardCard(
     s: PokerState,
     slot: number,
-    used: Set<number>
+    used: Set<number>,
   ): { card: number; counter: number } {
     for (let counter = 0; counter < 10_000; counter++) {
       const card = this.deriveSlotCard(s, slot, counter, false);
@@ -775,6 +795,30 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     s.streetBetB = 0n;
   }
 
+  /**
+   * `by` claims the contested pot because the opponent withholds a reveal it owes during a
+   * reveal phase. `by` must already owe nothing; the opponent must still owe a reveal. Treated
+   * as the opponent folding, so the pot, balance clamp, and state encoding match `resolveFold`.
+   */
+  private claimForfeit(s: PokerState, by: Party): PokerState {
+    const opp = otherParty(by);
+    let mineOwes: number[];
+    let oppOwes: number[];
+    try {
+      mineOwes = expectedQuantumPokerRevealSlots(s, by);
+      oppOwes = expectedQuantumPokerRevealSlots(s, opp);
+    } catch {
+      throw new Error("forfeit only valid during a pending reveal");
+    }
+    if (mineOwes.length !== 0)
+      throw new Error("forfeit not claimable: you still owe a reveal");
+    if (oppOwes.length === 0)
+      throw new Error("forfeit not claimable: opponent does not owe a reveal");
+    s.foldedBy = opp;
+    this.resolveFold(s);
+    return s;
+  }
+
   private resolveFold(s: PokerState): void {
     const winner = otherParty(s.foldedBy!);
     this.settle(s, winner, this.contestedAmount(s));
@@ -839,7 +883,9 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     if (move.kind !== "next_hand") throw new Error("expected next_hand");
     s.handNo += 1n;
     const canContinue =
-      s.handNo < s.handCap && s.balanceA >= ANTE && s.balanceB >= ANTE;
+      s.handNo < s.handCap &&
+      s.balanceA >= this.ante &&
+      s.balanceB >= this.ante;
     this.resetHandFields(s);
     s.phase = canContinue ? "commit" : "done";
     return s;
@@ -885,8 +931,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
       s.lastResult?.reason === "fold"
         ? 1
         : s.lastResult?.reason === "showdown"
-        ? 2
-        : 0
+          ? 2
+          : 0,
     );
 
     return concatBytes([
@@ -1027,7 +1073,7 @@ export class QuantumPokerSeatDriver {
       cards.push(
         this.party === "A"
           ? deriveQuantumCard(own, other)
-          : deriveQuantumCard(other, own)
+          : deriveQuantumCard(other, own),
       );
     }
     return cards;

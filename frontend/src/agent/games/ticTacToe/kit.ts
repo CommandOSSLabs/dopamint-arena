@@ -68,6 +68,27 @@ function fastIndex(seed: number, bytes: Uint8Array, n: number): number {
   return h % n;
 }
 
+/**
+ * Deterministic 16-byte salt from (seed, stateBytes). Two independent FNV-1a
+ * passes with different starting seeds fill the lo/hi halves so plan() stays
+ * idempotent: same state → same salt, with no mutable RNG consumed.
+ */
+function deterministicSalt(seed: number, stateBytes: Uint8Array): Uint8Array {
+  const salt = new Uint8Array(16);
+  const view = new DataView(salt.buffer);
+  let lo = (seed ^ 0x811c9dc5) >>> 0;
+  let hi = (seed ^ 0xdeadbeef) >>> 0;
+  for (let i = 0; i < stateBytes.length; i++) {
+    lo = Math.imul(lo ^ stateBytes[i]!, 0x01000193) >>> 0;
+    hi = Math.imul(hi ^ stateBytes[i]!, 0x01000193) >>> 0;
+  }
+  view.setUint32(0, lo, false);
+  view.setUint32(4, hi, false);
+  view.setUint32(8, (lo ^ (hi << 7)) >>> 0, false);
+  view.setUint32(12, (hi ^ (lo >>> 3)) >>> 0, false);
+  return salt;
+}
+
 function pickCell(
   state: protocols.TicTacToeState,
   seat: Party,
@@ -130,6 +151,12 @@ class TicTacToeBot implements GameBot<
 
   plan(state: MultiGameTicTacToeState): MultiGameTicTacToeMove | null {
     const inner = state.inner;
+    // Derive a deterministic salt from the seat seed + encoded outer state so
+    // plan() stays idempotent: the same state always produces the same move+salt.
+    const salt = deterministicSalt(
+      this.fastSeed,
+      this.protocol.encodeState(state),
+    );
 
     if (this.innerProtocol.isTerminal(inner)) {
       // The inner game ended; seat A advances to the next game — but ONLY while the
@@ -137,7 +164,7 @@ class TicTacToeBot implements GameBot<
       // OR a side can no longer fund the next stake) any advance move is illegal and
       // applyMove would reject it ("session over").
       if (!this.protocol.isTerminal(state) && this.seat === "A") {
-        return { cell: 0 };
+        return { cell: 0, salt };
       }
       return null;
     }
@@ -151,6 +178,7 @@ class TicTacToeBot implements GameBot<
         this.fastSeed,
         this.innerProtocol,
       ),
+      salt,
     };
   }
 

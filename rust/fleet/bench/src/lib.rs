@@ -3,6 +3,7 @@
 pub mod cgroup;
 pub mod cli;
 pub mod party_driver;
+pub mod protocols;
 pub mod report;
 pub mod resources;
 pub mod stats;

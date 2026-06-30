@@ -33,8 +33,8 @@ import {
   type ChatSessionStatus,
 } from "./session-core";
 
-/** DOPAMINT bank locked per seat (1 DOPAMINT, 9 decimals). */
-const LOCKED_PER_SEAT = 1_000_000_000n;
+/** DOPAMINT bank locked per seat (1 DOPAMINT; 0 decimals, ADR-0023). */
+const LOCKED_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0023)
 /** SUI-fallback bank per seat (MIST), when the DOPAMINT env is unset. */
 const SUI_PER_SEAT = 500n;
 
@@ -311,6 +311,9 @@ class ChatSession {
             verifications: 2,
             bytes,
           });
+          // Chat has no actionsDelta heartbeat (unlike the bot games), so this per-update tag is
+          // its only per-game TPS signal — one co-signed update = one action.
+          this.deps?.report.recordActions(1);
         };
 
         if (this.gen !== myGen) return;

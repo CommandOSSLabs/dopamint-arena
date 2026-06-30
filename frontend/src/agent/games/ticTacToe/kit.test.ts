@@ -23,7 +23,7 @@ describe("ticTacToe kit", () => {
 
   it("uses the multi-game frontend protocol domain", () => {
     const kit = createTicTacToeKit(3, 10n);
-    assert.strictEqual(kit.protocol.name, "tic_tac_toe.multi.v1");
+    assert.strictEqual(kit.protocol.name, "tic_tac_toe.series.v2");
     assert.notStrictEqual(
       kit.protocol.name,
       new protocols.TicTacToeProtocol(10n).name,
@@ -75,6 +75,7 @@ describe("ticTacToe kit", () => {
       balanceB: 0n,
       total: 20n,
       stake: 5n,
+      moveAccumulator: new Uint8Array(32),
     };
     const state: MultiGameTicTacToeState = {
       inner,

@@ -20,6 +20,12 @@ export interface BackendArgs {
   // Secrets Manager ARN holding the base64 ed25519 settler key, injected as
   // SUI_SETTLER_KEY via ECS `secrets`. Omitted => the env var is simply absent.
   settlerKeySecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the internal-faucet bearer token, injected as FAUCET_ADMIN_TOKEN
+  // via ECS `secrets`. Omitted => POST /v1/faucet/internal stays disabled (503).
+  faucetAdminTokenSecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the Enoki PRIVATE api key, injected as ENOKI_API_KEY via ECS
+  // `secrets`. Omitted => Enoki sponsorship is off and the settler is the sole gas source.
+  enokiApiKeySecretArn?: pulumi.Input<string>;
   // Ollama sidecar for the chat-v2 feature. Defaults off so existing tests and
   // small environments keep the current 1024/2048 task size.
   ollamaEnabled?: pulumi.Input<boolean>;
@@ -37,9 +43,19 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
   const pubSubEndpoint = pulumi.output(args.pubSubEndpoint);
   const cacheEndpoint = pulumi.output(args.cacheEndpoint);
   const logGroupName = pulumi.output(args.logGroupName);
-  const settlerKeySecretArn = pulumi.output(
-    args.settlerKeySecretArn ?? undefined,
-  );
+  // Bundle the three secret ARNs into one Output so the outer pulumi.all stays an 8-tuple
+  // (its typed overloads stop at 8) — same reason the ollama trio is bundled below.
+  const secretArns = pulumi
+    .all([
+      pulumi.output(args.settlerKeySecretArn ?? undefined),
+      pulumi.output(args.faucetAdminTokenSecretArn ?? undefined),
+      pulumi.output(args.enokiApiKeySecretArn ?? undefined),
+    ])
+    .apply(([settler, faucetAdminToken, enoki]) => ({
+      settler,
+      faucetAdminToken,
+      enoki,
+    }));
   const corsAllowedOrigins = pulumi.output(
     args.corsAllowedOrigins ?? undefined,
   );
@@ -61,7 +77,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       pubSubEndpoint,
       cacheEndpoint,
       logGroupName,
-      settlerKeySecretArn,
+      secretArns,
       corsAllowedOrigins,
       ollama,
     ])
@@ -72,7 +88,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
         pubSubEndpoint,
         cacheEndpoint,
         logGroupName,
-        settlerKeySecretArn,
+        secretArns,
         corsAllowedOrigins,
         ollama,
       ]) => {
@@ -99,12 +115,31 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             value:
               "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b",
           },
+          // Slim example-app packages whose ops the sponsor gas-funds when set.
+          {
+            name: "AGENT_ALLOWANCE_PACKAGE_ID",
+            value:
+              "0x36d982ffdcf89c709829650bd6b07128f505f41d8953f48658746291d5bfb679",
+          },
+          {
+            name: "STREAMING_PAYMENT_PACKAGE_ID",
+            value:
+              "0x5125f1e0b65ba5c27cc5eb130ee34133bf55ddc30322cf7099d748f4df23e7ea",
+          },
           // The sponsor only gas-funds MTPS faucet mints + staked tunnel opens whose coin
           // type matches this; without it config defaults to 0x2::sui::SUI and /v1/sponsor 422s.
+          // ADR-0023 admin-mint MTPS package — must own MTPS_ADMIN_CAP_ID below.
           {
             name: "TUNNEL_COIN_TYPE",
             value:
-              "0x62e31a8b5105c16c67936fe129e3db17e5977a8667a3464db583baa89c04272c::mtps::MTPS",
+              "0xe0f8eae320959eb7300cb599a6e7a287355c60b299a7e80a808d9196e0aea8ea::mtps::MTPS",
+          },
+          // AdminCap the faucet signs admin_mint with (ADR-0023). Must be owned by the settler
+          // key and belong to TUNNEL_COIN_TYPE's package; unset => both faucet routes 503.
+          {
+            name: "MTPS_ADMIN_CAP_ID",
+            value:
+              "0x7cc2d628c6ceeefb1e48502b0900eac5bc77f2dd9d170bdc339053e38b03ceae",
           },
           {
             name: "WALRUS_PUBLISHER_URL",
@@ -131,23 +166,35 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           );
         }
 
+        // Secrets injected from Secrets Manager at launch — never inlined as plaintext env
+        // (a task definition is readable via ecs:DescribeTaskDefinition / committed to git).
+        const backendSecrets: Array<{ name: string; valueFrom: string }> = [];
+        if (secretArns.settler) {
+          backendSecrets.push({
+            name: "SUI_SETTLER_KEY",
+            valueFrom: secretArns.settler,
+          });
+        }
+        if (secretArns.faucetAdminToken) {
+          backendSecrets.push({
+            name: "FAUCET_ADMIN_TOKEN",
+            valueFrom: secretArns.faucetAdminToken,
+          });
+        }
+        if (secretArns.enoki) {
+          backendSecrets.push({
+            name: "ENOKI_API_KEY",
+            valueFrom: secretArns.enoki,
+          });
+        }
+
         const backendContainer = {
           name: "backend",
           image: `${repositoryUrl}:${imageTag}`,
           essential: true,
           portMappings: [{ containerPort: 8080, protocol: "tcp" }],
           environment: backendEnv,
-          // Private key: injected from Secrets Manager, never inlined as plaintext env.
-          ...(settlerKeySecretArn
-            ? {
-                secrets: [
-                  {
-                    name: "SUI_SETTLER_KEY",
-                    valueFrom: settlerKeySecretArn,
-                  },
-                ],
-              }
-            : {}),
+          ...(backendSecrets.length > 0 ? { secrets: backendSecrets } : {}),
           logConfiguration: {
             logDriver: "awslogs",
             options: {

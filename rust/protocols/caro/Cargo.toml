@@ -10,3 +10,7 @@ publish.workspace = true
 tunnel-core = { path = "../../engine/tunnel-core" }
 tunnel-harness = { path = "../../engine/tunnel-harness" }
 serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+hex = { workspace = true }

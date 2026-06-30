@@ -4,6 +4,9 @@ use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::{BattleshipSeriesStrategy, BattleshipStrategy};
+
 pub const BOARD_SIZE: usize = 10;
 pub const CELL_COUNT: usize = BOARD_SIZE * BOARD_SIZE;
 pub const FLEET_CELLS: u8 = 17;
@@ -94,6 +97,7 @@ pub enum BattleshipMove {
     },
 }
 
+#[derive(Clone, Debug)]
 pub struct Battleship {
     default_stake: u64,
 }
@@ -114,6 +118,7 @@ pub struct BattleshipSeriesState {
     pub balance_b: u64,
 }
 
+#[derive(Clone, Debug)]
 pub struct BattleshipSeries {
     tunnel_id: String,
     stake_per_game: u64,
@@ -164,6 +169,13 @@ impl Default for Battleship {
     fn default() -> Self {
         Self { default_stake: 100 }
     }
+}
+
+fn splitmix_next(state: u64) -> u64 {
+    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 fn leaf_hash(cell: u8, is_ship: bool, salt: &[u8; 32]) -> [u8; 32] {

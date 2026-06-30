@@ -1,114 +1,68 @@
-import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
-import { defaultStateHash } from "@/agent/stateHash";
-import {
-  BET_OPTIONS,
-  BlackjackBetProtocol,
-  commitMoveFromSecret,
-  fixedBetMove,
-  getPlayerParty,
-  MIN_BET,
-  revealMoveFromSecret,
-  secureCommitSecret,
-  type BetBlackjackMove,
-  type BetBlackjackState,
-  type PlayerPartyFor,
-} from "@/games/blackjack/app/lib/bjBetProtocol";
-import { handValue } from "@/games/blackjack/app/lib/bjCards";
-import { bjMoveCodec } from "@/games/blackjack/app/lib/bjMoveCodec";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
+import {
+  BlackjackProtocol,
+  actorFor,
+  getPlayerParty,
+  type PlayerPartyFor,
+  type BlackjackState,
+  type BlackjackMove,
+} from "sui-tunnel-ts/protocol/blackjack";
+import { blackjackMoveCodec } from "sui-tunnel-ts/protocol/blackjackCodec";
+import { defaultStateHash } from "@/agent/stateHash";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
-class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
+/**
+ * Commit-reveal blackjack bot. Plays only when `actorFor` (under the kit's seat assignment)
+ * says this seat owes the move, then delegates to the protocol's `randomMove` — which mints a
+ * commit secret, reveals from the stored local secret, bets MIN_BET, and uses basic strategy
+ * (hit < 17) for the player turn.
+ */
+class BlackjackBot implements GameBot<BlackjackState, BlackjackMove> {
   private readonly seat: Party;
-  private readonly protocol: BlackjackBetProtocol;
-  // The role→seat mapping this bot reasons with — MUST match the protocol's, or the bot would
-  // judge "is it my turn" against a different rotation than the one applying its moves.
+  private readonly protocol: BlackjackProtocol;
   private readonly playerPartyFor: PlayerPartyFor;
+  private readonly rng: () => number;
 
   constructor(
     seat: Party,
-    protocol: BlackjackBetProtocol,
+    protocol: BlackjackProtocol,
     playerPartyFor: PlayerPartyFor,
+    ctx: BotContext,
   ) {
     this.seat = seat;
     this.protocol = protocol;
     this.playerPartyFor = playerPartyFor;
+    this.rng = ctx.rngForSeat(seat);
   }
 
-  plan(state: BetBlackjackState): BetBlackjackMove | null {
-    if (this.protocol.isTerminal(state)) return null;
-
-    // Per-card commit-reveal "plumbing": both seats contribute, strictly serialized A-then-B.
-    // Secrets are minted from the CSPRNG here; the relay codec drops the pre-image.
-    if (state.phase === "draw_commit") {
-      const owe = !state.pendingCommitA
-        ? "A"
-        : !state.pendingCommitB
-          ? "B"
-          : null;
-      if (owe !== this.seat) return null;
-      return commitMoveFromSecret(secureCommitSecret());
-    }
-    if (state.phase === "draw_reveal") {
-      const owe = !state.pendingRevealA
-        ? "A"
-        : !state.pendingRevealB
-          ? "B"
-          : null;
-      if (owe !== this.seat) return null;
-      const secret =
-        this.seat === "A" ? state.localSecretA : state.localSecretB;
-      return secret ? revealMoveFromSecret(secret) : null;
-    }
-
-    if (this.protocol.actorFor(state) !== this.seat) return null;
-
-    if (state.phase === "round_over") {
-      const cap =
-        state.balanceA < state.balanceB ? state.balanceA : state.balanceB;
-      const options = BET_OPTIONS.filter(
-        (o) => BigInt(o) >= MIN_BET && BigInt(o) <= cap,
-      );
-      const amount = options.length > 0 ? options[0] : Number(MIN_BET);
-      return fixedBetMove(amount, state);
-    }
-
-    if (state.phase === "player") {
-      if (this.seat !== this.playerPartyFor(state.round)) return null;
-      return { action: handValue(state.playerHand) < 17 ? "hit" : "stand" };
-    }
-
-    return null;
+  plan(state: BlackjackState): BlackjackMove | null {
+    if (actorFor(state, this.playerPartyFor) !== this.seat) return null;
+    return this.protocol.randomMove(state, this.seat, this.rng);
   }
 
-  confirm(_state: BetBlackjackState, _move: BetBlackjackMove): void {
-    // No retained memory beyond the public state.
-  }
-
-  abort(): void {
-    // No retained memory.
-  }
+  confirm(_state: BlackjackState, _move: BlackjackMove): void {}
+  abort(): void {}
 }
 
 /**
- * `playerPartyFor` selects the role→seat assignment: the default 2-round rotation (PvP / fair
- * self-play settlement) or `FIXED_PLAYER_A` for the single-human "Play vs Bot" view, which pins
- * the player to seat A so the table never inverts. It's threaded into BOTH the protocol and the
- * bot so they agree on whose turn it is; it never affects the encoded state (wire/Move parity).
+ * `playerPartyFor` selects role→seat assignment: default 2-round rotation (PvP / fair self-play)
+ * or `FIXED_PLAYER_A` to pin the human to seat A in single-player "vs bot". It is threaded into
+ * BOTH the protocol and the bot so they agree on whose turn it is; it never affects the encoded
+ * state (wire parity).
  */
 export function createBlackjackKit(
   stake: bigint,
   playerPartyFor: PlayerPartyFor = getPlayerParty,
-): GameKit<BetBlackjackState, BetBlackjackMove> {
-  const protocol = new BlackjackBetProtocol(playerPartyFor);
+): GameKit<BlackjackState, BlackjackMove> {
+  const protocol = new BlackjackProtocol(playerPartyFor);
 
   return {
     id: "blackjack",
     protocol,
+    moveCodec: blackjackMoveCodec,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, _ctx: BotContext) =>
-      new BlackjackBot(seat, protocol, playerPartyFor),
-    // Strip the commit pre-image from relayed moves (agent-vs-agent over a tunnel).
-    moveCodec: bjMoveCodec,
+    createBot: (seat: Party, ctx: BotContext) =>
+      new BlackjackBot(seat, protocol, playerPartyFor, ctx),
     defaultStake: stake,
   };
 }

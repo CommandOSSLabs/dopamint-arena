@@ -1,6 +1,44 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useMemo } from "react";
+import type { ReactNode } from "react";
 
 import { get } from "../games/registry";
+import {
+  TelemetryContext,
+  useTelemetry,
+  type TelemetryWriter,
+} from "@/telemetry/TelemetryProvider";
+
+/**
+ * Wraps a game in a telemetry context whose `recordActions` tags this game's `gameId`, so the
+ * state updates a game reports (the same `actionsDelta` it ships to the backend heartbeat) are
+ * tallied per-game. That per-game tally is what lets the window's TPS chip show a real local
+ * rate when the backend's authoritative `perGame` feed is absent. Everything else (snapshot,
+ * backend, other writer methods) passes straight through; `report` keeps a stable identity so
+ * game effects that depend on it don't churn on each telemetry tick.
+ */
+function GameTelemetryScope({
+  gameId,
+  children,
+}: {
+  gameId: string;
+  children: ReactNode;
+}) {
+  const base = useTelemetry();
+  const { report: baseReport, recordGameUpdate } = base;
+  const report = useMemo<TelemetryWriter>(
+    () => ({
+      ...baseReport,
+      recordActions: (n) => recordGameUpdate(gameId, n),
+    }),
+    [baseReport, recordGameUpdate, gameId],
+  );
+  const value = useMemo(() => ({ ...base, report }), [base, report]);
+  return (
+    <TelemetryContext.Provider value={value}>
+      {children}
+    </TelemetryContext.Provider>
+  );
+}
 
 /**
  * A game's `Window`, memoized so a floor re-render (a sibling drag, a telemetry
@@ -23,5 +61,9 @@ export const GameContent = memo(function GameContent({
   const close = useCallback(() => onClose(windowId), [onClose, windowId]);
   if (!mod) return null;
   const Content = mod.Window;
-  return <Content windowId={windowId} onClose={close} />;
+  return (
+    <GameTelemetryScope gameId={gameId}>
+      <Content windowId={windowId} onClose={close} />
+    </GameTelemetryScope>
+  );
 });

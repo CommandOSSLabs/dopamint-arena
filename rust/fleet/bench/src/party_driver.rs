@@ -3,15 +3,19 @@
 //! (basic-strategy bots, then a root-anchored cooperative settlement). `bytes`
 //! counts MOVE/ACK frame bytes only — the determinism gate (143*N / 75982*N).
 
+use std::future::Future;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::Instant;
-use tunnel_blackjack::{plan, BjMove, Blackjack};
+use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
+use tunnel_blackjack::{BjMove, Blackjack, BlackjackStrategy};
 use tunnel_core::crypto::blake2b256;
 use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
 use tunnel_harness::{
-    Balances, FrameCodec, LocalSigner, PartyRuntime, Seat, Signer, TunnelContext,
+    Balances, FrameCodec, LocalSigner, MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol,
+    Seat, Signer, TunnelContext,
 };
 
-type Seats<C> = PartyRuntime<Blackjack, LocalSigner, C>;
+type Seats<P, C> = PartyRuntime<P, LocalSigner, C>;
 
 pub struct MatchResult {
     pub moves: u64,
@@ -44,11 +48,11 @@ impl SeatKit {
 }
 
 /// Pump one seat's MOVE to the other and the ACK back until quiescent; returns bytes sent.
-fn deliver<C: FrameCodec<BjMove>>(
-    proposer: &mut Seats<C>,
-    responder: &mut Seats<C>,
-    first: Vec<u8>,
-) -> usize {
+fn deliver<P, C>(proposer: &mut Seats<P, C>, responder: &mut Seats<P, C>, first: Vec<u8>) -> usize
+where
+    P: Protocol,
+    C: FrameCodec<P::Move>,
+{
     let mut bytes = first.len();
     let mut to_responder = vec![first];
     loop {
@@ -77,22 +81,55 @@ fn deliver<C: FrameCodec<BjMove>>(
 
 /// Inject the per-match card seed into a seat's blackjack state before play. `None`
 /// keeps the golden deterministic stream (byte-identical to the legacy gate).
-fn seed_cards<C: FrameCodec<BjMove>>(seat: &mut Seats<C>, card_seed: Option<u64>) {
+fn seed_cards<C: FrameCodec<BjMove>>(seat: &mut Seats<Blackjack, C>, card_seed: Option<u64>) {
     if card_seed.is_some() {
         seat.with_state_mut(|s| s.card_seed = card_seed);
     }
 }
 
+fn noop_raw_waker() -> RawWaker {
+    fn clone(_: *const ()) -> RawWaker {
+        noop_raw_waker()
+    }
+    fn wake(_: *const ()) {}
+    fn wake_by_ref(_: *const ()) {}
+    fn drop(_: *const ()) {}
+
+    RawWaker::new(
+        std::ptr::null(),
+        &RawWakerVTable::new(clone, wake, wake_by_ref, drop),
+    )
+}
+
+fn block_ready<F: Future>(future: F) -> F::Output {
+    let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+    let mut cx = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("fleet-bench MoveStrategy futures must complete synchronously"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
-    card_seed: Option<u64>,
+pub(crate) fn play_protocol_match_with_strategies<P, C, StrategyA, StrategyB>(
+    protocol: P,
+    mut strategy_a: StrategyA,
+    mut strategy_b: StrategyB,
     kit: &SeatKit,
     tunnel_id: &str,
     balance_a: u64,
     balance_b: u64,
     created_at: u64,
     max_moves: u64,
-) -> MatchResult {
+    configure: impl FnOnce(&mut Seats<P, C>, &mut Seats<P, C>),
+) -> MatchResult
+where
+    P: Protocol + Clone,
+    C: FrameCodec<P::Move> + Default,
+    StrategyA: MoveStrategy<P>,
+    StrategyB: MoveStrategy<P>,
+{
     let ctx = |seat| TunnelContext {
         tunnel_id: tunnel_id.to_string(),
         initial: Balances {
@@ -101,17 +138,32 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
         },
         seat,
     };
-    let mut a: Seats<C> =
-        PartyRuntime::new(Blackjack, kit.signer_a.clone(), kit.pk_b, ctx(Seat::A));
-    let mut b: Seats<C> =
-        PartyRuntime::new(Blackjack, kit.signer_b.clone(), kit.pk_a, ctx(Seat::B));
-    seed_cards(&mut a, card_seed);
-    seed_cards(&mut b, card_seed);
+    let mut a: Seats<P, C> = PartyRuntime::new(
+        protocol.clone(),
+        kit.signer_a.clone(),
+        kit.pk_b,
+        ctx(Seat::A),
+    );
+    let mut b: Seats<P, C> = PartyRuntime::new(
+        protocol.clone(),
+        kit.signer_b.clone(),
+        kit.pk_a,
+        ctx(Seat::B),
+    );
+    configure(&mut a, &mut b);
 
     let started = Instant::now();
     let mut moves = 0u64;
     let mut bytes = 0usize;
     let mut ts = created_at;
+    let strategy_ctx_a = MoveStrategyContext {
+        tunnel_id: tunnel_id.to_string(),
+        seat: Seat::A,
+    };
+    let strategy_ctx_b = MoveStrategyContext {
+        tunnel_id: tunnel_id.to_string(),
+        seat: Seat::B,
+    };
 
     'outer: while moves < max_moves && !a.is_terminal() {
         let mut progressed = false;
@@ -119,8 +171,11 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
             if a.is_terminal() {
                 break;
             }
-            let st = if p == Seat::A { a.state() } else { b.state() };
-            let Some(mv) = plan(st, p) else { continue };
+            let mv = match p {
+                Seat::A => block_ready(strategy_a.plan_move(a.state(), p, &strategy_ctx_a)),
+                Seat::B => block_ready(strategy_b.plan_move(b.state(), p, &strategy_ctx_b)),
+            };
+            let Some(mv) = mv else { continue };
             ts += 1;
             let first = if p == Seat::A {
                 a.propose(mv, ts).expect("legal move")
@@ -132,6 +187,10 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
             } else {
                 deliver(&mut b, &mut a, first)
             };
+            match p {
+                Seat::A => strategy_a.confirm_move(a.state()),
+                Seat::B => strategy_b.confirm_move(b.state()),
+            }
             moves += 1;
             progressed = true;
             if moves >= max_moves {
@@ -166,10 +225,64 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
+    card_seed: Option<u64>,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
+    play_protocol_match_with_strategies::<Blackjack, C, BlackjackStrategy, BlackjackStrategy>(
+        Blackjack,
+        BlackjackStrategy,
+        BlackjackStrategy,
+        kit,
+        tunnel_id,
+        balance_a,
+        balance_b,
+        created_at,
+        max_moves,
+        |a, b| {
+            seed_cards(a, card_seed);
+            seed_cards(b, card_seed);
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
+    move_seed: u64,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
+    play_protocol_match_with_strategies::<BlackjackV2, C, BlackjackV2Strategy, BlackjackV2Strategy>(
+        BlackjackV2,
+        BlackjackV2Strategy::new(move_seed ^ 0xA5A5_5A5A_D0D0_1CE5),
+        BlackjackV2Strategy::new(move_seed ^ 0x5A5A_A5A5_CAFE_BABE),
+        kit,
+        tunnel_id,
+        balance_a,
+        balance_b,
+        created_at,
+        max_moves,
+        |_, _| {},
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tunnel_harness::{BcsFrameCodec, JsonFrameCodec, PostcardFrameCodec};
+    use tunnel_harness::{
+        BcsFrameCodec, JsonFrameCodec, MoveStrategy, MoveStrategyContext, PostcardFrameCodec,
+        ProtocolError,
+    };
 
     const BCS_GOLDEN_BYTES: usize = 29492;
     const POSTCARD_GOLDEN_BYTES: usize = 24985;
@@ -220,5 +333,110 @@ mod tests {
             golden_match::<PostcardFrameCodec>().bytes,
             POSTCARD_GOLDEN_BYTES
         );
+    }
+
+    #[derive(Clone)]
+    struct StrategyOnlyProtocol;
+
+    #[derive(Clone)]
+    struct StrategyOnlyState {
+        moved: bool,
+        balances: Balances,
+    }
+
+    impl Protocol for StrategyOnlyProtocol {
+        type State = StrategyOnlyState;
+        type Move = bool;
+
+        fn name(&self) -> &str {
+            "strategy_only.v1"
+        }
+
+        fn initial_state(&self, ctx: &TunnelContext) -> Self::State {
+            StrategyOnlyState {
+                moved: false,
+                balances: ctx.initial,
+            }
+        }
+
+        fn apply_move(
+            &self,
+            state: &Self::State,
+            mv: &Self::Move,
+            by: Seat,
+        ) -> Result<Self::State, ProtocolError> {
+            if by != Seat::A {
+                return Err(ProtocolError("only A may move".into()));
+            }
+            if !mv {
+                return Err(ProtocolError("strategy move must be true".into()));
+            }
+            Ok(StrategyOnlyState {
+                moved: true,
+                balances: state.balances,
+            })
+        }
+
+        fn encode_state(&self, state: &Self::State) -> Vec<u8> {
+            vec![u8::from(state.moved)]
+        }
+
+        fn balances(&self, state: &Self::State) -> Balances {
+            state.balances
+        }
+
+        fn is_terminal(&self, state: &Self::State) -> bool {
+            state.moved
+        }
+
+        fn sample_move(
+            &self,
+            _state: &Self::State,
+            _seat: Seat,
+            _rng: &mut dyn FnMut() -> f64,
+        ) -> Option<Self::Move> {
+            panic!("bench driver must use MoveStrategy, not Protocol::sample_move")
+        }
+    }
+
+    struct StrategyOnlyMoveStrategy;
+
+    impl MoveStrategy<StrategyOnlyProtocol> for StrategyOnlyMoveStrategy {
+        async fn plan_move(
+            &mut self,
+            state: &StrategyOnlyState,
+            seat: Seat,
+            _ctx: &MoveStrategyContext,
+        ) -> Option<bool> {
+            (seat == Seat::A && !state.moved).then_some(true)
+        }
+    }
+
+    #[test]
+    fn generic_driver_uses_move_strategy_not_protocol_sampler() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let kit = SeatKit::new(&sa, &sb);
+
+        let result = play_protocol_match_with_strategies::<
+            StrategyOnlyProtocol,
+            JsonFrameCodec,
+            StrategyOnlyMoveStrategy,
+            StrategyOnlyMoveStrategy,
+        >(
+            StrategyOnlyProtocol,
+            StrategyOnlyMoveStrategy,
+            StrategyOnlyMoveStrategy,
+            &kit,
+            "0xabc123",
+            100,
+            100,
+            1234567890,
+            10,
+            |_, _| {},
+        );
+
+        assert_eq!(result.moves, 1);
+        assert_eq!(result.final_balance_a + result.final_balance_b, 200);
     }
 }

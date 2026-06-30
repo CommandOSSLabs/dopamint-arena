@@ -5,6 +5,9 @@ use std::collections::HashSet;
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::{BombItSeriesStrategy, BombItStrategy};
+
 pub const GRID_W: i64 = 21;
 pub const GRID_H: i64 = 21;
 pub const CELL_COUNT: usize = (GRID_W * GRID_H) as usize;
@@ -329,40 +332,279 @@ fn apply_action(
     }
 }
 
-fn simple_action(state: &BombItState, seat: Seat, rng: &mut dyn FnMut() -> f64) -> BombItAction {
-    let index = if seat == Seat::A { 0 } else { 1 };
-    let player = state.players[index];
-    if !player.alive {
-        return BombItAction::Stay;
+fn danger_cells(grid: &[u8], bombs: &[BombItBomb]) -> HashSet<usize> {
+    let mut danger = HashSet::new();
+    for bomb in bombs {
+        for cell in blast_cells_for(grid, bomb) {
+            danger.insert(cell);
+        }
     }
-    let other = state.players[if index == 0 { 1 } else { 0 }];
+    danger
+}
+
+fn adjacent_danger(danger: &HashSet<usize>) -> HashSet<usize> {
+    let mut adjacent = HashSet::new();
+    for &cell in danger {
+        let row = cell as i64 / GRID_W;
+        let col = cell as i64 % GRID_W;
+        for action in [
+            BombItAction::North,
+            BombItAction::South,
+            BombItAction::East,
+            BombItAction::West,
+        ] {
+            let (next_row, next_col) = dest(row, col, action);
+            if (0..GRID_H).contains(&next_row) && (0..GRID_W).contains(&next_col) {
+                adjacent.insert(idx(next_row, next_col));
+            }
+        }
+    }
+    adjacent
+}
+
+fn manhattan(a: &BombItPlayer, b: &BombItPlayer) -> i64 {
+    (a.row - b.row).abs() + (a.col - b.col).abs()
+}
+
+fn flee_step(
+    grid: &[u8],
+    bombs: &[BombItBomb],
+    player: &BombItPlayer,
+    other: &BombItPlayer,
+    avoid: &HashSet<usize>,
+) -> Option<BombItAction> {
+    if !avoid.contains(&idx(player.row, player.col)) {
+        return None;
+    }
     let dirs = [
         BombItAction::North,
         BombItAction::South,
         BombItAction::East,
         BombItAction::West,
     ];
-    let legal: Vec<_> = dirs
+    let mut seen = HashSet::from([idx(player.row, player.col)]);
+    let mut frontier = Vec::new();
+    for action in dirs {
+        let (row, col) = dest(player.row, player.col, action);
+        if !(0..GRID_H).contains(&row) || !(0..GRID_W).contains(&col) {
+            continue;
+        }
+        let cell = idx(row, col);
+        if seen.contains(&cell) || !can_move_to(grid, bombs, other, row, col) {
+            continue;
+        }
+        seen.insert(cell);
+        if !avoid.contains(&cell) {
+            return Some(action);
+        }
+        frontier.push((row, col, action));
+    }
+    for _ in 0..FUSE_TICKS {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for (row, col, first) in frontier {
+            for action in dirs {
+                let (next_row, next_col) = dest(row, col, action);
+                if !(0..GRID_H).contains(&next_row) || !(0..GRID_W).contains(&next_col) {
+                    continue;
+                }
+                let cell = idx(next_row, next_col);
+                if seen.contains(&cell) || !can_move_to(grid, bombs, other, next_row, next_col) {
+                    continue;
+                }
+                seen.insert(cell);
+                if !avoid.contains(&cell) {
+                    return Some(first);
+                }
+                next.push((next_row, next_col, first));
+            }
+        }
+        frontier = next;
+    }
+    None
+}
+
+fn can_escape_own_bomb(
+    grid: &[u8],
+    bombs: &[BombItBomb],
+    player: &BombItPlayer,
+    other: &BombItPlayer,
+    seat: Seat,
+    danger: &HashSet<usize>,
+) -> bool {
+    let own: HashSet<_> = blast_cells_for(
+        grid,
+        &BombItBomb {
+            row: player.row,
+            col: player.col,
+            fuse: 0,
+            owner: seat,
+        },
+    )
+    .into_iter()
+    .collect();
+    let budget = (FUSE_TICKS / 2 - 1).max(1);
+    let dirs = [
+        BombItAction::North,
+        BombItAction::South,
+        BombItAction::East,
+        BombItAction::West,
+    ];
+    let mut seen = HashSet::from([idx(player.row, player.col)]);
+    let mut frontier = vec![(player.row, player.col)];
+    for _ in 0..budget {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for (row, col) in frontier {
+            for action in dirs {
+                let (next_row, next_col) = dest(row, col, action);
+                if !(0..GRID_H).contains(&next_row) || !(0..GRID_W).contains(&next_col) {
+                    continue;
+                }
+                let cell = idx(next_row, next_col);
+                if seen.contains(&cell) || !can_move_to(grid, bombs, other, next_row, next_col) {
+                    continue;
+                }
+                seen.insert(cell);
+                if !own.contains(&cell) && !danger.contains(&cell) {
+                    return true;
+                }
+                next.push((next_row, next_col));
+            }
+        }
+        frontier = next;
+    }
+    false
+}
+
+fn pick_action(actions: &[BombItAction], rng: &mut dyn FnMut() -> f64) -> BombItAction {
+    let index = ((rng() * actions.len() as f64).floor() as usize).min(actions.len() - 1);
+    actions[index]
+}
+
+pub(crate) fn hunter_action(
+    state: &BombItState,
+    seat: Seat,
+    rng: &mut dyn FnMut() -> f64,
+) -> BombItAction {
+    let index = if seat == Seat::A { 0 } else { 1 };
+    let player = state.players[index];
+    if !player.alive {
+        return BombItAction::Stay;
+    }
+    let other = state.players[if index == 0 { 1 } else { 0 }];
+    let danger = danger_cells(&state.grid, &state.bombs);
+    let near = adjacent_danger(&danger);
+    let dirs = [
+        BombItAction::North,
+        BombItAction::South,
+        BombItAction::East,
+        BombItAction::West,
+    ];
+    let moves: Vec<_> = dirs
         .into_iter()
         .filter(|&action| {
             let (row, col) = dest(player.row, player.col, action);
             can_move_to(&state.grid, &state.bombs, &other, row, col)
         })
         .collect();
+    let safe: Vec<_> = moves
+        .iter()
+        .copied()
+        .filter(|&action| {
+            let (row, col) = dest(player.row, player.col, action);
+            !danger.contains(&idx(row, col))
+        })
+        .collect();
+    let safer: Vec<_> = safe
+        .iter()
+        .copied()
+        .filter(|&action| {
+            let (row, col) = dest(player.row, player.col, action);
+            !near.contains(&idx(row, col))
+        })
+        .collect();
+    let here = idx(player.row, player.col);
+
+    if danger.contains(&here) {
+        if let Some(step) = flee_step(&state.grid, &state.bombs, &player, &other, &danger) {
+            return step;
+        }
+        if !safer.is_empty() {
+            return pick_action(&safer, rng);
+        }
+        if !safe.is_empty() {
+            return pick_action(&safe, rng);
+        }
+        if !moves.is_empty() {
+            return pick_action(&moves, rng);
+        }
+        return BombItAction::Stay;
+    }
+    if near.contains(&here) && !safer.is_empty() {
+        return pick_action(&safer, rng);
+    }
+
     let live_own = state.bombs.iter().filter(|b| b.owner == seat).count();
-    let here = state
+    let here_bomb = state
         .bombs
         .iter()
         .any(|b| b.row == player.row && b.col == player.col);
-    if live_own < MAX_BOMBS_PER_PLAYER && !here && rng() < 0.05 {
+    let can_bomb = live_own < MAX_BOMBS_PER_PLAYER && !here_bomb;
+    let escapes =
+        can_bomb && can_escape_own_bomb(&state.grid, &state.bombs, &player, &other, seat, &danger);
+    let crate_in_dir = |action| {
+        let (row, col) = dest(player.row, player.col, action);
+        (0..GRID_H).contains(&row)
+            && (0..GRID_W).contains(&col)
+            && state.grid[idx(row, col)] == CELL_CRATE
+    };
+
+    let dist = manhattan(&player, &other);
+    let toward: Vec<_> = dirs
+        .into_iter()
+        .filter(|&action| {
+            let (row, col) = dest(player.row, player.col, action);
+            let candidate = BombItPlayer {
+                row,
+                col,
+                alive: player.alive,
+            };
+            manhattan(&candidate, &other) < dist
+        })
+        .collect();
+    let toward_safe: Vec<_> = toward
+        .iter()
+        .copied()
+        .filter(|action| safe.contains(action))
+        .collect();
+    let in_line =
+        other.alive && (player.row == other.row || player.col == other.col) && dist <= BLAST_RADIUS;
+    if can_bomb && in_line && escapes && rng() < 0.1 {
         return BombItAction::Bomb;
     }
-    if legal.is_empty() {
-        BombItAction::Stay
-    } else {
-        let idx = ((rng() * legal.len() as f64).floor() as usize).min(legal.len() - 1);
-        legal[idx]
+    if !toward_safe.is_empty() && rng() < 0.55 {
+        return pick_action(&toward_safe, rng);
     }
+    if can_bomb
+        && toward_safe.is_empty()
+        && toward.iter().any(|&action| crate_in_dir(action))
+        && escapes
+        && rng() < 0.14
+    {
+        return BombItAction::Bomb;
+    }
+    if !safer.is_empty() {
+        return pick_action(&safer, rng);
+    }
+    if !safe.is_empty() {
+        return pick_action(&safe, rng);
+    }
+    BombItAction::Stay
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -574,7 +816,7 @@ impl Protocol for BombIt {
         if self.is_terminal(state) {
             return None;
         }
-        let action = simple_action(state, seat, rng);
+        let action = hunter_action(state, seat, rng);
         Some(match seat {
             Seat::A => BombItMove {
                 a: Some(action),

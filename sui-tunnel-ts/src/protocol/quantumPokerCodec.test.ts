@@ -42,6 +42,7 @@ test("PokerMoveCodec round-trips byte and bigint moves", () => {
     { kind: "check" },
     { kind: "call" },
     { kind: "fold" },
+    { kind: "forfeit" },
     { kind: "next_hand" },
   ];
 

@@ -16,7 +16,6 @@ import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
 import { createMonitoring } from "./components/Monitoring.js";
-import { createBenchmarkFleet } from "./components/BenchmarkFleet.js";
 import { createExplorerServices } from "./components/ExplorerServices.js";
 import { githubEnvOutputs } from "./github.js";
 
@@ -78,6 +77,38 @@ if (cfg.settlerKey) {
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
+// Internal-faucet bearer token + Enoki private key follow the settler-key path: secret config
+// => Secrets Manager => ECS `secrets`, never inlined into the task definition. Created only
+// when the stack configures them; absent => the backend disables that feature (faucet/internal
+// 503, Enoki off) rather than booting with a plaintext secret.
+let faucetAdminTokenSecretArn: pulumi.Output<string> | undefined;
+if (cfg.faucetAdminToken) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-faucet-admin-token`,
+    {
+      description: `Internal MTPS faucet bearer token for dopamint-${cfg.environment}`,
+    },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-faucet-admin-token-version`,
+    { secretId: secret.id, secretString: cfg.faucetAdminToken },
+  );
+  faucetAdminTokenSecretArn = secret.arn;
+}
+
+let enokiApiKeySecretArn: pulumi.Output<string> | undefined;
+if (cfg.enokiApiKey) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-enoki-api-key`,
+    { description: `Enoki private API key for dopamint-${cfg.environment}` },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-enoki-api-key-version`,
+    { secretId: secret.id, secretString: cfg.enokiApiKey },
+  );
+  enokiApiKeySecretArn = secret.arn;
+}
+
 const ecr = createEcr(`dopamint-${cfg.environment}`);
 const ecs = createEcs(`dopamint-${cfg.environment}`);
 
@@ -111,6 +142,8 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
     database.dbPasswordSecretArn,
     databaseUrlSecret.arn,
     ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
+    ...(faucetAdminTokenSecretArn ? [faucetAdminTokenSecretArn] : []),
+    ...(enokiApiKeySecretArn ? [enokiApiKeySecretArn] : []),
   ],
 });
 
@@ -130,6 +163,8 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
+  faucetAdminTokenSecretArn,
+  enokiApiKeySecretArn,
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,
   ollamaImageTag: cfg.ollamaImageTag,
@@ -212,18 +247,6 @@ export const backendUrl = dns.certificateArn
   ? pulumi.interpolate`https://${cfg.backendDomain}`
   : pulumi.interpolate`http://${alb.alb.dnsName}`;
 
-const benchmarkFleet = createBenchmarkFleet({
-  name: `dopamint-${cfg.environment}`,
-  subnetIds: network.privateSubnetIds,
-  securityGroupId: sgs.benchmark.id,
-  instanceType: cfg.benchmarkInstanceType,
-  minSize: cfg.benchmarkMinSize,
-  maxSize: cfg.benchmarkMaxSize,
-  imageBuilderProfileName: iam.imageBuilderProfile.name,
-  benchmarkInstanceProfileArn: iam.benchmarkInstanceProfile.arn,
-  version: cfg.benchmarkImageVersion,
-});
-
 export const githubEnv = githubEnvOutputs({
   backendUrl,
   frontendDomain: frontend.distributionDomain,
@@ -237,13 +260,7 @@ export const githubEnv = githubEnvOutputs({
   githubDeployRoleArn: iam.githubDeployRoleArn,
   privateSubnetIds: network.privateSubnetIds,
   backendSecurityGroupId: sgs.backend.id,
-  benchmarkAsgName: benchmarkFleet.asgName,
 });
-
-export const benchmarkAsgName = benchmarkFleet.asgName;
-export const benchmarkMinSize = cfg.benchmarkMinSize;
-export const benchmarkComponentArn = benchmarkFleet.componentArn;
-export const benchmarkPipelineArn = benchmarkFleet.pipelineArn;
 
 export const indexerServiceName = explorer.indexerServiceName;
 export const explorerApiServiceName = explorer.apiServiceName;

@@ -467,14 +467,11 @@ export function LiveReadout({
  */
 export function MostPainted({
   painters,
-  tps,
   auto,
   onViewPainter,
 }: {
   /** Per-painter tallies, keyed by address (stable identity, mutated in place). */
   painters: ReadonlyMap<string, PainterInfo>;
-  /** Live co-signed throughput (the TPS dial) — shown in the header. */
-  tps: number;
   /** Auto on → seat A is bot-driven ("Bot A"); off → you drive it ("You"). */
   auto: boolean;
   /** Jump the camera to a painter's latest cell (engine.focusOnAgent). */
@@ -510,9 +507,6 @@ export function MostPainted({
       >
         <BrushIcon size={12} />
         Most painted
-        <span style={{ flex: 1 }} />
-        <LiveDot />
-        <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
       </div>
       {rows.map((p) => (
         <button

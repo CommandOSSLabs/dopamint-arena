@@ -5,6 +5,7 @@ import {
   proof,
   bytesToHex,
   hexToBytes,
+  generateSalt,
   type protocols,
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
@@ -13,6 +14,8 @@ import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
+  tttMoveCodec,
+  caroMoveCodec,
   optimalMoves,
   CELL_EMPTY,
   CELL_SERVER,
@@ -72,10 +75,14 @@ const MP_URL =
       ? location.origin
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
-const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
+// Per-seat deposit and per-game stake, mode-scaled. In MTPS mode (production path) both are
+// 1 MTPS (9 decimals), so an abandoner forfeits exactly one deposit. In the SUI dev fallback
+// the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
+const MTPS_PER_SEAT = 1_000_000_000n;
+const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
-// MTPS mode (ADR-0010): bankroll deposited per seat (1 MTPS, 9 decimals).
-const MTPS_BANKROLL = 1_000_000_000n;
+// MTPS mode (ADR-0023): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
+const MTPS_BANKROLL = 1n;
 // One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
@@ -115,7 +122,7 @@ type InnerState = {
   lastMove?: number;
 };
 type AnyState = { inner: InnerState; gamesPlayed: number; maxGames: number };
-type CellMove = { cell: number };
+type CellMove = { cell: number; salt: Uint8Array };
 
 export interface PvpTttView {
   phase: PvpPhase;
@@ -172,14 +179,19 @@ export function usePvpTicTacToe(
   const sponsored = useSponsoredSignExec();
   const sponsoredRef = useRef(sponsored);
   sponsoredRef.current = sponsored;
+  // Stake magnitude matches the per-seat deposit: one loss = one deposit shift.
+  const scaledStake = isMtpsConfigured ? MTPS_PER_SEAT : SUI_PER_SEAT;
   const proto = useMemo(
     () =>
       (variant === "caro"
-        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize)
+        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize, scaledStake)
         : new MultiGameTicTacToeProtocol(
             MAX_GAMES,
-            STAKE,
+            scaledStake,
           )) as unknown as protocols.Protocol<AnyState, CellMove>,
+    // isMtpsConfigured is a build-time constant (evaluated once at bundle load), so scaledStake
+    // is fixed for the lifetime of the app and never changes across renders — safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [variant, boardSize],
   );
 
@@ -434,7 +446,10 @@ export function usePvpTicTacToe(
           if (info.role === "A" && autoRef.current)
             setTimeout(() => {
               try {
-                t.propose({ cell: 0 }, BigInt(Date.now()));
+                t.propose(
+                  { cell: 0, salt: generateSalt(16) },
+                  BigInt(Date.now()),
+                );
               } catch {
                 /* raced */
               }
@@ -448,7 +463,7 @@ export function usePvpTicTacToe(
           })();
           setTimeout(() => {
             try {
-              t.propose({ cell }, BigInt(Date.now()));
+              t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
             } catch {
               /* not my turn / in flight */
             }
@@ -536,6 +551,13 @@ export function usePvpTicTacToe(
             {
               proto,
               adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+              // Mirror onMatch: without the variant codec the resumed tunnel falls back to
+              // identityMoveCodec, which cannot encode the Uint8Array salt — a reloaded
+              // staked match would then stall on the first move.
+              moveCodec:
+                variant === "caro"
+                  ? (caroMoveCodec as never)
+                  : (tttMoveCodec as never),
             },
             { selfWallet: w.address },
           );
@@ -635,7 +657,10 @@ export function usePvpTicTacToe(
             buildCreateAndShareTx(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
-              0n,
+              // Abandonment penalty = scaledStake (mode-scaled). In MTPS mode this equals the
+              // per-seat deposit, so an abandoner forfeits exactly one deposit at force-close (F1).
+              // In the SUI dev fallback the stake (1 MIST) is nominal, not deposit-sized.
+              scaledStake,
               coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );
           const res = mtpsOn
@@ -758,6 +783,11 @@ export function usePvpTicTacToe(
               false,
             ),
             selfParty: m.role,
+            // Encode salt (Uint8Array) as hex so it survives JSON frame round-trip.
+            moveCodec:
+              variant === "caro"
+                ? (caroMoveCodec as never)
+                : (tttMoveCodec as never),
           },
           channel.transport,
           { a: bankroll, b: bankroll },
@@ -795,7 +825,7 @@ export function usePvpTicTacToe(
     const st = t.state;
     if (st.inner.winner !== 0 || st.inner.turn !== roleRef.current) return; // not my turn / between games
     try {
-      t.propose({ cell }, BigInt(Date.now()));
+      t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -811,7 +841,7 @@ export function usePvpTicTacToe(
     )
       return; // X advances between games
     try {
-      t.propose({ cell: 0 }, BigInt(Date.now()));
+      t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -839,7 +869,10 @@ export function usePvpTicTacToe(
         if (roleRef.current === "A")
           setTimeout(() => {
             try {
-              t.propose({ cell: 0 }, BigInt(Date.now()));
+              t.propose(
+                { cell: 0, salt: generateSalt(16) },
+                BigInt(Date.now()),
+              );
             } catch {
               /* ignore */
             }
@@ -853,7 +886,7 @@ export function usePvpTicTacToe(
         })();
         setTimeout(() => {
           try {
-            t.propose({ cell }, BigInt(Date.now()));
+            t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
           } catch {
             /* ignore */
           }

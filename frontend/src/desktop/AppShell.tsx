@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
  *  search param (drives the desktop workspace tabs and the phone bottom tabs).
  *  `live` is the merged stats+activity telemetry, shown only on the phone — on
  *  desktop telemetry is the persistent bottom dock. */
-export type MobileSection = "games" | "payment" | "chat" | "live";
+export type MobileSection = "games" | "payment" | "chat" | "live" | "all";
 
 // Phone bottom tabs. Arena/Payment/Chat/Live select an arena section (a search param
 // on `/`); Explorer is a sibling route. Both live in this shell so navigating to the
@@ -52,7 +52,7 @@ export function AppShell() {
   const { pathname, search } = useRouterState({ select: (s) => s.location });
   const onArena = pathname === "/";
   const onExplorer = pathname.startsWith("/explorer");
-  const section = (search as { section?: MobileSection }).section ?? "games";
+  const section = (search as { section?: MobileSection }).section ?? "all";
 
   return (
     <div className="relative flex h-full flex-col text-foreground">
@@ -93,7 +93,7 @@ export function AppShell() {
               <Link
                 key={t.section}
                 to="/"
-                search={t.section === "games" ? {} : { section: t.section }}
+                search={t.section === "all" ? {} : { section: t.section }}
                 aria-label={t.label}
                 className={cn(
                   tabClass,

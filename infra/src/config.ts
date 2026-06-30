@@ -15,10 +15,6 @@ export interface InfraConfig {
   dbMinCapacity?: number;
   dbMaxCapacity?: number;
   cacheNodeType: string;
-  benchmarkInstanceType: string;
-  benchmarkMinSize: number;
-  benchmarkMaxSize: number;
-  benchmarkImageVersion: string;
   // If omitted, the backend image tag is resolved from the latest deployed ECS task
   // definition at runtime. This lets `pulumi up` run locally without committing a
   // specific tag, while CI still pins an exact SHA via config on backend deploys.
@@ -27,6 +23,12 @@ export interface InfraConfig {
   // (Phase 0) and fails loud at settler construction if absent. Sourced from secret
   // config so it lands in Secrets Manager, never in the task definition.
   settlerKey?: pulumi.Output<string>;
+  // Bearer secret gating POST /v1/faucet/internal, injected as FAUCET_ADMIN_TOKEN. Secret
+  // config => Secrets Manager => ECS `secrets`. Unset => the internal faucet stays disabled (503).
+  faucetAdminToken?: pulumi.Output<string>;
+  // Enoki PRIVATE api key (enoki_private_…), injected as ENOKI_API_KEY. Secret config =>
+  // Secrets Manager => ECS `secrets`. Unset => Enoki off, settler is the sole gas source.
+  enokiApiKey?: pulumi.Output<string>;
   // Ollama sidecar for the chat-v2 feature. Enabled by default; disable in envs
   // where chat is not needed or where you want to supply an external Ollama URL.
   ollamaEnabled: boolean;
@@ -47,12 +49,10 @@ export function getConfig(): InfraConfig {
     dbMinCapacity: config.getNumber("db-min-capacity"),
     dbMaxCapacity: config.getNumber("db-max-capacity"),
     cacheNodeType: config.require("cache-node-type"),
-    benchmarkInstanceType: config.require("benchmark-instance-type"),
-    benchmarkMinSize: config.requireNumber("benchmark-min-size"),
-    benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
-    benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
     backendImageTag: config.get("backend-image-tag") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
+    faucetAdminToken: config.getSecret("faucet-admin-token"),
+    enokiApiKey: config.getSecret("enoki-api-key"),
     ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
     ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.5b",
     ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",
