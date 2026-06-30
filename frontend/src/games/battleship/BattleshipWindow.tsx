@@ -19,6 +19,8 @@ import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
+import { WorkerBotGame } from "./WorkerBotGame";
+import { engineEnabled } from "@/engine/flag";
 import { SketchDefs } from "../sketch";
 import "./battleship.css";
 
@@ -71,7 +73,11 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
       {/* Actual game layout sits on top */}
       <div className="relative z-20 h-full w-full">
         {mode === "bot" ? (
-          <BotGame windowId={windowId} onExit={() => setMode(null)} />
+          engineEnabled() ? (
+            <WorkerBotGame windowId={windowId} onExit={() => setMode(null)} />
+          ) : (
+            <BotGame windowId={windowId} onExit={() => setMode(null)} />
+          )
         ) : mode === "pvp" ? (
           <PvpGame windowId={windowId} onExit={() => setMode(null)} />
         ) : (
@@ -109,7 +115,7 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
   );
 }
 
-function Centered({ children }: { children: ReactNode }) {
+export function Centered({ children }: { children: ReactNode }) {
   return (
     <div className="sketch-note flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
       {children}
@@ -142,7 +148,7 @@ function ConnectWalletPane({ note }: { note: string }) {
 }
 
 /** Big tap-to-toggle "Auto" checkbox: hands your shots to autopilot vs the bot. */
-function AutoToggle({
+export function AutoToggle({
   on,
   onChange,
 }: {
@@ -170,7 +176,7 @@ function AutoToggle({
 }
 
 /** Header action: settle + close the multi-game tunnel now (allowed anytime). */
-function SettleButton({ onSettle }: { onSettle: () => void }) {
+export function SettleButton({ onSettle }: { onSettle: () => void }) {
   return (
     <button
       type="button"
@@ -185,7 +191,7 @@ function SettleButton({ onSettle }: { onSettle: () => void }) {
 
 /** Shown while settling / after a multi-game session closes: the running tally + a
  *  way to start a fresh tunnel. */
-function SettledPane({
+export function SettledPane({
   score,
   settling,
   onNewGame,
@@ -222,7 +228,7 @@ function SettledPane({
 /** Every mode renders inside this frame: a thin control strip carries the back button
  *  and optional trailing actions (Auto / Settle) — NOT a title, since the desktop window
  *  chrome above already shows one — with the mode's own UI filling the space below it. */
-function ModeFrame({
+export function ModeFrame({
   onBack,
   headerExtra,
   children,
@@ -251,7 +257,7 @@ function ModeFrame({
   );
 }
 
-function ErrorPane({
+export function ErrorPane({
   error,
   onBack,
 }: {
@@ -270,7 +276,7 @@ function ErrorPane({
   );
 }
 
-function settleLabel(status: string): string | undefined {
+export function settleLabel(status: string): string | undefined {
   if (status === "settling") return "settling on-chain…";
   if (status === "settled") return "settled ✓";
   return undefined;
