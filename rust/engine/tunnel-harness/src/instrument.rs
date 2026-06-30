@@ -121,6 +121,152 @@ impl<A: TunnelAnchor + Send + Sync, S: TelemetrySink + Send> TunnelAnchor
     }
 }
 
+use crate::transcript::{
+    Transcript, TranscriptCodec, TranscriptEntry, TranscriptError, TranscriptRecorder,
+};
+use serde::Serialize;
+
+/// Codec-agnostic byte length of a serialized output.
+pub trait TranscriptSize {
+    fn byte_len(&self) -> usize;
+}
+impl TranscriptSize for String {
+    fn byte_len(&self) -> usize {
+        self.len()
+    }
+}
+impl TranscriptSize for Vec<u8> {
+    fn byte_len(&self) -> usize {
+        self.len()
+    }
+}
+
+/// Times `TranscriptRecorder::record` (per-op) and export (with serialized byte
+/// size). Each seat owns its recorder so `Mutex<S>` (not `Arc`) suffices —
+/// `run` hands the recorder back and the bench reads `into_sink` on the
+/// returned value.
+pub struct InstrumentedRecorder<R, S> {
+    inner: R,
+    sink: Mutex<S>,
+}
+
+impl<R, S: TelemetrySink + Send> InstrumentedRecorder<R, S> {
+    pub fn new(inner: R, sink: S) -> Self {
+        Self {
+            inner,
+            sink: Mutex::new(sink),
+        }
+    }
+
+    pub fn into_sink(self) -> S {
+        self.sink.into_inner().expect("sink mutex poisoned")
+    }
+
+    /// Export, timing the call and capturing the serialized byte length.
+    pub fn export_measured<M, C, T, F>(
+        &self,
+        codec: &C,
+        preprocess: F,
+    ) -> Result<(C::Output, usize), C::Error>
+    where
+        R: TranscriptRecorder<M>,
+        C: TranscriptCodec,
+        C::Output: TranscriptSize,
+        F: FnMut(&TranscriptEntry<M>) -> Option<T>,
+        T: Serialize,
+    {
+        let started = Instant::now();
+        let out = self.inner.export(codec, preprocess)?;
+        let len = out.byte_len();
+        let mut sink = self.sink.lock().expect("sink mutex poisoned");
+        if sink.enabled() {
+            sink.record(StageSample {
+                stage: StageId::RecorderExport,
+                dur_ns: started.elapsed().as_nanos() as u64,
+                cost: StageCost {
+                    gas_mist: 0,
+                    paid_by: None,
+                    bytes: len as u64,
+                },
+            });
+        }
+        Ok((out, len))
+    }
+}
+
+impl<M, R: TranscriptRecorder<M> + Send + Sync, S: TelemetrySink + Send> TranscriptRecorder<M>
+    for InstrumentedRecorder<R, S>
+{
+    fn records_transcript(&self) -> bool {
+        self.inner.records_transcript()
+    }
+
+    fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
+        let started = Instant::now();
+        let result = self.inner.record(entry);
+        let mut sink = self.sink.lock().expect("sink mutex poisoned");
+        if sink.enabled() {
+            sink.record(StageSample {
+                stage: StageId::RecorderRecord,
+                dur_ns: started.elapsed().as_nanos() as u64,
+                cost: StageCost::default(),
+            });
+        }
+        result
+    }
+
+    fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
+        self.inner.snapshot()
+    }
+}
+
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+    use crate::transcript::{
+        InMemoryTranscriptRecorder, JsonTranscriptCodec, TranscriptEntry, TranscriptRecorder,
+    };
+    use crate::Seat;
+    use tunnel_telemetry::{CollectingSink, StageId};
+
+    fn entry(nonce: u64) -> TranscriptEntry<u8> {
+        TranscriptEntry {
+            nonce,
+            by: Seat::A,
+            mv: 7u8,
+            state_hash: [0u8; 32],
+            timestamp: 0,
+            party_a_balance: 200,
+            party_b_balance: 200,
+            sig_proposer: [0u8; 64],
+            sig_responder: [0u8; 64],
+        }
+    }
+
+    #[test]
+    fn export_measured_returns_byte_len_and_records_sample() {
+        let inner = InMemoryTranscriptRecorder::<u8>::default();
+        let rec = InstrumentedRecorder::new(inner, CollectingSink::with_capacity(4));
+        rec.record(entry(0)).unwrap();
+        let (json, len) = rec
+            .export_measured(&JsonTranscriptCodec, |e| Some(e.clone()))
+            .unwrap();
+        assert_eq!(len, json.len());
+        let sink = rec.into_sink();
+        assert_eq!(
+            sink.samples()
+                .iter()
+                .filter(|s| s.stage == StageId::RecorderExport)
+                .count(),
+            1
+        );
+        assert!(sink
+            .samples()
+            .iter()
+            .any(|s| s.stage == StageId::RecorderRecord));
+    }
+}
+
 #[cfg(test)]
 mod anchor_tests {
     use super::*;
