@@ -20,5 +20,7 @@ import "@/games/battleship/battleshipSpec";
 import "@/games/quantumPoker/quantumPokerSoloSpec";
 import "@/games/ticTacToe/tttSoloSpec";
 import "@/games/blackjack/blackjackSoloSpec";
+import "@/games/battleship/battleshipSoloSpec";
+import "@/games/worldCanvas/worldCanvasSoloSpec";
 
 export { getSpec, getSoloSpec } from "./defineGame";

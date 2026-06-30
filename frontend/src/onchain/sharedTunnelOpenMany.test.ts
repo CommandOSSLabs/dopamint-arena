@@ -107,3 +107,36 @@ test("openManySharedSeatA rejects BatchCommittedError when the created count mis
   );
   assert.equal((caught as BatchCommittedError).digest, THE_DIGEST);
 });
+
+test("openManySharedSeatA rejects duplicate party-B pubkeys across created tunnels (no silent mis-route)", async () => {
+  const THE_DIGEST = "0xdup";
+  // Both created tunnels report the SAME party-B pubkey (e.g. an opponent reusing one ephemeral key
+  // across two coincident matches in this flush). The count matches, but the positional demux would
+  // collapse them to one id — the guard must fail loud (committed: never retry), not mis-route stake.
+  const reads = readsWith(
+    { "0xtunnelX": 0xb0, "0xtunnelY": 0xb0 },
+    [created("0xtunnelX"), created("0xtunnelY")],
+  );
+
+  let caught: unknown;
+  try {
+    await openManySharedSeatA({
+      reads,
+      signExec: async () => ({ digest: THE_DIGEST }),
+      coinType: COIN,
+      stakeFromBalance: { amount: 30n, coinType: COIN },
+      specs: [
+        { partyA: party("0xa11ce", 0xa0), partyB: party("0xb0b0", 0xb0), amount: 10n },
+        { partyA: party("0xa11ce", 0xa0), partyB: party("0xb1b1", 0xb1), amount: 20n },
+      ],
+    });
+    assert.fail("expected openManySharedSeatA to throw on duplicate party-B pubkey");
+  } catch (e) {
+    caught = e;
+  }
+  assert.ok(
+    caught instanceof BatchCommittedError,
+    `expected BatchCommittedError, got ${(caught as Error)?.constructor?.name}`,
+  );
+  assert.equal((caught as BatchCommittedError).digest, THE_DIGEST);
+});

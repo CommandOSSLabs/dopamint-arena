@@ -10,13 +10,29 @@ import { fileURLToPath, URL } from "node:url";
 const BACKEND_ALB =
   "https://relay-dev.millionstps.io";
 
+// The vendored SDK barrel (and its examples) ends with `if (require.main === module) runAllExamples()`
+// — a Node "run me directly" guard. Bundling `sui-tunnel-ts` pulls it in, where `require.main`/`module`
+// are undefined and would throw. Neutralize the guard to `false` at transform time (so the example
+// runner tree-shakes away) INSTEAD of a global `define: { module: "null" }` — that define rewrote
+// `module.exports` inside React's CJS files too, making the production (rolldown) build fail with
+// hundreds of "X is not exported by react" errors. We never edit the vendored source (re-syncable).
+const stripSdkMainGuard = {
+  name: "strip-sdk-main-guard",
+  transform(code: string, id: string) {
+    if (id.includes("/sui-tunnel-ts/src/") && code.includes("require.main === module")) {
+      return { code: code.replaceAll("require.main === module", "false"), map: null };
+    }
+    return null;
+  },
+};
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const pkgId =
     env.VITE_TUNNEL_PACKAGE_ID ||
     "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b";
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [stripSdkMainGuard, react(), tailwindcss()],
     server: {
       proxy: {
         "/v1": { target: BACKEND_ALB, changeOrigin: true, ws: true },
@@ -27,8 +43,9 @@ export default defineConfig(({ mode }) => {
     define: {
       "process.env.PACKAGE_ID": JSON.stringify(pkgId),
       "process.env.SUI_NETWORK": JSON.stringify("testnet"),
-      "require.main": "undefined",
-      "module": "null",
+      // NB: do NOT `define` a global `module`/`require.main` here — that rewrites `module.exports`
+      // inside React's CJS files and breaks the rolldown build. The SDK's `require.main === module`
+      // guard is handled by the `stripSdkMainGuard` transform plugin above instead.
     },
     resolve: {
       // The vendored SDK pins an older @mysten/sui in its own node_modules. Force the bundled

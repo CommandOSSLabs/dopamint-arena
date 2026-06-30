@@ -44,10 +44,11 @@ const MAX_STEPS_PER_FRAME = 8;
 /** Default beat between finished duels when a spec omits `rematchMs`. */
 const DEFAULT_REMATCH_MS = 600;
 
-/** DEFAULT large per-seat bank funded on-chain (vs the small per-duel stake): 1 MTPS (9 decimals)
- *  when the MTPS env is set, else a SUI-MIST fallback. One bank survives MANY per-duel swaps. A spec
- *  may override via `SoloGameSpec.lockedPerSeat` (e.g. poker, whose bank IS its chip buy-in). */
-const LOCKED_PER_SEAT = 1_000_000_000n;
+/** DEFAULT large per-seat bank funded on-chain (vs the small per-duel stake): 500 MTPS
+ *  (0-decimal whole tokens). One bank survives 500 per-duel swaps (each 1 MTPS) before
+ *  re-funding. A spec may override via `SoloGameSpec.lockedPerSeat` (e.g. poker, whose
+ *  bank IS its chip buy-in). */
+const LOCKED_PER_SEAT = 500n;
 const SUI_PER_SEAT = 500n;
 
 const sleep = (ms: number): Promise<void> =>
@@ -94,7 +95,7 @@ export class SoloEngine {
 
   constructor(
     private readonly getSpec: (gameId: GameId) => AnySoloSpec | undefined,
-  ) {}
+  ) { }
 
   // --- Setup (mirrors PvpEngine; wired once at spawn by engine.worker.ts) -------------------
 

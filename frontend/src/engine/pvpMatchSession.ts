@@ -1,18 +1,19 @@
 /**
- * Generic worker-side PvP session — the port of `pvp/pvpMatchHook.ts`'s `PvpSession`,
- * parameterized per game by a `GameSessionSpec` and using the `MainBridge` (over the worker
- * boundary) for the few main-only ops (funding, settle-read, close fallback, resume-record
- * persistence). Owns the WebSocket, the `DistributedTunnel`, ephemeral signing, the
- * transcript, and the resume wiring.
+ * One PvP match, worker-side — the per-match half of the shared {@link PvpHub} (M1: all PvP
+ * windows multiplex over ONE relay socket). Ported from the former single-match `PvpEngine`:
+ * the ONLY behavioural changes are that the socket is INJECTED (the hub owns the shared
+ * `MpClient`) and teardown `releaseMatch`es this match instead of `close()`-ing the socket.
  *
- * Covers findMatch → fund → play → settle, warm reconnect resync, and cold-load resume.
+ * Owns this match's `DistributedTunnel`, ephemeral signing, transcript, resume wiring, and the
+ * coalesced snapshot it emits back to its window. Covers findMatch → fund → play → settle, warm
+ * reconnect resync (driven by the hub's shared socket), and cold-load resume.
+ *
  * Resume records persist in the worker's own IndexedDB (`persist/idb.ts`) — `localStorage` is
- * absent in workers, and keeping records worker-side confines the ephemeral key + game secret
- * to this thread (design §5/§6); they never transit the main heap or the bridge.
+ * absent in workers, and keeping records worker-side confines the ephemeral key + game secret to
+ * this thread (design §5/§6); they never transit the main heap or the bridge.
  */
 import {
-  MpClient,
-  resolveMpWsUrl,
+  type MpClient,
   type PvpChannel,
   type Role,
 } from "@/pvp/mpClient";
@@ -56,6 +57,22 @@ interface ActivateInfo {
   selfEphemeralSecretHex: string;
 }
 
+/** What the hub injects into each session: the shared socket, the static wiring, and the sinks
+ *  the session reports through. `connStatus` is a getter because the socket lifecycle is shared
+ *  (hub-owned) — a drop/resume affects every session at once. */
+export interface SessionDeps {
+  windowId: string;
+  /** The hub's shared, already-connected `MpClient` (one socket for all PvP windows). */
+  mp: MpClient;
+  config: EngineConfig;
+  bridge: MainBridge;
+  getSpec: (gameId: GameId) => AnySpec | undefined;
+  /** Push a coalesced snapshot for this window (the hub tags it with `windowId`). */
+  emit: (snap: MatchSnapshot) => void;
+  /** The shared socket's current lifecycle (hub-tracked). */
+  connStatus: () => ConnStatus;
+}
+
 /** Buffer peer messages so a waiter never misses one that arrived early (port of makeInbox). */
 function makeInbox(channel: PvpChannel) {
   const buf = new Map<string, unknown>();
@@ -81,17 +98,9 @@ function makeInbox(channel: PvpChannel) {
     });
 }
 
-export class PvpEngine {
-  /** Set via `attachBridge` (a Comlink proxy whose methods RPC to main); required for
-   *  funding/settle. Nullable so the engine can be constructed before main wires it. */
-  private bridge: MainBridge | null = null;
-  /** Set via `subscribe` (a Comlink proxy); `flush` invokes it with each coalesced snapshot. */
-  private onSnapshot: ((snap: MatchSnapshot) => void) | null = null;
-
-  private config: EngineConfig | null = null;
+export class PvpMatchSession {
   private spec: AnySpec | null = null;
   private controller: AnyController | null = null;
-  private mp: MpClient | null = null;
   private dt: AnyTunnel | null = null;
   private detachResume: (() => void) | null = null;
 
@@ -99,34 +108,25 @@ export class PvpEngine {
   private role: Role | null = null;
   private auto = true;
   private opponentWallet: string | null = null;
-  private connStatus: ConnStatus = "closed";
-  private offConn: (() => void) | null = null;
   private error: string | null = null;
+  /** This match's relay id, set once matched; `reset` releases it from the shared socket. */
+  private matchId: string | null = null;
   /** intentId of a seat-A open still queued in the main-thread bulk-open window (design §4.1),
    *  else null. `reset()` cancels it via the bridge so a torn-down match never opens an orphan
    *  tunnel; cleared once the open resolves/rejects. */
   private pendingOpenIntentId: string | null = null;
+  /**
+   * Concurrency + abort guards (defect #2). `busy` rejects a second findMatch/resume for this same
+   * window while one is mid-flight (without it, a resume's async gap let a findMatch fund a second
+   * tunnel). `gen` bumps on reset so an in-flight findMatch that already passed an await bails
+   * instead of resurrecting a torn-down match (the shared socket is no longer ours to identify by).
+   */
+  private busy = false;
+  private gen = 0;
 
-  constructor(
-    private readonly getSpec: (gameId: GameId) => AnySpec | undefined,
-  ) {}
+  constructor(private readonly deps: SessionDeps) {}
 
-  // --- EngineApi surface (Comlink-exposed by engine.worker.ts) -----------------------------
-
-  /** Bootstrap config; set once before the first match. */
-  init(config: EngineConfig): void {
-    this.config = config;
-  }
-
-  /** Wire the main-thread chain bridge (a Comlink proxy); set once before the first match. */
-  attachBridge(bridge: MainBridge): void {
-    this.bridge = bridge;
-  }
-
-  /** Register the coalesced-snapshot sink (a Comlink proxy); set once at spawn. */
-  subscribe(onSnapshot: (snap: MatchSnapshot) => void): void {
-    this.onSnapshot = onSnapshot;
-  }
+  // --- per-session command surface (the hub routes by windowId) ----------------------------
 
   /** Queue a human input (fire/intent); the controller proposes if it's due. */
   submitInput(input: unknown): void {
@@ -153,28 +153,6 @@ export class PvpEngine {
     this.error = String((e as Error)?.message ?? e);
     this.status = "error";
     this.emit();
-  }
-
-  /** The chain bridge must be attached (engineClient does so at spawn) before funding/settle;
-   *  throwing here surfaces as the snapshot's `error` via the caller's `fail`. */
-  private requireBridge(): MainBridge {
-    if (!this.bridge) throw new Error("engine bridge not attached");
-    return this.bridge;
-  }
-
-  /** Track the socket lifecycle so the snapshot's `connStatus` reflects reality (design §7).
-   *  `MpClient` auto-reconnects, so an unexpected drop is "reconnecting" and a server-side
-   *  resume returns to "open"; neither fires on our own `close()` — `reset()` sets "closed". */
-  private wireConn(mp: MpClient): void {
-    this.offConn?.();
-    mp.onClose = () => {
-      this.connStatus = "reconnecting";
-      this.emit();
-    };
-    this.offConn = mp.onResumeOk(() => {
-      this.connStatus = "open";
-      this.emit();
-    });
   }
 
   // --- Snapshot coalescing (no rAF in a worker; pause while hidden) ------------------------
@@ -206,12 +184,13 @@ export class PvpEngine {
       winner: dt ? dt.state.winner : null,
       opponentWallet: this.opponentWallet,
       tunnelId: dt ? dt.tunnelId : null,
-      connStatus: this.connStatus,
+      // The socket lifecycle is shared across all PvP windows (hub-tracked), so read it lazily.
+      connStatus: this.deps.connStatus(),
       error: this.error,
     };
     // Comlink proxy: fire-and-forget (returns a Promise we ignore); coalesced upstream so the
     // per-call RPC cost is negligible (design §7).
-    this.onSnapshot?.(snap);
+    this.deps.emit(snap);
   }
 
   setVisibility(visible: boolean): void {
@@ -225,25 +204,32 @@ export class PvpEngine {
     }
   }
 
+  /** Force a coalesced re-emit — the hub calls this on all sessions when the SHARED socket's
+   *  lifecycle changes (drop/reconnect), since `connStatus` is read lazily from the hub. */
+  refreshConn(): void {
+    this.emit();
+  }
+
   /**
    * Orphan-tunnel cancel (design §4.1): if a seat-A open is still queued in the main-thread
    * bulk-open window, cancel it so this torn-down match never opens a tunnel (and consumes stake).
-   * Awaited by `reset()` so `engineClient.disposeWindow` can let the cancel land before terminating
-   * the worker. If the intent already flushed into an in-flight PTB the bridge no-ops and `findMatch`
-   * bails on its own session-gone guard — so this never crashes.
+   * Awaited by `reset()` so the hub can let the cancel land before reclaiming the window. If the
+   * intent already flushed into an in-flight PTB the bridge no-ops and `findMatch` bails on its own
+   * generation guard — so this never crashes.
    */
   private async cancelPendingOpen(): Promise<void> {
     const intentId = this.pendingOpenIntentId;
-    if (!intentId || !this.bridge) return;
+    if (!intentId) return;
     this.pendingOpenIntentId = null;
     try {
-      await this.bridge.cancelOpen(intentId);
+      await this.deps.bridge.cancelOpen(intentId);
     } catch {
-      /* bridge detached or open already resolved — nothing left to cancel */
+      /* open already resolved — nothing left to cancel */
     }
   }
 
   async reset(): Promise<void> {
+    this.gen += 1; // abort any in-flight findMatch/resume past its next await
     await this.cancelPendingOpen();
     if (this.flushTimer !== null) {
       clearTimeout(this.flushTimer);
@@ -252,26 +238,29 @@ export class PvpEngine {
     this.dirty = false;
     this.detachResume?.();
     this.detachResume = null;
-    this.offConn?.();
-    this.offConn = null;
     this.controller?.dispose();
-    this.mp?.close();
-    this.mp = null;
+    // Release THIS match from the shared socket — never close the socket (other windows use it).
+    if (this.matchId) this.deps.mp.releaseMatch(this.matchId);
+    this.matchId = null;
     this.dt = null;
     this.controller = null;
     this.role = null;
     this.auto = true;
     this.opponentWallet = null;
-    this.connStatus = "closed";
     this.error = null;
     this.status = "idle";
+    this.busy = false;
     this.emit();
   }
 
   async findMatch(gameId: GameId, setup?: unknown): Promise<void> {
-    const config = this.config;
-    const spec = this.getSpec(gameId);
-    if (!config || !spec) {
+    if (this.busy) return; // a findMatch/resume is already in flight for this window (defect #2)
+    this.busy = true;
+    const myGen = this.gen;
+    const config = this.deps.config;
+    const spec = this.deps.getSpec(gameId);
+    if (!spec) {
+      this.busy = false;
       this.fail(new Error(`engine not ready for game '${gameId}'`));
       return;
     }
@@ -280,21 +269,22 @@ export class PvpEngine {
       this.error = null;
       const tMatch = emark("match", `findMatch ${gameId}`);
       this.status = "matching";
-      this.connStatus = "connecting";
       this.emit();
 
       const ephemeral: KeyPair = generateKeyPair();
       const wallet = config.wallet;
-      const mp = new MpClient(resolveMpWsUrl(config.backendUrl), wallet, ephemeral);
-      this.mp = mp;
-      this.wireConn(mp);
-      await mp.connect();
-      this.connStatus = "open";
+      const mp = this.deps.mp; // shared, already connected by the hub
       const match = await mp.quickMatch(gameId);
+      if (this.gen !== myGen) return; // reset during matchmaking
+      this.matchId = match.matchId;
       this.role = match.role;
       this.opponentWallet = match.opponentWallet;
       this.emit();
-      elog("match", "matched", { role: match.role, matchId: match.matchId });
+      elog("match", "matched", {
+        window: this.deps.windowId,
+        role: match.role,
+        matchId: match.matchId,
+      });
 
       const channel = mp.channel(match.matchId);
       const waitPeer = makeInbox(channel);
@@ -309,7 +299,7 @@ export class PvpEngine {
       const oppPub = fromHex(hello.ephemeralPubkey);
 
       // 2) fund on-chain via the bridge (role-asymmetric, interleaved with the relay).
-      const bridge = this.requireBridge();
+      const bridge = this.deps.bridge;
       this.status = "funding";
       this.emit();
       const tFund = emark("match", `fund ${match.role}`);
@@ -336,15 +326,17 @@ export class PvpEngine {
         // The open could not be cancelled because it had already flushed into an in-flight PTB
         // (design §4.1). If the session was torn down meanwhile, the tunnel is orphaned (its stake
         // already consumed — the accepted cost of a flushed PTB); just bail rather than resurrect a
-        // reset match on a closed socket. Detected via the captured `mp` (reset() nulls `this.mp`).
-        if (this.mp !== mp) return;
+        // reset match. Detected via the generation counter (reset() bumps it).
+        if (this.gen !== myGen) return;
         tunnelId = opened.tunnelId;
         mp.announceTunnel(match.matchId, tunnelId);
         channel.sendPeer({ t: "open", tunnelId });
       } else {
         const open = await waitPeer<{ tunnelId: string }>("open");
+        if (this.gen !== myGen) return;
         tunnelId = open.tunnelId;
         await bridge.depositStake({ tunnelId, amount: spec.stake, label: gameId });
+        if (this.gen !== myGen) return;
       }
       tFund();
 
@@ -386,42 +378,52 @@ export class PvpEngine {
       } else {
         channel.sendPeer({ t: "ready" });
       }
+      if (this.gen !== myGen) return;
       controller.onConfirmed(); // kick the first due move
+      tMatch();
       this.emit();
     } catch (e) {
-      this.fail(e);
+      if (this.gen === myGen) this.fail(e);
     }
   }
 
-  /** Cold-load: rebuild any persisted in-flight match for this game and re-attach. */
+  /** Cold-load: rebuild any persisted in-flight match for this game and re-attach to the shared
+   *  socket. The hub guarantees the socket is connected before calling this. */
   async resume(gameId: GameId): Promise<void> {
-    if (this.mp) return; // already in a live or resumed session
-    const config = this.config;
-    const spec = this.getSpec(gameId);
-    if (!config || !spec) return;
+    if (this.busy) return; // already in a live or resuming session (defect #2)
+    this.busy = true;
+    const myGen = this.gen;
+    const config = this.deps.config;
+    const spec = this.deps.getSpec(gameId);
+    if (!spec) {
+      this.busy = false;
+      return;
+    }
     this.spec = spec;
     let records: ResumeRecord[];
     try {
       records = await resumeIdb.getAllByGame(gameId);
     } catch {
+      this.busy = false;
       return;
     }
-    if (records.length === 0) return;
+    if (records.length === 0 || this.gen !== myGen) {
+      this.busy = false;
+      return;
+    }
     try {
-      const ephemeral = generateKeyPair(); // connection auth only; the tunnel uses the record's key
-      const mp = new MpClient(resolveMpWsUrl(config.backendUrl), config.wallet, ephemeral);
-      this.mp = mp;
-      this.wireConn(mp);
-      this.connStatus = "connecting";
+      const mp = this.deps.mp; // shared, already connected by the hub
       const controller = spec.createMatch(this.io());
       this.controller = controller;
       const adapter = controller.resumeAdapter?.();
       if (!adapter) {
-        this.mp = null;
-        mp.close();
+        this.controller = null;
+        this.busy = false;
         return;
       }
-      const rec = records[0];
+      // Most-recently-updated record wins, not lexical tunnelId order (defect #2).
+      const rec = [...records].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      this.matchId = rec.matchId;
       this.role = rec.role;
       this.opponentWallet = rec.opponentWallet;
       const rebuilt = rebuildTunnel(
@@ -440,8 +442,9 @@ export class PvpEngine {
         opponentPubkeyHex: rec.opponentPubkeyHex,
         selfEphemeralSecretHex: rec.selfEphemeralSecretHex ?? "",
       });
-      await mp.connect(); // opening handshake carries resume{matchId}
-      this.connStatus = "open";
+      // The shared socket is already open, so send the resume frame explicitly (the connect-time
+      // re-attach only covers matches registered before connect — design §5/§6, ADR-0016).
+      mp.resumeMatch(rec.matchId);
       try {
         controller.onConfirmed(); // kick a due move
       } catch {
@@ -459,7 +462,7 @@ export class PvpEngine {
   }
 
   /** Wire onConfirmed (transcript + drive + settle) + resume persistence/resync. Shared by the
-   *  live (findMatch) and cold-load (resume) paths; the caller does the ready handshake / connect. */
+   *  live (findMatch) and cold-load (resume) paths; the caller does the ready handshake. */
   private activate(
     channel: PvpChannel,
     waitPeer: ReturnType<typeof makeInbox>,
@@ -498,10 +501,10 @@ export class PvpEngine {
     // Resume: persist on confirm/propose (eager write to the worker's own IndexedDB) + run the
     // resync handshake on reconnect. attachResume wraps the onConfirmed set above (preserving it).
     const adapter = controller.resumeAdapter?.();
-    if (adapter && this.mp) {
+    if (adapter) {
       this.detachResume?.();
       this.detachResume = attachResume({
-        mp: this.mp,
+        mp: this.deps.mp,
         channel,
         tunnel: dt,
         adapter,
@@ -531,7 +534,7 @@ export class PvpEngine {
     tunnelId: string,
   ): Promise<void> {
     const dt = this.dt as AnyTunnel;
-    const bridge = this.requireBridge();
+    const bridge = this.deps.bridge;
     const createdAt = await bridge.readCreatedAt(tunnelId);
     const root = transcript.root();
     const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);

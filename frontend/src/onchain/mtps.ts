@@ -244,8 +244,31 @@ export function buildSweepToAddressBalance(
  * address balance already covers `need` it does NOTHING (the open's own withdrawal is the only tx).
  * Otherwise it faucets — only when coins + address balance together fall short — then sweeps owned
  * coins into the address balance. Pass a sponsored `signExec` so a 0-SUI player tops up for free.
+ *
+ * SERIALIZED (process-wide): multiple solo game windows open concurrently and each calls this to
+ * ensure their stake is funded. Without serialization, N windows race to read-balance → faucet →
+ * withdraw, each reading a stale balance (before the previous faucet's deposit settles), each
+ * faucet-minting another full stake into the shared address balance, and each subsequent window's
+ * open PTB arriving at the on-chain check AFTER a prior window's withdrawal has already consumed
+ * the balance. With serialization, window N's check-top-up-wait runs AFTER window N-1's entire
+ * cycle completes, so it sees the cumulative settled balance and the faucet fires only when needed.
  */
-export async function ensureMtpsAddressBalance(opts: {
+// Process-wide serialization queue: one ensureMtpsAddressBalance runs at a time. The caller's
+// promise resolves when their slot runs; the queue is a plain promise chain (no setTimeout —
+// the checkpoint-settle wait inside the function provides the necessary gap).
+let ensureQueue: Promise<void> = Promise.resolve();
+export function ensureMtpsAddressBalance(opts: {
+  client: MtpsBalanceReader;
+  signExec: SignExec;
+  owner: string;
+  need: bigint;
+}): Promise<void> {
+  const run = () => ensureMtpsAddressBalanceInner(opts);
+  ensureQueue = ensureQueue.then(run, run);
+  return ensureQueue;
+}
+
+async function ensureMtpsAddressBalanceInner(opts: {
   client: MtpsBalanceReader;
   signExec: SignExec;
   owner: string;
@@ -271,14 +294,38 @@ export async function ensureMtpsAddressBalance(opts: {
     ).data;
 
   const { addr, total } = await readBalance();
-  if (addr >= opts.need) return; // already funded in the address balance — nothing to do
+  if (addr >= opts.need) return; // already funded — nothing to do
+
+  // Faucet with retry (429 = rate-limited). The backend allows FAUCET_MAX_PER_WINDOW (5) pulls per
+  // FAUCET_COOLDOWN_SECS (1800s); multiple concurrent solo windows each trigger a pull. Retry with
+  // exponential backoff (3s → 6s → 12s → 24s → 48s) to ride out the cooldown without failing the
+  // entire open. Max 3 retries; the caller's open retry covers anything beyond that.
+  const faucetWithRetry = async (attemptsLeft: number): Promise<void> => {
+    try {
+      await faucetMtps({ recipient: opts.owner, toBalance: true });
+    } catch (e) {
+      const isRateLimited =
+        (e as Error & { status?: number })?.status === 429 ||
+        (e as Error)?.message?.includes("429") ||
+        (e as Error)?.message?.includes("cooldown") ||
+        (e as Error)?.message?.includes("Too Many");
+      if (attemptsLeft > 0 && isRateLimited) {
+        const backoff = 3000 * 2 ** (3 - attemptsLeft); // 3s, 6s, 12s
+        console.warn(
+          `[mtps] faucet 429, retrying in ${backoff}ms (${attemptsLeft} retries left)`,
+        );
+        await sleep(backoff);
+        return faucetWithRetry(attemptsLeft - 1);
+      }
+      throw e;
+    }
+  };
+
   if (total < opts.need) {
-    // Not enough owned coins to cover the stake: faucet straight into the address balance
-    // (admin_mint_to_balance) — the backend deposit IS the funding, so there's nothing to sweep.
-    await faucetMtps({ recipient: opts.owner, toBalance: true });
+    // Not enough total MTPS: faucet directly into the address balance (admin_mint_to_balance).
+    await faucetWithRetry(3);
   } else {
-    // Already hold enough as owned coins: sweep them into the address balance (no faucet needed) so
-    // the open can withdraw from it.
+    // Enough as owned coins: sweep into the address balance (no faucet needed).
     const coins = await readCoins();
     if (coins.length > 0) {
       const tx = new Transaction();
@@ -290,12 +337,16 @@ export async function ensureMtpsAddressBalance(opts: {
       await opts.signExec(tx);
     }
   }
-  // SIP-58 deposits settle at a CHECKPOINT boundary, not in the depositing tx, so the funds aren't
-  // withdrawable in the very next transaction. Wait until the address balance reflects the deposit
-  // before returning (so the open's withdrawal doesn't dry-run against a still-empty balance). Best
-  // effort: if the RPC never surfaces the settled balance, the open's own retry covers the lag.
-  for (let i = 0; i < 15; i++) {
+
+  // Faucet cooldown: SIP-58 deposits settle at a CHECKPOINT boundary (not in the depositing tx),
+  // so funds aren't withdrawable in the very next transaction. This queue is serial, but each
+  // window's `readBalance()` may still return a stale pre-deposit value on the first poll. Wait
+  // until the deposit settles before returning, so the NEXT window in the queue reads the updated
+  // balance and short-circuits (`addr >= need`) instead of redundantly fauceting and burning a 429.
+  const FAUCET_SETTLE_POLL_MS = 600;
+  const FAUCET_SETTLE_MAX_POLLS = 30; // ~18s total
+  for (let i = 0; i < FAUCET_SETTLE_MAX_POLLS; i++) {
     if ((await readBalance()).addr >= opts.need) return;
-    await sleep(600);
+    await sleep(FAUCET_SETTLE_POLL_MS);
   }
 }

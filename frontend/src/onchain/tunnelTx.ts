@@ -484,7 +484,18 @@ export async function openManySharedSeatA(opts: {
     // the caller's positional demux is correct. A spec with no match throws — fail-loud, never
     // mis-route stake.
     const byPartyB = new Map<string, string>();
-    for (const id of ids) byPartyB.set(await readTunnelPartyB(opts.reads, id), id);
+    for (const id of ids) {
+      const partyB = await readTunnelPartyB(opts.reads, id);
+      if (byPartyB.has(partyB)) {
+        // Two created tunnels share a party-B pubkey (e.g. an opponent that reused one ephemeral
+        // key across two coincident matches in this flush). The positional demux below would
+        // collapse them and silently mis-route stake — fail loud instead (committed: never retry).
+        throw new Error(
+          `openManySharedSeatA: duplicate party_b pubkey across created tunnels (digest ${digest})`,
+        );
+      }
+      byPartyB.set(partyB, id);
+    }
     return opts.specs.map((s) => {
       const id = byPartyB.get(toHex(s.partyB.publicKey));
       if (!id) {

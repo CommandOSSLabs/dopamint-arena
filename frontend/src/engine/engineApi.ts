@@ -2,15 +2,15 @@
  * Contracts for the browser tunnel-client Web Worker (design:
  * docs/design/frontend-tunnel-client-worker.md).
  *
- * Per-game-worker model: `engineClient` (main) spawns ONE dedicated worker per game
- * window. The worker owns the WebSocket + `DistributedTunnel` + ephemeral signing + any
- * hidden-info secret; the main thread renders snapshots and serves wallet/Sui-client/
- * localStorage through the bridge.
+ * Two lanes (M1): SOLO self-play runs ONE dedicated worker per window ({@link SoloEngineApi}),
+ * while ALL PvP windows share ONE relay-socket "hub" worker ({@link PvpHubApi}), multiplexed by
+ * matchId. A worker owns its `DistributedTunnel` + ephemeral signing + any hidden-info secret; the
+ * main thread renders snapshots and serves wallet/Sui-client through the bridge.
  *
- * The boundary is Comlink (`EngineApi` below): commands + the snapshot/bridge callbacks cross
- * as RPC; their *payloads* are plain / structured-cloneable (the callbacks themselves ride as
- * `Comlink.proxy`'d references). Closures (a game's `Protocol`, `MoveCodec`, `GameSessionSpec`)
- * are imported INSIDE the worker and addressed by `gameId` — they are never sent across.
+ * The boundary is Comlink: commands + the snapshot/bridge callbacks cross as RPC; their *payloads*
+ * are plain / structured-cloneable (the callbacks themselves ride as `Comlink.proxy`'d references).
+ * Closures (a game's `Protocol`, `MoveCodec`, `GameSessionSpec`) are imported INSIDE the worker and
+ * addressed by `gameId` — they are never sent across.
  */
 import type { Role } from "@/pvp/mpClient";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
@@ -71,64 +71,92 @@ export interface MatchSnapshot<View = unknown, Winner = unknown> {
   result?: unknown;
 }
 
-/** Worker bootstrap config (the wallet address is only a matchmaking label). */
+/**
+ * Worker bootstrap config (the wallet address is only a matchmaking label).
+ *
+ * `mpWsUrl` is resolved on MAIN (`resolveMpWsUrl(resolveBackendUrl())`) and passed in, NOT derived
+ * inside the worker: a worker's `self.location` is the worker-script URL, so a same-origin fallback
+ * would resolve the relay against the wrong origin (design §1). `backendUrl` stays for the
+ * control-plane `fetch` base (settle, heartbeat), which is origin-independent.
+ */
 export interface EngineConfig {
   backendUrl: string;
+  /** Fully-resolved `/v1/mp` relay WebSocket URL (main-resolved; see above). */
+  mpWsUrl: string;
   wallet: string;
 }
 
-// --- Worker RPC surface (Comlink; one worker per window, so no windowId) ------------------
+/** Which engine a game window drives: PvP over the shared relay socket, or solo self-play. */
+export type Lane = "pvp" | "solo";
+
+// --- Worker RPC surfaces (Comlink) --------------------------------------------------------
 
 /**
- * The engine API the worker `Comlink.expose`s and `engineClient` `Comlink.wrap`s (design §4,
- * channel 1). Replaces the old hand-rolled `postMessage` envelopes: each method is a Comlink
- * RPC, so on main every method is awaitable (`Comlink.Remote<EngineApi>` promisifies them all).
+ * The SOLO (self-play) engine the per-window worker `Comlink.expose`s (design §4, channel 1).
+ * One dedicated worker per solo game window — self-play is pure crypto with no relay socket, so it
+ * stays isolated per window. Each method is a Comlink RPC (awaitable on main via
+ * `Comlink.Remote<SoloEngineApi>`).
  *
  * Setup order: `engineClient` posts `init` → `attachBridge` → `subscribe` once at spawn, in that
- * order and without awaiting between them — Comlink preserves channel order, so they land before
- * any later `findMatch`/`resume`.
- *
- * Proxy lifetimes: `attachBridge`'s `bridge` and `subscribe`'s `onSnapshot` are `Comlink.proxy`'d
- * on main, so the worker invokes them by reference (each call RPCs back to main). Both live as
- * long as the worker; `engineClient.dispose` releases the wrapped API and `terminate()`s the
- * worker, which disentangles both proxy ports so no main-side `MessagePort` listener leaks.
+ * order without awaiting between them — Comlink preserves channel order, so they land before any
+ * later `findSoloMatch`. Proxy lifetimes: the bridge and `onSnapshot` are `Comlink.proxy`'d on main
+ * and live as long as the worker; `dispose` releases the wrapped API + `terminate()`s the worker.
  */
-export interface EngineApi {
+export interface SoloEngineApi {
   /** Bootstrap config (main-resolved WS URL + wallet label); set before the first match. */
   init(config: EngineConfig): void;
   /** Hand the worker the main-thread chain bridge (a Comlink proxy; its methods RPC to main). */
   attachBridge(bridge: MainBridge): void;
   /** Register the coalesced-snapshot sink (a Comlink proxy, invoked ~per move / 16 ms). */
   subscribe(onSnapshot: (snap: MatchSnapshot) => void): void;
-  findMatch(gameId: GameId, setup?: unknown): Promise<void>;
   /**
-   * Self-play (bot-vs-bot) over ONE funded tunnel hosting many duels. A window is EITHER solo or
-   * pvp; the worker routes control commands (input/auto/visibility/reset) to whichever lane started.
-   * `setup` is the optional per-duel stake (a number, or `{ stake }`); defaults to the spec's stake.
+   * Self-play (bot-vs-bot) over ONE funded tunnel hosting many duels. `setup` is the optional
+   * per-duel stake (a number, or `{ stake }`); defaults to the spec's stake.
    */
   findSoloMatch(gameId: GameId, setup?: unknown): Promise<void>;
-  resume(gameId: GameId): Promise<void>;
   submitInput(input: unknown): void;
   setAuto(on: boolean): void;
   setVisibility(visible: boolean): void;
   /**
-   * SOLO lane only: cabinet hover-freeze. Pause (true) / resume (false) the self-play advance loop
-   * AND its snapshot flush — independent of {@link setVisibility} (the tab-visibility driver). The
-   * loop runs only when BOTH say "active", so one resuming never overrides the other still paused.
-   * No-op unless the window's active lane is solo (the PvP lane has no self-play loop to freeze).
+   * Cabinet hover-freeze. Pause (true) / resume (false) the self-play advance loop AND its snapshot
+   * flush — independent of {@link setVisibility} (the tab-visibility driver). The loop runs only
+   * when BOTH say "active", so one resuming never overrides the other still paused.
    */
   setPaused(paused: boolean): void;
   /**
-   * SOLO lane only: on-demand cooperative cash-out. Close the funded tunnel NOW at the current
-   * co-signed state — the SAME settle path the engine runs when the per-seat bank is exhausted, but
-   * player-triggered so a session can be cashed out mid-play instead of only at exhaustion. No-op
-   * unless the active lane is solo and a match is playing; idempotent if already settling/settled.
+   * On-demand cooperative cash-out: close the funded tunnel NOW at the current co-signed state — the
+   * SAME settle path the engine runs at bank exhaustion, but player-triggered. Idempotent if already
+   * settling/settled.
    */
   settleSolo(): void;
-  /** Tear the match down. Async because it first cancels any seat-A open still queued in the
-   *  main-thread bulk-open window (orphan-tunnel cancel, design §4.1) via `bridge.cancelOpen`;
-   *  `engineClient.disposeWindow` awaits this so the cancel lands before it terminates the worker. */
+  /** Tear the session down (cancel any queued open, cooperative-close intent). Async so
+   *  `engineClient.disposeWindow` can let it land before it terminates the worker. */
   reset(): Promise<void>;
+}
+
+/**
+ * The shared PvP hub the SINGLE relay worker `Comlink.expose`s (M1: one socket for all PvP). Unlike
+ * {@link SoloEngineApi}, every method is keyed by `windowId` because ONE worker multiplexes MANY
+ * windows' matches over ONE `MpClient` (one WebSocket), routed by matchId. The snapshot sink is
+ * therefore `(windowId, snap)` so the manager can fan each match's snapshots back to its window.
+ *
+ * Setup (`init`/`attachBridge`/`subscribe`) is posted once for the whole hub; per-window matches
+ * then start via `findMatch(windowId, …)`.
+ */
+export interface PvpHubApi {
+  init(config: EngineConfig): void;
+  attachBridge(bridge: MainBridge): void;
+  /** windowId-tagged coalesced-snapshot sink (a Comlink proxy). */
+  subscribe(onSnapshot: (windowId: string, snap: MatchSnapshot) => void): void;
+  findMatch(windowId: string, gameId: GameId, setup?: unknown): Promise<void>;
+  resume(windowId: string, gameId: GameId): Promise<void>;
+  submitInput(windowId: string, input: unknown): void;
+  setAuto(windowId: string, on: boolean): void;
+  setVisibility(windowId: string, visible: boolean): void;
+  /** Tear ONE window's match down (cancel queued open, release its matchId from the shared socket);
+   *  the hub closes the shared socket only when its LAST session goes. Async (orphan-tunnel cancel,
+   *  design §4.1) so the manager can let the cancel land before reclaiming the window. */
+  reset(windowId: string): Promise<void>;
 }
 
 // --- Bridge: the few privileged ops the worker calls back into main for -------------------

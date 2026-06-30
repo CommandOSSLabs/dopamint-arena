@@ -47,7 +47,8 @@ const chickenCrossSolo: SoloGameSpec<
   MultiGameCrossProtocol
 > = {
   game: "chicken-cross",
-  stake: MIN_STAKE, // per-DUEL stake (the small swap); the engine funds the large per-seat bank
+  // Per-duel stake: 1 token. Bank = 500 tokens → ~500 duels per tunnel.
+  stake: 1n,
   rematchMs: 600,
   // No manualStepMs: chicken-cross is a throughput showcase, so manual play batches at the autopilot
   // rate too (the per-tick hop is read once, the rest of the frame holds position).

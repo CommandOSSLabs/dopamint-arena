@@ -106,8 +106,11 @@ function useWorkerQuantumPokerSolo(windowId: string): QuantumPokerAutoSession {
     returnHome: () => engineClient.setAuto(windowId, true),
     setAutoSeat: (on) => engineClient.setAuto(windowId, on),
     act: (move: PokerMove) => engineClient.submitInput(windowId, move),
-    pause: () => engineClient.setVisibility(windowId, false),
-    resume: () => engineClient.setVisibility(windowId, true),
+    // Cabinet hover-freeze: pause the self-play loop + snapshot flush via setPaused (cabinetActive),
+    // NOT setVisibility — that flag is driven by document visibilitychange in useGameSolo, and
+    // sharing it would let a tab switch silently un-freeze a still-hovered cabinet.
+    pause: () => engineClient.setPaused(windowId, true),
+    resume: () => engineClient.setPaused(windowId, false),
     reset: () => engineClient.reset(windowId),
   };
 }

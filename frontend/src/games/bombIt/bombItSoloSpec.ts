@@ -51,7 +51,9 @@ const bombItSolo: SoloGameSpec<
   MultiGameBombItProtocol
 > = {
   game: "bomb-it",
-  stake: BOMB_IT_MIN_STAKE, // per-DUEL stake (the small swap); the engine funds the large per-seat bank
+  // Per-duel stake: 1 token. The engine funds `lockedPerSeat` (500 tokens) per seat — the tunnel
+  // auto-rematches for ~500 duels before the bank is exhausted.
+  stake: 1n,
   rematchMs: 700,
   // Bomb It is a REACTION game: manual play co-signs one tick per SOLO_STEP_MS so the fuse stays
   // legible; autopilot still batches (the ~500 TPS throughput showcase).

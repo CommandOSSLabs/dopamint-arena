@@ -401,6 +401,16 @@ export class MpClient {
     this.#activeMatches.delete(matchId);
   }
 
+  /** Send a resume frame for a match rebuilt AFTER the socket is already open. The connect-time
+   *  {@link #resumeActive} only covers matches registered before connect; a shared socket that is
+   *  already connected when a cold-loaded match attaches needs this explicit resume. Idempotent —
+   *  markActive also makes the reconnect loop re-resume it. No-op until the socket is connected
+   *  (connect's handshake will then carry it). */
+  resumeMatch(matchId: string) {
+    this.markActive(matchId);
+    if (this.#connected) this.#send({ type: "resume", matchId });
+  }
+
   /** Announce the opened on-chain tunnel id to the backend registry (watchtower). */
   announceTunnel(matchId: string, tunnelId: string) {
     this.#send({ type: "tunnel.opened", matchId, tunnelId });

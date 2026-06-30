@@ -104,6 +104,14 @@ export function tttSessionResult(inner: SoloTttState["inner"]): TttResult {
   return "draw";
 }
 
+/** A fresh 16-byte commit-reveal salt for a move the loop builds directly — the human take-over
+ *  cell and the next-game advance trigger. The kit bots salt their own moves, but these two call
+ *  sites construct the move object themselves, and `MultiGameTicTacToeMove` requires a salt (the
+ *  protocol's `encode` hashes it; an absent salt throws at co-sign). */
+function freshSalt(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(16));
+}
+
 // --- per-tick stepper -------------------------------------------------------
 
 /**
@@ -134,7 +142,7 @@ export function stepMultiGameTtt(
   let move: MultiGameTicTacToeMove | null;
   if (human && human.seat === by) {
     const cell = human.getCell();
-    move = cell !== undefined ? { cell } : bots[by].plan(raw);
+    move = cell !== undefined ? { cell, salt: freshSalt() } : bots[by].plan(raw);
   } else {
     move = bots[by].plan(raw);
   }
@@ -151,5 +159,5 @@ export function stepMultiGameTtt(
 export function kickoffNextGameTtt(
   tunnel: OffchainTunnel<SoloTttState, MultiGameTicTacToeMove>,
 ): void {
-  tunnel.step({ cell: 0 }, "A");
+  tunnel.step({ cell: 0, salt: freshSalt() }, "A");
 }

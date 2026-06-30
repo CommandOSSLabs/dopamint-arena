@@ -12,6 +12,7 @@ import {
 } from "@mysten/dapp-kit";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { resolveBackendUrl } from "@/backend/controlPlane";
+import { resolveMpWsUrl } from "@/pvp/mpClient";
 import { configureEngine } from "../engineClient";
 import { makeChainBridge } from "../bridge/chainBridge";
 
@@ -38,8 +39,15 @@ export function useConfigureEngine(): void {
       prepareStake: sponsored.prepareStake,
       ensureStakeBalance: sponsored.ensureStakeBalance,
     });
+    // Resolve the relay WS URL HERE (main), not in the worker: a worker's self.location is the
+    // worker-script URL, so a same-origin fallback there points at the wrong origin (design §1).
+    const backendUrl = resolveBackendUrl();
     configureEngine(
-      { backendUrl: resolveBackendUrl(), wallet: account.address },
+      {
+        backendUrl,
+        mpWsUrl: resolveMpWsUrl(backendUrl),
+        wallet: account.address,
+      },
       chain,
     );
   }, [account?.address, client, signAndExecute, sponsored]);

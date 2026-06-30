@@ -35,7 +35,10 @@ const SOLO_SPECS = new Map<string, AnySoloSpec>();
  * overwriting would route matches to the wrong engine.
  */
 export function defineGame<S extends AnySpec>(spec: S): S {
-  if (PVP_SPECS.has(spec.game)) {
+  // Idempotent: Vite HMR can re-execute this module; re-registering the same id is a no-op.
+  // Only throw when two DIFFERENT specs claim the same key (genuine wiring bug).
+  const existing = PVP_SPECS.get(spec.game);
+  if (existing && existing !== spec) {
     throw new Error(`duplicate game spec registered for "${spec.game}"`);
   }
   PVP_SPECS.set(spec.game, spec);
@@ -54,7 +57,9 @@ export function getSpec(gameId: string): AnySpec | undefined {
  * engines. Throws on a duplicate solo id (silent overwrite would mis-route a session).
  */
 export function defineSoloGame<S extends AnySoloSpec>(spec: S): S {
-  if (SOLO_SPECS.has(spec.game)) {
+  // Idempotent: Vite HMR re-executes modules; re-registering the same id is a no-op.
+  const existing = SOLO_SPECS.get(spec.game);
+  if (existing && existing !== spec) {
     throw new Error(`duplicate solo game spec registered for "${spec.game}"`);
   }
   SOLO_SPECS.set(spec.game, spec);

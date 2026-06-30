@@ -33,7 +33,7 @@ export function useGameSolo(windowId: string): MatchSnapshot {
   }, [windowId]);
 
   return useSyncExternalStore(
-    (cb) => engineClient.subscribe(windowId, cb),
-    () => engineClient.getSnapshot(windowId),
+    (cb) => engineClient.subscribe(windowId, "solo", cb),
+    () => engineClient.getSnapshot(windowId, "solo"),
   );
 }

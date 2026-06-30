@@ -1,26 +1,28 @@
 /**
- * Main-thread manager for the per-game-window tunnel workers. Spawns ONE dedicated worker
- * per `windowId` (lazy, on first command), keeps that window's latest snapshot for
- * `useSyncExternalStore`, and terminates the worker on dispose.
+ * Main-thread manager for the tunnel workers, across TWO lanes (M1):
+ *  - SOLO (self-play): ONE dedicated worker per game window — pure crypto, no relay socket, so each
+ *    window stays isolated (and parallel across cores).
+ *  - PvP: ONE shared "hub" worker for ALL windows, multiplexing every match over ONE relay socket
+ *    (the `tunnel-pvp` worker). PvP windows don't each spawn a worker — they're cheap.
  *
- * Transport is Comlink (design §4): each worker exposes an `EngineApi` we `Comlink.wrap`. The
- * bridge and the snapshot sink are handed over as `Comlink.proxy`'d references, so the worker
- * invokes them by reference (each call RPCs back here) — no hand-rolled `postMessage` envelopes.
- * The bridge is a single per-user instance (wallet is per-user), set once by `EngineProvider`;
- * every window's worker shares it.
+ * A window's lane is fixed by which binding it uses (`useGameMatch` → pvp, `useGameSolo` → solo),
+ * declared via {@link engineClient.subscribe}'s `lane` arg; commands then route by it. Snapshots feed
+ * `useSyncExternalStore`: solo workers emit `(snap)`, the hub emits `(windowId, snap)` which the
+ * manager fans to the right window's listeners.
  *
- * Proxy lifetimes: the wrapped `EngineApi` and the two proxied callbacks (bridge, snapshot) live
- * for the worker's lifetime. `dispose` releases the wrapped API (`Comlink.releaseProxy`) and
- * `terminate()`s the worker; terminating disentangles the bridge/snapshot ports so their
- * main-side `MessagePort` listeners are reclaimed (no proxy leak).
+ * Transport is Comlink (design §4): each worker exposes a typed API we `Comlink.wrap`; the bridge
+ * and snapshot sinks are `Comlink.proxy`'d so the worker invokes them by reference. `dispose`
+ * releases the wrapped API (`Comlink.releaseProxy`) and `terminate()`s the worker.
  */
 import * as Comlink from "comlink";
 import type {
-  EngineApi,
-  MainBridge,
-  MatchSnapshot,
   EngineConfig,
   GameId,
+  Lane,
+  MainBridge,
+  MatchSnapshot,
+  PvpHubApi,
+  SoloEngineApi,
 } from "./engineApi";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
@@ -40,11 +42,11 @@ const IDLE_SNAPSHOT: MatchSnapshot = {
 };
 
 /**
- * Returned for a NEW window the device live-window cap (design §2.1) refused to spawn — never
- * for one with a live worker. A stable singleton so `useSyncExternalStore` sees a constant
- * reference. TODO(ui): branch on `snap.capped` in the game window to render an SSE-spectate
- * tile (design §2.1 escape hatch) instead of an interactive match; today the snapshot only
- * surfaces the capped state, the worker is simply never spawned.
+ * Returned for a NEW solo window the device live-window cap (design §2.1) refused to spawn. A
+ * stable singleton so `useSyncExternalStore` sees a constant reference. PvP windows are never capped
+ * — they share the one hub worker, so they cost no extra isolate.
+ * TODO(ui/design §2.1): offscreen-worker teardown (IntersectionObserver), capped-window re-admit on
+ * slot-free, and an SSE-spectate tile remain follow-ups; today a capped solo window just isn't spawned.
  */
 const CAPPED_SNAPSHOT: MatchSnapshot = {
   ...IDLE_SNAPSHOT,
@@ -53,32 +55,43 @@ const CAPPED_SNAPSHOT: MatchSnapshot = {
   capped: true,
 };
 
-interface WindowEntry {
+interface SoloWindow {
   worker: Worker;
-  /** The worker's `EngineApi`, wrapped by Comlink — every method returns a `Promise`. */
-  api: Comlink.Remote<EngineApi>;
+  api: Comlink.Remote<SoloEngineApi>;
   snap: MatchSnapshot;
   listeners: Set<() => void>;
-  /** Whether init/attachBridge/subscribe have been posted. A worker can spawn before the wallet
-   *  bridge is ready (React child effects run before the parent's `useConfigureEngine`), so it
-   *  stays unwired until {@link configureEngine} wires it. */
+  /** init/attachBridge/subscribe posted? A worker can spawn before the wallet bridge is ready. */
   wired: boolean;
+}
+
+/** A PvP window's store slot (the worker is the shared hub, not per-window). */
+interface PvpWindow {
+  snap: MatchSnapshot;
+  listeners: Set<() => void>;
 }
 
 let bridge: MainBridge | null = null;
 let config: EngineConfig | null = null;
-const windows = new Map<string, WindowEntry>();
+
+const soloWindows = new Map<string, SoloWindow>();
+const pvpWindows = new Map<string, PvpWindow>();
+const windowLane = new Map<string, Lane>();
+
+/** The single shared PvP hub worker + its wrapped API; null until the first PvP command spawns it. */
+let hubWorker: Worker | null = null;
+let hubApi: Comlink.Remote<PvpHubApi> | null = null;
+let hubWired = false;
 
 /** Called by EngineProvider/useConfigureEngine once the wallet is known. Idempotent, and it
- *  retroactively wires any workers that spawned BEFORE the bridge was ready (the effect-ordering
- *  foot-gun) — without this, a window mounted before the wallet stays a dead worker forever. */
+ *  retroactively wires any worker (solo or the hub) that spawned BEFORE the bridge was ready. */
 export function configureEngine(
   cfg: EngineConfig,
   mainBridge: MainBridge,
 ): void {
   config = cfg;
   bridge = mainBridge;
-  for (const [windowId, entry] of windows) wire(windowId, entry);
+  for (const [windowId, entry] of soloWindows) wireSolo(windowId, entry);
+  wireHub();
 }
 
 /** Fire a worker command without awaiting. The engine surfaces failures via the snapshot's
@@ -87,10 +100,9 @@ function fire(p: Promise<unknown>): void {
   void p.catch(() => {});
 }
 
-/** Post init → attachBridge → subscribe to a worker once the per-user bridge is configured.
- *  Idempotent (skips if already wired or the bridge isn't set yet). Posts synchronously with no
- *  await between the three so they queue ahead of any later findMatch (Comlink preserves order). */
-function wire(windowId: string, entry: WindowEntry): void {
+// --- SOLO lane: one worker per window ------------------------------------------------------
+
+function wireSolo(windowId: string, entry: SoloWindow): void {
   if (entry.wired || !config || !bridge) return;
   const onSnapshot = (snap: MatchSnapshot): void => {
     entry.snap = snap;
@@ -100,54 +112,92 @@ function wire(windowId: string, entry: WindowEntry): void {
   fire(entry.api.attachBridge(Comlink.proxy(bridge)));
   fire(entry.api.subscribe(Comlink.proxy(onSnapshot)));
   entry.wired = true;
-  elog("client", "wired worker", windowId);
+  elog("client", "wired solo worker", windowId);
 }
 
-function spawn(windowId: string): WindowEntry {
+function spawnSolo(windowId: string): SoloWindow {
   const worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
     type: "module",
-    name: `tunnel-${windowId}`,
+    name: `[solo] ${windowId}`,
   });
-  const api = Comlink.wrap<EngineApi>(worker);
-  const entry: WindowEntry = {
+  const api = Comlink.wrap<SoloEngineApi>(worker);
+  const entry: SoloWindow = {
     worker,
     api,
     snap: IDLE_SNAPSHOT,
     listeners: new Set(),
     wired: false,
   };
-  windows.set(windowId, entry);
-  elog("client", "spawn worker", {
+  soloWindows.set(windowId, entry);
+  elog("client", "spawn solo worker", {
     windowId,
     configured: !!(config && bridge),
   });
-  // Wires now if the bridge is already configured; otherwise configureEngine wires it once the
-  // wallet/EngineProvider is ready (so a worker that spawned first isn't left dead).
-  wire(windowId, entry);
-  if (!entry.wired) {
-    elog(
-      "client",
-      "worker idle until wallet/EngineProvider (bridge not configured yet)",
-      windowId,
-    );
-  }
-  // Tear the worker down on explicit window close (mirrors the legacy session disposer); a
-  // mere React remount/minimize keeps it alive so the match survives in the background.
+  wireSolo(windowId, entry);
   registerWindowDisposer(windowId, "engine", () => disposeWindow(windowId));
   return entry;
 }
 
-function disposeWindow(windowId: string): void {
-  const entry = windows.get(windowId);
+/** Returns the solo window's worker, spawning it lazily — unless the device live-window cap
+ *  (design §2.1) is already reached for a NEW window (returns null → CAPPED_SNAPSHOT). The cap
+ *  counts solo workers only; the single shared PvP hub is one extra isolate, not per-window. */
+function getOrSpawnSolo(windowId: string): SoloWindow | null {
+  const existing = soloWindows.get(windowId);
+  if (existing) return existing;
+  if (soloWindows.size >= maxLiveWindows()) return null;
+  return spawnSolo(windowId);
+}
+
+// --- PvP lane: one shared hub worker for all windows ---------------------------------------
+
+function wireHub(): void {
+  if (hubWired || !hubApi || !config || !bridge) return;
+  const onSnapshot = (windowId: string, snap: MatchSnapshot): void => {
+    const w = pvpWindows.get(windowId);
+    if (!w) return; // window disposed between the worker's emit and this callback
+    w.snap = snap;
+    for (const l of w.listeners) l();
+  };
+  fire(hubApi.init(config));
+  fire(hubApi.attachBridge(Comlink.proxy(bridge)));
+  fire(hubApi.subscribe(Comlink.proxy(onSnapshot)));
+  hubWired = true;
+  elog("client", "wired pvp hub");
+}
+
+/** Spawn (once) the shared PvP hub worker. */
+function ensureHub(): Comlink.Remote<PvpHubApi> {
+  if (hubApi) return hubApi;
+  hubWorker = new Worker(new URL("./engine.pvp.worker.ts", import.meta.url), {
+    type: "module",
+    name: "[pvp-hub] all-pvp-matches",
+  });
+  hubApi = Comlink.wrap<PvpHubApi>(hubWorker);
+  hubWired = false;
+  elog("client", "spawn pvp hub", { configured: !!(config && bridge) });
+  wireHub();
+  return hubApi;
+}
+
+/** Ensure a PvP window's store slot + its window-close disposer. */
+function ensurePvpWindow(windowId: string): PvpWindow {
+  let w = pvpWindows.get(windowId);
+  if (w) return w;
+  w = { snap: IDLE_SNAPSHOT, listeners: new Set() };
+  pvpWindows.set(windowId, w);
+  registerWindowDisposer(windowId, "engine", () => disposeWindow(windowId));
+  return w;
+}
+
+// --- dispose ------------------------------------------------------------------------------
+
+function disposeSolo(windowId: string): void {
+  const entry = soloWindows.get(windowId);
   if (!entry) return;
   // Drop from the store first so subscribe/getSnapshot immediately treat the window as gone.
-  windows.delete(windowId);
-  // Orphan-tunnel cancel (design §4.1): terminate() is abrupt, so let the worker run reset() first
-  // — it cancels any seat-A open still queued in the main-thread bulk-open window, so a closed
-  // window never flushes a tunnel (consuming stake) for a gone match. reset() awaits that cancel,
-  // so once it resolves the intent is gone; only THEN release the API proxy + terminate (which
-  // disentangles the bridge + snapshot proxy ports so their main-side listeners are reclaimed). A
-  // wedged worker is still reclaimed by the timeout fallback.
+  soloWindows.delete(windowId);
+  // Let the worker run reset() (cancel any queued open) before the abrupt terminate; reclaim the
+  // proxy + isolate once it lands, with a timeout fallback for a wedged worker.
   let reclaimed = false;
   const reclaim = (): void => {
     if (reclaimed) return;
@@ -159,81 +209,123 @@ function disposeWindow(windowId: string): void {
   setTimeout(reclaim, 1000);
 }
 
-/**
- * Returns the window's worker entry, spawning it lazily on first use — unless the device
- * live-window cap (design §2.1) is already reached for a NEW window, in which case it returns
- * null so the caller surfaces `CAPPED_SNAPSHOT` instead of oversubscribing per-worker memory.
- * An already-live window is always returned (it counts toward the cap, doesn't re-check it).
- */
-function getOrSpawn(windowId: string): WindowEntry | null {
-  const existing = windows.get(windowId);
-  if (existing) return existing;
-  if (windows.size >= maxLiveWindows()) return null;
-  return spawn(windowId);
+function disposePvp(windowId: string): void {
+  const w = pvpWindows.get(windowId);
+  if (!w) return;
+  pvpWindows.delete(windowId);
+  // Tear this window's match down inside the hub (cancels a queued open, releases the matchId from
+  // the shared socket, and closes the socket if it was the last session). Then, if no PvP windows
+  // remain, terminate the hub worker to reclaim its isolate (re-spawned on the next PvP command).
+  const api = hubApi;
+  const finishIfEmpty = (): void => {
+    if (pvpWindows.size > 0 || !hubWorker) return;
+    hubApi?.[Comlink.releaseProxy]();
+    hubWorker.terminate();
+    hubWorker = null;
+    hubApi = null;
+    hubWired = false;
+  };
+  if (api) api.reset(windowId).then(finishIfEmpty, finishIfEmpty);
+  else finishIfEmpty();
 }
 
+function disposeWindow(windowId: string): void {
+  const lane = windowLane.get(windowId);
+  windowLane.delete(windowId);
+  if (lane === "solo") disposeSolo(windowId);
+  else disposePvp(windowId);
+}
+
+// --- public surface (the React bindings call these) ---------------------------------------
+
 export const engineClient = {
-  subscribe(windowId: string, cb: () => void): () => void {
-    const entry = getOrSpawn(windowId);
-    // Capped: no worker to listen to. `getSnapshot` returns CAPPED_SNAPSHOT; a no-op
-    // unsubscribe keeps the store consistent.
-    if (!entry) return () => {};
-    entry.listeners.add(cb);
-    return () => {
-      entry.listeners.delete(cb);
-    };
+  /** Subscribe to a window's snapshot store. `lane` is fixed by the binding (useGameMatch→pvp,
+   *  useGameSolo→solo) and is recorded so later commands route to the right worker. */
+  subscribe(windowId: string, lane: Lane, cb: () => void): () => void {
+    windowLane.set(windowId, lane);
+    if (lane === "solo") {
+      const entry = getOrSpawnSolo(windowId);
+      if (!entry) return () => {}; // capped: CAPPED_SNAPSHOT, no worker to listen to
+      entry.listeners.add(cb);
+      return () => entry.listeners.delete(cb);
+    }
+    const w = ensurePvpWindow(windowId);
+    w.listeners.add(cb);
+    return () => w.listeners.delete(cb);
   },
-  getSnapshot(windowId: string): MatchSnapshot {
-    const entry = windows.get(windowId);
-    if (entry) return entry.snap;
-    // No worker yet: report the cap if we're at it (so a new window can't spawn), else idle.
-    return windows.size >= maxLiveWindows() ? CAPPED_SNAPSHOT : IDLE_SNAPSHOT;
+
+  getSnapshot(windowId: string, lane: Lane): MatchSnapshot {
+    if (lane === "solo") {
+      const entry = soloWindows.get(windowId);
+      if (entry) return entry.snap;
+      return soloWindows.size >= maxLiveWindows()
+        ? CAPPED_SNAPSHOT
+        : IDLE_SNAPSHOT;
+    }
+    return pvpWindows.get(windowId)?.snap ?? IDLE_SNAPSHOT;
   },
+
+  // PvP commands → shared hub.
   findMatch(windowId: string, gameId: GameId, setup?: unknown): void {
-    const entry = getOrSpawn(windowId);
-    if (entry) fire(entry.api.findMatch(gameId, setup));
-  },
-  /** Start a SELF-PLAY (bot-vs-bot) session in this window — the solo-lane sibling of
-   *  {@link findMatch}. Reuses the same lazy spawn / wire / device-cap / dispose path; a capped
-   *  new window simply isn't spawned (the snapshot surfaces `capped`). `setup` optionally overrides
-   *  the per-duel stake. */
-  findSolo(windowId: string, gameId: GameId, setup?: unknown): void {
-    const entry = getOrSpawn(windowId);
-    if (entry) fire(entry.api.findSoloMatch(gameId, setup));
+    windowLane.set(windowId, "pvp");
+    ensurePvpWindow(windowId);
+    fire(ensureHub().findMatch(windowId, gameId, setup));
   },
   resume(windowId: string, gameId: GameId): void {
-    const entry = getOrSpawn(windowId);
-    if (entry) fire(entry.api.resume(gameId));
+    windowLane.set(windowId, "pvp");
+    ensurePvpWindow(windowId);
+    fire(ensureHub().resume(windowId, gameId));
   },
+
+  // SOLO command → per-window worker.
+  findSolo(windowId: string, gameId: GameId, setup?: unknown): void {
+    windowLane.set(windowId, "solo");
+    const entry = getOrSpawnSolo(windowId);
+    if (entry) fire(entry.api.findSoloMatch(gameId, setup));
+  },
+
+  // Shared control commands → route by the window's recorded lane.
   submitInput(windowId: string, input: unknown): void {
-    const entry = windows.get(windowId);
-    if (entry) fire(entry.api.submitInput(input));
+    const solo = soloWindows.get(windowId);
+    if (windowLane.get(windowId) === "solo") {
+      if (solo) fire(solo.api.submitInput(input));
+    } else if (hubApi) fire(hubApi.submitInput(windowId, input));
   },
   setAuto(windowId: string, on: boolean): void {
-    const entry = windows.get(windowId);
-    if (entry) fire(entry.api.setAuto(on));
+    const solo = soloWindows.get(windowId);
+    if (windowLane.get(windowId) === "solo") {
+      if (solo) fire(solo.api.setAuto(on));
+    } else if (hubApi) fire(hubApi.setAuto(windowId, on));
   },
   setVisibility(windowId: string, visible: boolean): void {
-    const entry = windows.get(windowId);
-    if (entry) fire(entry.api.setVisibility(visible));
+    const solo = soloWindows.get(windowId);
+    if (windowLane.get(windowId) === "solo") {
+      if (solo) fire(solo.api.setVisibility(visible));
+    } else if (hubApi) fire(hubApi.setVisibility(windowId, visible));
   },
-  /** SOLO lane: cabinet hover-freeze. Pauses/resumes the self-play loop AND its snapshot flush,
-   *  independent of {@link setVisibility} (tab visibility); see `EngineApi.setPaused`. */
+  /** SOLO lane only: cabinet hover-freeze. */
   setPaused(windowId: string, paused: boolean): void {
-    const entry = windows.get(windowId);
+    const entry = soloWindows.get(windowId);
     if (entry) fire(entry.api.setPaused(paused));
   },
-  /** SOLO lane: on-demand cash-out — close the funded tunnel now at the current co-signed state. */
+  /** SOLO lane only: on-demand cash-out. */
   settleSolo(windowId: string): void {
-    const entry = windows.get(windowId);
+    const entry = soloWindows.get(windowId);
     if (entry) fire(entry.api.settleSolo());
   },
   reset(windowId: string): void {
-    const entry = windows.get(windowId);
-    if (entry) fire(entry.api.reset());
+    if (windowLane.get(windowId) === "solo") {
+      const entry = soloWindows.get(windowId);
+      if (entry) fire(entry.api.reset());
+    } else if (hubApi) {
+      fire(hubApi.reset(windowId));
+    }
   },
   /** Terminate a window's worker and reclaim its memory (also auto-run on window close). */
   dispose(windowId: string): void {
+    disposeWindow(windowId);
+  },
+  disposeWindow(windowId: string): void {
     disposeWindow(windowId);
   },
 };

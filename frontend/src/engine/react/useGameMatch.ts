@@ -42,7 +42,7 @@ export function useGameMatch(windowId: string, gameId: GameId): MatchSnapshot {
   }, [windowId]);
 
   return useSyncExternalStore(
-    (cb) => engineClient.subscribe(windowId, cb),
-    () => engineClient.getSnapshot(windowId),
+    (cb) => engineClient.subscribe(windowId, "pvp", cb),
+    () => engineClient.getSnapshot(windowId, "pvp"),
   );
 }

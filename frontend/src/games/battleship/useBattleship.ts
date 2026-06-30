@@ -52,7 +52,7 @@ import { type BotDifficulty } from "./engine/bot";
 const STAKE = 1n; // per-game wager shifted loser -> winner: the winner takes 1 MTPS (0-decimal; ADR-0023)
 /** MTPS bank locked per seat — funds MANY duels off one tunnel before a seat is exhausted (the
  *  session ends only when neither side can fund the next STAKE). */
-const LOCKED_PER_SEAT = 500n; // 500 MTPS/seat → ~500 games per tunnel
+const LOCKED_PER_SEAT = 1n; // 1 MTPS/seat → ~1 games per tunnel
 /** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 // Throughput, not per-move pacing: the driver applies moves in a synchronous batch
@@ -627,44 +627,44 @@ class BotSession {
     }
     const tunnelId = isMtpsConfigured
       ? await openAndFundSelfPlay({
-          reads,
-          signExec: deps.sponsoredSignExec as never,
-          partyA,
-          partyB,
-          aAmount: stakePerSeat,
-          bAmount: stakePerSeat,
-          coinType: MTPS_COIN_TYPE,
-          ...(isMtpsAddressBalance
-            ? {
-                stakeFromBalance: {
-                  amount: 2n * stakePerSeat,
-                  coinType: MTPS_COIN_TYPE,
-                },
-              }
-            : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }),
-        })
+        reads,
+        signExec: deps.sponsoredSignExec as never,
+        partyA,
+        partyB,
+        aAmount: stakePerSeat,
+        bAmount: stakePerSeat,
+        coinType: MTPS_COIN_TYPE,
+        ...(isMtpsAddressBalance
+          ? {
+            stakeFromBalance: {
+              amount: 2n * stakePerSeat,
+              coinType: MTPS_COIN_TYPE,
+            },
+          }
+          : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }),
+      })
       : await withSponsorFallback(
-          async () =>
-            openAndFundSelfPlay({
-              reads,
-              signExec: deps.sponsoredSignExec as never,
-              partyA,
-              partyB,
-              aAmount: stakePerSeat,
-              bAmount: stakePerSeat,
-              stakeCoinId: await deps.selectStakeCoin(2n * stakePerSeat),
-            }),
-          () =>
-            openAndFundSelfPlay({
-              reads,
-              signExec: deps.signExec as never,
-              partyA,
-              partyB,
-              aAmount: stakePerSeat,
-              bAmount: stakePerSeat,
-            }),
-          "battleship bot open/fund",
-        );
+        async () =>
+          openAndFundSelfPlay({
+            reads,
+            signExec: deps.sponsoredSignExec as never,
+            partyA,
+            partyB,
+            aAmount: stakePerSeat,
+            bAmount: stakePerSeat,
+            stakeCoinId: await deps.selectStakeCoin(2n * stakePerSeat),
+          }),
+        () =>
+          openAndFundSelfPlay({
+            reads,
+            signExec: deps.signExec as never,
+            partyA,
+            partyB,
+            aAmount: stakePerSeat,
+            bAmount: stakePerSeat,
+          }),
+        "battleship bot open/fund",
+      );
     const createdAt = await readCreatedAt(reads, tunnelId);
 
     const tunnel = OffchainTunnel.selfPlay(

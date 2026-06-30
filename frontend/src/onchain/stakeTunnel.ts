@@ -117,10 +117,11 @@ export interface SharedStakedOpenSpec {
  * abandonment-forfeit model — see {@link openSharedTunnelStaked}), but the whole batch draws ONE
  * summed stake withdrawal so a flush costs ONE Enoki sponsor+execute pair (design §4.1).
  *
- * Demux is by `objectChanges` order inside {@link openManySharedSeatA}; a post-commit demux failure
- * surfaces as `BatchCommittedError` — the tunnels exist and stake is consumed, so callers MUST NOT
- * retry. A 1-spec call builds the same PTB shape as `openSharedTunnelStaked` (one create + seat-A
- * deposit + share, one withdrawal), so the lone-flush / single-match path stays correct.
+ * Demux is by each created tunnel's on-chain `party_b.public_key` inside {@link openManySharedSeatA}
+ * (objectChanges order is unspecified); a post-commit demux failure surfaces as `BatchCommittedError`
+ * — the tunnels exist and stake is consumed, so callers MUST NOT retry. A 1-spec call builds the same
+ * PTB shape as `openSharedTunnelStaked` (one create + seat-A deposit + share, one withdrawal), so the
+ * lone-flush / single-match path stays correct.
  */
 export async function openSharedTunnelStakedMany(
   opts: StakeStrategy & {
