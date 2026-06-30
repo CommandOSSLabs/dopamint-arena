@@ -3007,7 +3007,7 @@ mod tests {
 
     #[test]
     fn direct_ptb_default_gas_budget_is_large_enough_for_batches() {
-        assert!(DEFAULT_DIRECT_GAS_BUDGET_MIST >= 1_000_000_000);
+        const { assert!(DEFAULT_DIRECT_GAS_BUDGET_MIST >= 1_000_000_000) };
     }
 
     #[test]
