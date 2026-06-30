@@ -92,7 +92,9 @@ impl ResultReason {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SlotReveal {
+    #[serde(with = "wire_hex0x")]
     pub value: Vec<u8>,
+    #[serde(with = "wire_hex0x")]
     pub salt: Vec<u8>,
 }
 
@@ -149,6 +151,7 @@ pub struct PokerState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PokerMove {
     CommitSlots {
+        #[serde(with = "wire_hex0x_vec32")]
         commitments: Vec<[u8; 32]>,
         #[serde(skip_serializing, skip_deserializing, default)]
         local_secrets: Option<Vec<SlotSecret>>,
@@ -158,12 +161,88 @@ pub enum PokerMove {
         reveals: Vec<SlotReveal>,
     },
     Bet {
+        #[serde(with = "wire_dec_u64")]
         amount: u64,
     },
     Check,
     Call,
     Fold,
     NextHand,
+}
+
+// Move-wire serde matching the TS `pokerMoveCodec` (sui-tunnel-ts/src/protocol/quantumPokerCodec.ts):
+// in a HUMAN-READABLE format (JSON — the cross-language relay wire), byte fields ride as `0x`-hex
+// strings and amounts as decimal strings, so a Rust bot and a browser co-sign byte-identical relayed
+// moves. In NON-human-readable formats (BCS/Postcard — the Rust-only bench codecs) the helpers fall
+// back to plain serde, so those wires stay byte-identical to the derived default — the bench's
+// codec-size comparison is unaffected. Scoped to the MOVE wire only; the co-signed `encode_state` is
+// a separate manual byte layout and is untouched.
+mod wire_hex0x {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn serialize<S: Serializer>(bytes: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_str(&format!("0x{}", hex::encode(bytes)))
+        } else {
+            bytes.serialize(s)
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        if d.is_human_readable() {
+            let s = String::deserialize(d)?;
+            hex::decode(s.strip_prefix("0x").unwrap_or(&s)).map_err(serde::de::Error::custom)
+        } else {
+            Vec::<u8>::deserialize(d)
+        }
+    }
+}
+
+mod wire_hex0x_vec32 {
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn serialize<S: Serializer>(v: &Vec<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            let mut seq = s.serialize_seq(Some(v.len()))?;
+            for b in v {
+                seq.serialize_element(&format!("0x{}", hex::encode(b)))?;
+            }
+            seq.end()
+        } else {
+            v.serialize(s)
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<[u8; 32]>, D::Error> {
+        if d.is_human_readable() {
+            Vec::<String>::deserialize(d)?
+                .into_iter()
+                .map(|s| {
+                    let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(&s))
+                        .map_err(serde::de::Error::custom)?;
+                    <[u8; 32]>::try_from(bytes.as_slice())
+                        .map_err(|_| serde::de::Error::custom("commitment must be 32 bytes"))
+                })
+                .collect()
+        } else {
+            Vec::<[u8; 32]>::deserialize(d)
+        }
+    }
+}
+
+mod wire_dec_u64 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_str(&v.to_string())
+        } else {
+            v.serialize(s)
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        if d.is_human_readable() {
+            String::deserialize(d)?.parse().map_err(serde::de::Error::custom)
+        } else {
+            u64::deserialize(d)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1237,6 +1316,51 @@ pub fn best_poker_hand(cards: &[u8]) -> Result<BestHand, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The move wire MUST match the TS `pokerMoveCodec` (sui-tunnel-ts/src/protocol/quantumPokerCodec.ts)
+    // byte-for-byte, or a Rust bot and the browser can't co-sign relayed moves (the cross-language
+    // arena E2E fails at the first commit). This gates the exact shapes the TS encoder emits:
+    // `commit_slots` with 0x-hex commitments, `bet` with a decimal-string amount, `reveal_slots` with
+    // 0x-hex value/salt. A drift here (e.g. back to serde's default byte arrays / numeric amount)
+    // breaks the browser handshake — the gap that was previously un-gated.
+    #[test]
+    fn move_wire_matches_ts_poker_move_codec() {
+        // commit_slots: commitments are 0x-prefixed 32-byte hex strings.
+        let commit_json = r#"{"kind":"commit_slots","commitments":["0x0000000000000000000000000000000000000000000000000000000000000001","0x00000000000000000000000000000000000000000000000000000000000000ff"]}"#;
+        let m: PokerMove = serde_json::from_str(commit_json).expect("decode TS commit_slots");
+        match &m {
+            PokerMove::CommitSlots { commitments, .. } => {
+                assert_eq!(commitments.len(), 2);
+                assert_eq!(commitments[0][31], 1);
+                assert_eq!(commitments[1][31], 0xff);
+            }
+            other => panic!("expected commit_slots, got {other:?}"),
+        }
+        // Re-serialize: must reproduce the TS shape (0x-hex strings), NOT serde's default byte arrays.
+        let back = serde_json::to_string(&m).expect("encode commit_slots");
+        assert!(back.contains(r#""commitments":["0x"#), "commitments must be 0x-hex, got {back}");
+        assert!(!back.contains("[1]") && !back.contains(",1,"), "must not be a byte array: {back}");
+
+        // bet: amount is a DECIMAL STRING, not a JSON number.
+        let bet: PokerMove = serde_json::from_str(r#"{"kind":"bet","amount":"250"}"#).expect("decode bet");
+        assert_eq!(bet, PokerMove::Bet { amount: 250 });
+        let bet_back = serde_json::to_string(&bet).expect("encode bet");
+        assert!(bet_back.contains(r#""amount":"250""#), "amount must be a decimal string: {bet_back}");
+
+        // reveal_slots: value (32) + salt (16) as 0x-hex.
+        let reveal_json = r#"{"kind":"reveal_slots","slots":[0],"reveals":[{"value":"0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20","salt":"0xaabbccddeeff00112233445566778899"}]}"#;
+        let reveal: PokerMove = serde_json::from_str(reveal_json).expect("decode reveal_slots");
+        match &reveal {
+            PokerMove::RevealSlots { slots, reveals } => {
+                assert_eq!(slots, &[0]);
+                assert_eq!(reveals[0].value.len(), 32);
+                assert_eq!(reveals[0].salt.len(), 16);
+            }
+            other => panic!("expected reveal_slots, got {other:?}"),
+        }
+        let reveal_back = serde_json::to_string(&reveal).expect("encode reveal_slots");
+        assert!(reveal_back.contains(r#""value":"0x"#) && reveal_back.contains(r#""salt":"0x"#), "{reveal_back}");
+    }
 
     fn ctx() -> TunnelContext {
         TunnelContext {

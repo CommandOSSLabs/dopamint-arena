@@ -23,7 +23,7 @@ use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
-    play_blackjack, play_bomb_it, play_chicken_cross, play_quantum_poker, play_world_canvas,
+    play_blackjack_v2, play_bomb_it, play_chicken_cross, play_quantum_poker, play_world_canvas,
 };
 use fleet_core::signer_durable::DurableSigner;
 use fleet_core::Role;
@@ -232,7 +232,7 @@ async fn play_game(
 ) -> anyhow::Result<u64> {
     let outcome = match game {
         "blackjack" => {
-            play_blackjack(
+            play_blackjack_v2(
                 channel,
                 anchor,
                 match_key,
@@ -499,7 +499,7 @@ mod tests {
     // and the byte-exact emit by `arena_anchor::settle_emits_the_co_signed_half_to_the_peer`.)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn play_arena_match_settles_against_a_stand_in_human() {
-        use fleet_core::play_match::{play_blackjack, BLACKJACK};
+        use fleet_core::play_match::{play_blackjack_v2, BLACKJACK};
 
         // A valid-hex tunnel id (the co-signed move loop serializes it as a 32-byte address).
         const TUNNEL_ID: &str = "0xdead";
@@ -551,7 +551,7 @@ mod tests {
         // `NoopArenaOpener` (in-memory state), which returns 0 — so both seats sign `timestamp = 0`.
         let human_anchor =
             RelayBridgedAnchor::new(TUNNEL_ID.to_owned(), human_conn, match_id.to_owned(), 0);
-        let human = play_blackjack(
+        let human = play_blackjack_v2(
             human_channel,
             human_anchor,
             DurableSigner::from_secret(&[42u8; 32]),

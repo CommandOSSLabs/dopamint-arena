@@ -38,7 +38,7 @@ export function QuantumPokerPvpWindow({
             <button
               type="button"
               className="sketch-btn sketch-btn--go"
-              onClick={g.findMatch}
+              onClick={g.playArena}
             >
               Play
             </button>
@@ -66,7 +66,7 @@ export function QuantumPokerPvpWindow({
           <p className="sketch-note">
             {g.status === "matching"
               ? "Matching you with another player."
-              : "Funding both stakes on-chain."}
+              : "Funding your seat and dealing you in."}
           </p>
           {g.opponentWallet && (
             <p className="sketch-note mt-1 tabular-nums">

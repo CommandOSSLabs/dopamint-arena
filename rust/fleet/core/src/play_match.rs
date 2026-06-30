@@ -10,12 +10,16 @@
 //! the on-chain genuine-two-party path.
 
 use anyhow::{anyhow, bail, Context, Result};
+use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
 use tunnel_blackjack::{Blackjack, BlackjackStrategy};
+use tunnel_bomb_it::{BombIt, BombItStrategy};
+use tunnel_cross::{Cross, CrossStrategy};
 use tunnel_harness::{
     Balances, DriverOutcome, MoveStrategy, PartyDriver, Protocol, SeatParts, Signer,
     TranscriptRecorder, TunnelAnchor,
 };
 use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
+use tunnel_world_canvas::{WorldCanvasStroke, WorldCanvasStrokeStrategy};
 
 use crate::match_channel::MatchChannel;
 use crate::peer::PeerMsg;
@@ -56,6 +60,33 @@ pub const QUANTUM_POKER: GameProfile = GameProfile {
     stake_each: 5000,
 };
 
+/// Bomb It profile: stake 500 MTPS per seat, matching the FE generic-hook spec (`stake: 500n`) so
+/// the bot's pre-created tunnel and the user's deposit agree on the initial off-chain balances. The
+/// move is JSON-native and `encode_state`/seed are byte-identical to the TS `BombItProtocol`
+/// (verified by read-compare of both sides), so the bot co-signs against the unchanged FE.
+pub const BOMB_IT: GameProfile = GameProfile {
+    game_id: "bomb_it",
+    stake_each: 500,
+};
+
+/// Chicken Cross profile: stake 500 MTPS per seat, matching the FE generic-hook spec (`stake: 500n`).
+/// Same parity guarantee as [`BOMB_IT`] (JSON moves, byte-identical `encode_state`/seed vs the TS
+/// `CrossProtocol`). The arena id is the underscored FE registry id (`chicken-cross`).
+pub const CHICKEN_CROSS: GameProfile = GameProfile {
+    game_id: "chicken_cross",
+    stake_each: 500,
+};
+
+/// World Canvas profile: stake 1 MTPS per seat, matching the FE generic-hook spec (`stake: 1n`) — a
+/// free/draw co-draw, balances never move. The co-signed state is a 32-byte rolling digest
+/// (`encode_state` = the digest), byte-identical to the TS `WorldCanvasPvpProtocol` once the FE name
+/// matches the Rust `world_canvas.stroke.v1` (so the genesis digest agrees). NEVER terminal — the
+/// match plays until the human's window closes.
+pub const WORLD_CANVAS: GameProfile = GameProfile {
+    game_id: "world_canvas",
+    stake_each: 1,
+};
+
 /// Look up the [`GameProfile`] for a game id, or `None` if the fleet has no wired profile for it.
 /// The arena allocate path uses this to find the per-seat stake for the opener (ADR-0028); adding a
 /// game is a new `const` here + an arm in [`play_game`]'s dispatch.
@@ -63,6 +94,9 @@ pub fn profile_for(game: &str) -> Option<GameProfile> {
     match game {
         "blackjack" => Some(BLACKJACK),
         "quantum_poker" => Some(QUANTUM_POKER),
+        "bomb_it" => Some(BOMB_IT),
+        "chicken_cross" => Some(CHICKEN_CROSS),
+        "world_canvas" => Some(WORLD_CANVAS),
         _ => None,
     }
 }
@@ -169,6 +203,41 @@ where
     .await
 }
 
+/// Blackjack v2 (variable-bet, per-card commit-reveal) — the protocol the FE actually runs
+/// (`blackjack.v2`). This is the arena/co-located path; the dealerless [`play_blackjack`]
+/// (`blackjack.bet.v1`) is legacy (its FE counterpart was removed). Drives [`BlackjackV2Strategy`],
+/// which bets when it's the (rotating) player and plays basic strategy otherwise.
+pub async fn play_blackjack_v2<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<BlackjackV2 as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        BlackjackV2,
+        BlackjackV2Strategy::new(fleet_seed(role)),
+        &BLACKJACK,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
+    )
+    .await
+}
+
 /// Quantum Poker: a thin wrapper over [`play_match`] driving [`QuantumPokerStrategy`] over the
 /// commit-reveal v2 protocol. The ante scales the chip economy to the whole-token bankroll; it
 /// defaults to the FE's `ANTE` (50) so the bot co-signs against the unchanged FE.
@@ -194,6 +263,107 @@ where
         QuantumPoker::with_ante(QUANTUM_POKER_HAND_CAP, QUANTUM_POKER_ANTE),
         QuantumPokerStrategy::new(fleet_seed(role)),
         &QUANTUM_POKER,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
+    )
+    .await
+}
+
+/// Bomb It: a thin wrapper over [`play_match`] driving the greedy-hunter [`BombItStrategy`]. The
+/// strategy only needs to produce LEGAL moves for its own seat (each seat plays independently); the
+/// bot is always seat B in the arena path. Seeded per role so its play is deterministic per seat.
+pub async fn play_bomb_it<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<BombIt as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        BombIt,
+        BombItStrategy::new(fleet_seed(role)),
+        &BOMB_IT,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
+    )
+    .await
+}
+
+/// Chicken Cross: a thin wrapper over [`play_match`] driving the greedy [`CrossStrategy`]. Same
+/// shape as [`play_bomb_it`] — JSON-native moves, byte-identical state encoding vs the FE.
+pub async fn play_chicken_cross<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<Cross as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        Cross,
+        CrossStrategy::new(fleet_seed(role)),
+        &CHICKEN_CROSS,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
+    )
+    .await
+}
+
+/// World Canvas: a thin wrapper over [`play_match`] driving the wandering-stroke
+/// [`WorldCanvasStrokeStrategy`]. Endless co-draw — the protocol is never terminal, so the match runs
+/// until the relay channel closes (the human's window tears down); no economic settle (free/draw).
+pub async fn play_world_canvas<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<WorldCanvasStroke as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        WorldCanvasStroke,
+        WorldCanvasStrokeStrategy::new(fleet_seed(role)),
+        &WORLD_CANVAS,
         &info,
         channel,
         anchor,

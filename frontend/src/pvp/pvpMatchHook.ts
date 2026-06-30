@@ -11,7 +11,7 @@
  * relay with the identity codec, no per-game move (de)serializer. Hidden-info games (battleship/
  * poker) are a richer superset (binary moves + secret hooks) and are NOT driven by this engine.
  */
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -48,6 +48,14 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
+import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
+import type { ArenaAllocation } from "@/onchain/arenaEnter";
+import {
+  getArenaEntry,
+  clearArenaEntry,
+  subscribeArena,
+} from "@/onchain/arenaAllocationStore";
+import type { TunnelOpenRequest } from "@/onchain/tunnelOpenBatcher";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
@@ -102,6 +110,11 @@ export interface PvpMatchSpec<
   intentToMove: (role: Role, intent: Intent) => Move;
   /** Read this seat's intent out of a bot-proposed Move (undefined ⇒ apply `idleIntent`). */
   readIntent: (role: Role, move: Move | null) => Intent | undefined;
+  /** The backend arena/`profile_for` id (underscore form, e.g. `bomb_it`) when this game is wired
+   *  into the co-located fleet. Set ⇒ `usePvpMatch` consumes the centralized batched-entry store for
+   *  this game and auto-`enterArenaMatch`es on connect (no "Play" click). Must equal the game's
+   *  `GameModule.arenaGameId`. Absent ⇒ this game isn't in the arena batch and the consumer no-ops. */
+  arenaGameId?: string;
 }
 
 /** The hook's reactive surface. Game wrappers rename `setIntent` to their domain control. */
@@ -625,6 +638,98 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     })();
   };
 
+  /**
+   * Arena entry (ADR-0028): join a pre-allocated match whose tunnel the fleet already created +
+   * funded seat B for, so this seat (always A) only wires the relay + engine over the already-funded
+   * tunnel — no matchmaking, no open, no deposit (the deposit was batched by the caller's `enterArena`,
+   * one wallet popup). The bot (seat B) auto-plays via the same propose loop + auto toggle as a human
+   * peer. Unlike `findMatch`'s role-A path, there is NO "ready" wait: the fleet bot enters its loop the
+   * instant its tunnel opens and the relay buffers our first frame, so waiting on a "ready" it never
+   * sends would hang seat A forever. `allocation` comes from `POST /v1/arena/allocate`; `eph` is the
+   * SAME per-game key baked into the tunnel at allocate (a mismatched key rejects every co-signature).
+   */
+  enterArenaMatch = (allocation: ArenaAllocation, eph: KeyPair) => {
+    const deps = this.deps;
+    if (!deps?.account) {
+      this.error = "connect a wallet first";
+      this.status = "error";
+      this.emit();
+      return;
+    }
+    const wallet = deps.account.address;
+    installResumePersistence();
+    evictExpiredRecords();
+
+    void (async () => {
+      try {
+        this.error = null;
+        this.status = "matching";
+        this.emit();
+        const ephemeral = eph;
+        const mp = new MpClient(
+          resolveMpWsUrl(resolveBackendUrl()),
+          wallet,
+          ephemeral,
+        );
+        this.mp = mp;
+        await mp.connect();
+        // Join the ONE pre-allocated match (not matchmaking); role is always A — the fleet bound the
+        // bot as seat B at allocate. The server replies match.found once the bot also binds.
+        const match = await mp.joinMatch(allocation.matchId);
+        this.role = match.role;
+        this.emit();
+
+        const channel = mp.channel(match.matchId);
+        const waitPeer = makeInbox(channel);
+
+        // Exchange ephemeral pubkeys (the bot's was baked into the tunnel at create, but the relay
+        // handshake still carries it so both sides know the co-signing key).
+        channel.sendPeer({
+          t: "hello",
+          ephemeralPubkey: toHex(ephemeral.publicKey),
+        });
+        const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
+        const oppPub = fromHex(hello.ephemeralPubkey);
+
+        // Seat A was deposited by the batched `enterArena` PTB and seat B by the fleet at allocate, so
+        // the tunnel is already live — build the engine over the pre-created tunnelId (no funding here).
+        const backend = defaultBackend();
+        const self = makeEndpoint(backend, wallet, ephemeral, true);
+        const opp = makeEndpoint(
+          backend,
+          match.opponentWallet,
+          { publicKey: oppPub, scheme: ephemeral.scheme },
+          false,
+        );
+        const dt = new DistributedTunnel<State, Move>(
+          this.spec.makeProtocol(),
+          {
+            tunnelId: allocation.tunnelId,
+            self,
+            opponent: opp,
+            selfParty: match.role,
+          },
+          channel.transport,
+          { a: this.spec.stake, b: this.spec.stake },
+        );
+        this.dt = dt;
+        this.activateSession(mp, channel, dt, waitPeer, {
+          matchId: match.matchId,
+          role: match.role,
+          opponentWallet: match.opponentWallet,
+          opponentPubkeyHex: toHex(oppPub),
+          selfEphemeralSecretHex: toHex(ephemeral.secretKey),
+        });
+
+        // No "ready" handshake with the fleet bot (see the doc above). Start the loop immediately.
+        this.maybePropose();
+        this.sync();
+      } catch (e) {
+        this.fail(e);
+      }
+    })();
+  };
+
   setIntent = (intent: Intent) => {
     this.intent = intent;
     // A human keypress preempts the idle pacing clock: try to propose at once on our turn
@@ -701,6 +806,28 @@ export function createPvpMatchHook<
     }, [session, account?.address]);
 
     const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+    // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this game's seat A
+    // in the one batched PTB and published {allocation, keypair} to the arena store. Consume it once
+    // and auto-`enterArenaMatch` — the window comes alive without a "Play" click. Only for arena-wired
+    // games (spec.arenaGameId set), only from idle (never clobbers a resumed match); `clearArenaEntry`
+    // consumes the entry so a window remount can't re-enter a closed match.
+    const arenaEntered = useRef(false);
+    useEffect(() => {
+      const arenaGameId = spec.arenaGameId;
+      if (!arenaGameId) return;
+      const tryEnter = () => {
+        if (arenaEntered.current) return;
+        const entry = getArenaEntry(arenaGameId);
+        if (!entry || session.getSnapshot().status !== "idle") return;
+        arenaEntered.current = true;
+        clearArenaEntry(arenaGameId);
+        session.enterArenaMatch(entry.allocation, entry.keypair);
+      };
+      tryEnter();
+      return subscribeArena(tryEnter);
+    }, [session, snap.status]);
+
     return {
       status: snap.status,
       role: snap.role,

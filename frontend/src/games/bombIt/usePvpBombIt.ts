@@ -15,6 +15,10 @@ import { makeBombItResumeAdapter } from "./bombItResumeAdapter";
 
 export type { PvpStatus };
 
+/** Backend arena/`profile_for` id (underscore form of the registry id). Single source of truth for
+ *  both the engine's arena consumer (the spec below) and `GameModule.arenaGameId` (index.ts). */
+export const BOMB_IT_ARENA_GAME_ID = "bomb_it";
+
 /** Bomb It's per-seat input is a single action; the engine wraps it into the acting seat's field. */
 const usePvpMatch = createPvpMatchHook<
   BombItState,
@@ -23,6 +27,7 @@ const usePvpMatch = createPvpMatchHook<
   BombItView
 >({
   game: "bomb-it",
+  arenaGameId: BOMB_IT_ARENA_GAME_ID,
   stepMs: 250,
   stake: 500n, // per-seat MIST
   makeProtocol: () => new BombItProtocol(),

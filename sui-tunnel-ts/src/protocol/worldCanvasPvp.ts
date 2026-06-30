@@ -17,7 +17,10 @@ import { rollingDigest, protocolDomain } from "./Protocol";
 import type { Protocol, Party, Balances, ProtocolContext } from "./Protocol";
 import { blake2b256 } from "../core/crypto";
 
-const NAME = "world-canvas-pvp";
+// MUST equal the Rust `WorldCanvasStroke` protocol name (rust/protocols/world-canvas) so the
+// co-signed genesis digest `blake2b256(protocolDomain(NAME))` is byte-identical on both sides —
+// the fleet bot (party B) co-signs against this. Renaming desyncs any in-flight human PvP match.
+const NAME = "world_canvas.stroke.v1";
 const NUM_COLORS = 16;
 /** Cells per chunk edge — matches the canonical protocol + the solo wall (single grid). */
 export const CHUNK_SIZE = 256;

@@ -43,6 +43,13 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
+import { enterArena, type MakeUserParty } from "../../onchain/arenaEnter";
+import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
+import {
+  getArenaEntry,
+  clearArenaEntry,
+  subscribeArena,
+} from "../../onchain/arenaAllocationStore";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
@@ -78,6 +85,9 @@ const HAND_OVER_DELAY_MS = 5_000;
 const AUTO_BOT_CTX: BotContext = { rngForSeat: () => Math.random };
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
+/** Arena allocate/profile id (underscore) — the backend `profile_for` + co-located fleet key. Differs
+ *  from the FE-local `GAME_ID` (hyphen, used for resume/auto-preference keys), so it's its own const. */
+const ARENA_GAME_ID = "quantum_poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
 const TURN_SECONDS = 10;
 
@@ -128,6 +138,10 @@ export interface PvpQuantumPoker {
     },
     eph: KeyPair,
   ) => void;
+  /** Lobby "Play" entry: reserve a fleet bot + pre-create the tunnel, deposit seat A in one PTB, then
+   *  join + play — the genuine-two-party arena path. Same board/hooks as `findMatch`; the only
+   *  difference is the opponent is a warm fleet bot, which the player never has to know. */
+  playArena: () => void;
   fold: () => void;
   check: () => void;
   call: () => void;
@@ -900,9 +914,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             selfEphemeralSecretHex: toHex(ephemeral.secretKey),
           });
 
-          // Readiness handshake — seat A waits for the bot's ready (mirrors findMatch role A).
-          if (match.role === "A") await waitPeer("ready");
-          else channel.sendPeer({ t: "ready" });
+          // No "ready" handshake with the fleet bot: unlike a human peer, the bot enters its move
+          // loop the instant its tunnel opens and the relay channel buffers any frame we send first,
+          // so it's always ready. Waiting on a "ready" it never sends would hang seat A forever
+          // (the cause of a stuck "shuffling · opponent's turn"). Start immediately.
           maybeAutoPropose();
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
@@ -919,6 +934,80 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       activatePokerSession,
     ],
   );
+
+  /** Lobby "Play" → genuine-two-party arena entry (ADR-0028). Orchestrates the one-signature flow:
+   *  generate this game's ephemeral key, reserve a fleet bot (which pre-creates the tunnel + funds
+   *  seat B), deposit seat A in one batched PTB, then hand off to `enterArenaMatch` to wire the relay
+   *  + engine. The deposit reuses `findMatch`'s exact staked-deposit primitive (same MTPS sponsorship
+   *  + balance top-up). The opponent is a warm fleet bot bound at allocate — to the player it's just
+   *  "Play", identical to PvP. */
+  const playArena = useCallback(() => {
+    if (!account) {
+      setError("connect a wallet first");
+      setStatus("error");
+      return;
+    }
+    const wallet = account.address;
+    const signExec = async (
+      tx: Parameters<typeof signAndExecute>[0]["transaction"],
+    ) => {
+      const r = await signAndExecute({ transaction: tx });
+      return { digest: r.digest };
+    };
+    const stake: StakeStrategy = {
+      sponsoredSignExec: sponsored.signExec,
+      walletSignExec: signExec as never,
+      prepareStake: sponsored.prepareStake,
+      selectStakeCoin: sponsored.selectStakeCoin,
+      ensureStakeBalance: sponsored.ensureStakeBalance,
+    };
+    const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+    (async () => {
+      try {
+        setError(null);
+        setStatus("funding");
+        // One ephemeral key for this game: its pubkey is baked into the tunnel as party A at allocate,
+        // and the SAME key co-signs every move via `enterArenaMatch` (a different key rejects sigs).
+        const eph = generateKeyPair();
+        const makeUserParty: MakeUserParty = async () => ({
+          address: wallet,
+          publicKey: eph.publicKey,
+        });
+        // Deposit seat A into the fleet-pre-created tunnel (seat B already funded by the bot). Reuses
+        // the SAME staked-deposit primitive `findMatch` uses, so sponsorship + top-up are identical.
+        const open = async (req: TunnelOpenRequest): Promise<string> => {
+          const tunnelId = req.tunnelId;
+          if (!tunnelId) throw new Error("arena deposit missing tunnelId");
+          await depositStakeStaked({
+            tunnelId,
+            amount: req.aAmount,
+            label: "quantumPoker",
+            ...stake,
+          });
+          return tunnelId;
+        };
+        const allocations = await enterArena({
+          games: [ARENA_GAME_ID],
+          userAddress: wallet,
+          stakePerGame: POKER_BUYIN,
+          makeUserParty,
+          open,
+          coinType,
+          apiBase: resolveBackendUrl(),
+        });
+        const alloc = allocations.find((a) => a.game === ARENA_GAME_ID);
+        if (!alloc) {
+          setError("no opponent available — try again in a moment");
+          setStatus("error");
+          return;
+        }
+        enterArenaMatch(alloc, eph);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus("error");
+      }
+    })();
+  }, [account, signAndExecute, sponsored, enterArenaMatch]);
 
   // Cold-load entry: on mount (once the wallet is known), rebuild any persisted in-flight poker
   // match and re-attach. Idempotent — no-ops if already connected or nothing to restore. The
@@ -1022,6 +1111,24 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     resume();
   }, [resume]);
 
+  // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this game's seat A in
+  // the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
+  // auto-`enterArenaMatch` — so the window comes alive without a "Play" click. Guarded against
+  // double-entry; only enters from idle (never clobbers a resumed match).
+  const arenaEnteredRef = useRef(false);
+  useEffect(() => {
+    const tryEnter = () => {
+      if (arenaEnteredRef.current) return;
+      const entry = getArenaEntry(ARENA_GAME_ID);
+      if (!entry || status !== "idle") return;
+      arenaEnteredRef.current = true;
+      clearArenaEntry(ARENA_GAME_ID); // consume so a window remount can't re-enter a closed match
+      enterArenaMatch(entry.allocation, entry.keypair);
+    };
+    tryEnter();
+    return subscribeArena(tryEnter);
+  }, [enterArenaMatch, status]);
+
   const self = selfPartyRef.current;
   const myHole =
     state && self ? (self === "A" ? state.holeA : state.holeB) : null;
@@ -1078,6 +1185,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     error,
     findMatch,
     enterArenaMatch,
+    playArena,
     fold,
     check,
     call,

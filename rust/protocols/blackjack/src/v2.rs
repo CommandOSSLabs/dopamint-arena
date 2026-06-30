@@ -1,8 +1,10 @@
-//! Fixed-wager Blackjack v2 with per-card two-party commit-reveal randomness.
+//! Variable-bet Blackjack v2 with per-card two-party commit-reveal randomness.
 //!
-//! This is the Rust port of `sui-tunnel-ts/src/protocol/blackjack.ts`.
-//! `local_secret_*` state is intentionally omitted from `encode_state`; it is
-//! local runtime memory that lets the committing seat reveal later.
+//! This is the Rust port of `sui-tunnel-ts/src/protocol/blackjack.ts` (`blackjack.v2`).
+//! Each round the player chooses a `Bet { amount }` in `[MIN_BET, max_bet]` (max_bet = the poorer
+//! seat's balance); the wager is carried in state and encoded, and settle moves it. `local_secret_*`
+//! state is intentionally omitted from `encode_state`; it is local runtime memory that lets the
+//! committing seat reveal later.
 
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::commitment::{combine_reveals, compute_commitment, verify_commitment};
@@ -11,12 +13,85 @@ use tunnel_harness::{
     Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
 };
 
+/// Default bet the fleet/bench bot places when it is the player (clamped to `[MIN_BET, max_bet]`).
 pub const WAGER: u64 = 100;
+/// Minimum legal bet — must equal the FE `MIN_BET` (`blackjack.ts` = 1n) or the bet-bounds check
+/// diverges and a legal FE bet is rejected by the bot (or vice versa).
+pub const MIN_BET: u64 = 1;
 pub const ROUND_CAP: u64 = 1000;
 const DEALER_STANDS_AT: u32 = 17;
 const BUST_AT: u32 = 21;
 const MIN_SALT_LEN: usize = 16;
 const DOMAIN: &[u8] = b"sui_tunnel::proto::blackjack.v2";
+
+/// Move-wire serde helpers: the relayed move is JSON (the fleet's JsonFrameCodec), and the FE
+/// `blackjackMoveCodec` sends byte fields as `0x`-hex and amounts as decimal strings. These make the
+/// human-readable (JSON) form match it byte-for-byte while keeping the binary form (bcs/postcard,
+/// used by the bench) a plain value — branch on `is_human_readable()`. Mirrors quantum-poker.
+mod wire_dec_u64 {
+    pub fn serialize<S: serde::Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_str(&v.to_string())
+        } else {
+            s.serialize_u64(*v)
+        }
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        use serde::Deserialize;
+        if d.is_human_readable() {
+            String::deserialize(d)?
+                .parse()
+                .map_err(serde::de::Error::custom)
+        } else {
+            u64::deserialize(d)
+        }
+    }
+}
+
+mod wire_hex0x_arr32 {
+    pub fn serialize<S: serde::Serializer>(v: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        use serde::Serialize;
+        if s.is_human_readable() {
+            s.serialize_str(&format!("0x{}", hex::encode(v)))
+        } else {
+            v.serialize(s)
+        }
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        use serde::Deserialize;
+        if d.is_human_readable() {
+            let s = String::deserialize(d)?;
+            let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(&s))
+                .map_err(serde::de::Error::custom)?;
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
+        } else {
+            <[u8; 32]>::deserialize(d)
+        }
+    }
+}
+
+mod wire_hex0x {
+    pub fn serialize<S: serde::Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        use serde::Serialize;
+        if s.is_human_readable() {
+            s.serialize_str(&format!("0x{}", hex::encode(v)))
+        } else {
+            v.serialize(s)
+        }
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        use serde::Deserialize;
+        if d.is_human_readable() {
+            let s = String::deserialize(d)?;
+            hex::decode(s.strip_prefix("0x").unwrap_or(&s)).map_err(serde::de::Error::custom)
+        } else {
+            Vec::<u8>::deserialize(d)
+        }
+    }
+}
 
 pub type Party = Seat;
 
@@ -79,7 +154,9 @@ pub struct DrawContext {
 
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BlackjackV2Reveal {
+    #[serde(with = "wire_hex0x")]
     pub value: Vec<u8>,
+    #[serde(with = "wire_hex0x")]
     pub salt: Vec<u8>,
 }
 
@@ -101,8 +178,12 @@ impl From<BlackjackV2Secret> for BlackjackV2Reveal {
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BlackjackV2Move {
-    Deal,
+    Bet {
+        #[serde(with = "wire_dec_u64")]
+        amount: u64,
+    },
     Commit {
+        #[serde(with = "wire_hex0x_arr32")]
         commitment: [u8; 32],
         #[serde(skip_serializing, skip_deserializing, default)]
         local_secret: Option<BlackjackV2Secret>,
@@ -178,8 +259,13 @@ fn is_bust(hand: &[u8]) -> bool {
     blackjack_hand_value(hand) > BUST_AT
 }
 
+/// Largest bet both sides can cover this round — the poorer seat's balance (FE `maxBet`).
+pub fn max_bet(s: &BlackjackV2State) -> u64 {
+    s.balance_a.min(s.balance_b)
+}
+
 fn can_start_round(s: &BlackjackV2State) -> bool {
-    s.balance_a >= s.wager && s.balance_b >= s.wager
+    max_bet(s) >= MIN_BET
 }
 
 fn rank_value(rank: u8) -> u8 {
@@ -444,7 +530,10 @@ fn claim_forfeit(s: &BlackjackV2State, by: Party) -> Result<BlackjackV2State, St
 }
 
 pub fn initial_state(balance_a: u64, balance_b: u64) -> BlackjackV2State {
-    let base = BlackjackV2State {
+    // Start at round_over with no wager and DO NOT auto-deal — the FE `initialState` awaits the
+    // first `bet` move (bet = 0n) before round 1. Auto-beginning here would make nonce 0 diverge
+    // from the FE (round 1 / wager set), breaking co-signing before any move.
+    BlackjackV2State {
         phase: Phase::RoundOver,
         round: 0,
         draw_count: 0,
@@ -460,12 +549,7 @@ pub fn initial_state(balance_a: u64, balance_b: u64) -> BlackjackV2State {
         balance_a,
         balance_b,
         total: balance_a + balance_b,
-        wager: WAGER,
-    };
-    if can_start_round(&base) {
-        begin_round(&base)
-    } else {
-        base
+        wager: 0,
     }
 }
 
@@ -480,13 +564,25 @@ pub fn apply_move(
 ) -> Result<BlackjackV2State, String> {
     match s.phase {
         Phase::RoundOver => {
-            if !matches!(mv, BlackjackV2Move::Deal) {
-                return Err("expected 'deal' in round_over".into());
-            }
+            let BlackjackV2Move::Bet { amount } = mv else {
+                return Err("expected 'bet' in round_over".into());
+            };
             if is_terminal(s) {
                 return Err("game over: no more rounds can be played".into());
             }
-            Ok(begin_round(s))
+            let next_player = player_party(s.round + 1);
+            if by != next_player {
+                return Err(format!("only the player ({next_player:?}) sets the bet"));
+            }
+            let cap = max_bet(s);
+            if *amount < MIN_BET || *amount > cap {
+                return Err(format!("bet must be in [{MIN_BET}, {cap}]"));
+            }
+            // Mirror the FE `beginRound({ ...state, bet: amount })`: set the wager, then deal.
+            Ok(begin_round(&BlackjackV2State {
+                wager: *amount,
+                ..s.clone()
+            }))
         }
         Phase::DrawCommit => match mv {
             BlackjackV2Move::Forfeit => claim_forfeit(s, by),
@@ -550,6 +646,7 @@ pub fn encode_state(s: &BlackjackV2State) -> Vec<u8> {
     out.extend_from_slice(&s.player_hand);
     out.extend_from_slice(&u64_to_be_bytes(s.dealer_hand.len() as u64));
     out.extend_from_slice(&s.dealer_hand);
+    out.extend_from_slice(&u64_to_be_bytes(s.wager));
     if let Some(draw) = s.draw {
         out.push(1);
         out.push(draw.for_hand.code());
@@ -635,9 +732,12 @@ impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
             return None;
         }
         match state.phase {
-            Phase::RoundOver => {
-                (seat == player_party(state.round + 1)).then_some(BlackjackV2Move::Deal)
-            }
+            Phase::RoundOver => (seat == player_party(state.round + 1)).then(|| {
+                // Bet the default, clamped to the legal window. Not-terminal guarantees
+                // `max_bet >= MIN_BET`, so the clamp always yields a legal amount.
+                let amount = WAGER.min(max_bet(state)).max(MIN_BET);
+                BlackjackV2Move::Bet { amount }
+            }),
             Phase::DrawCommit => {
                 if draw_commit_actor(state) != Some(seat) {
                     return None;
@@ -729,7 +829,8 @@ impl Protocol for BlackjackV2 {
         match s.phase {
             Phase::RoundOver => {
                 if seat == player_party(s.round + 1) {
-                    Some(BlackjackV2Move::Deal)
+                    let amount = WAGER.min(max_bet(s)).max(MIN_BET);
+                    Some(BlackjackV2Move::Bet { amount })
                 } else {
                     None
                 }
@@ -810,11 +911,19 @@ mod strategy_tests {
         }
     }
 
+    /// Round 1 dealt to `draw_commit`. `initial_state` now awaits the opening `bet` (FE parity), so
+    /// tests exercising the draw machinery place the player's bet first to reach the draw phase.
+    fn dealt_state(balance_a: u64, balance_b: u64) -> BlackjackV2State {
+        let s = initial_state(balance_a, balance_b);
+        let player = player_party(s.round + 1);
+        apply_move(&s, &BlackjackV2Move::Bet { amount: WAGER }, player).unwrap()
+    }
+
     #[tokio::test]
     async fn draw_commit_strategy_serializes_a_before_b_while_protocol_allows_either_missing_seat()
     {
         let protocol = BlackjackV2;
-        let state = initial_state(500, 500);
+        let state = dealt_state(500, 500);
         assert_eq!(state.phase, Phase::DrawCommit);
         let mut a = BlackjackV2Strategy::new(1);
         let mut b = BlackjackV2Strategy::new(2);
@@ -835,7 +944,7 @@ mod strategy_tests {
             .is_some());
         let state = protocol
             .apply_move(
-                &initial_state(500, 500),
+                &dealt_state(500, 500),
                 &commit_from_secret(secret(7)),
                 Seat::B,
             )
@@ -850,7 +959,7 @@ mod strategy_tests {
     async fn draw_reveal_strategy_serializes_a_before_b_while_protocol_allows_either_missing_seat()
     {
         let protocol = BlackjackV2;
-        let mut state = initial_state(500, 500);
+        let mut state = dealt_state(500, 500);
         let mut a = BlackjackV2Strategy::new(1);
         let mut b = BlackjackV2Strategy::new(2);
 
@@ -978,7 +1087,7 @@ mod strategy_tests {
     }
 
     #[tokio::test]
-    async fn round_over_next_player_deals() {
+    async fn round_over_next_player_bets() {
         let mut state = initial_state(500, 500);
         state.phase = Phase::RoundOver;
         let mut a = BlackjackV2Strategy::new(1);
@@ -986,7 +1095,7 @@ mod strategy_tests {
 
         assert!(matches!(
             a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await,
-            Some(BlackjackV2Move::Deal)
+            Some(BlackjackV2Move::Bet { .. })
         ));
         assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))

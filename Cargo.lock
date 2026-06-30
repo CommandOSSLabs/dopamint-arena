@@ -2526,9 +2526,12 @@ dependencies = [
  "tokio",
  "tracing",
  "tunnel-blackjack",
+ "tunnel-bomb-it",
  "tunnel-core",
+ "tunnel-cross",
  "tunnel-harness",
  "tunnel-quantum-poker",
+ "tunnel-world-canvas",
 ]
 
 [[package]]
@@ -7708,7 +7711,9 @@ dependencies = [
 name = "tunnel-quantum-poker"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
+ "serde_json",
  "tokio",
  "tunnel-core",
  "tunnel-harness",

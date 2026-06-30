@@ -566,3 +566,42 @@ impl Protocol for CrossSeries {
         self.inner.sample_move(&state.inner, seat, rng)
     }
 }
+
+#[cfg(test)]
+mod wire_parity {
+    use super::*;
+
+    // The relayed move is JSON (the fleet's JsonFrameCodec), so the bot's `CrossMove` must serialize
+    // to the EXACT shape the FE `CrossProtocol` sends — camelCase seat keys `dirA`/`dirB`, direction
+    // as a lowercase string — or the human's tunnel rejects the frame. Pins that wire contract
+    // against a `rename_all`/field-name regression.
+    #[test]
+    fn move_json_matches_fe_cross_wire() {
+        let a = CrossMove {
+            dir_a: Some(CrossDir::North),
+            dir_b: None,
+        };
+        assert_eq!(
+            serde_json::to_value(a).unwrap(),
+            serde_json::json!({ "dirA": "north" }),
+        );
+        let b = CrossMove {
+            dir_a: None,
+            dir_b: Some(CrossDir::West),
+        };
+        assert_eq!(
+            serde_json::to_value(b).unwrap(),
+            serde_json::json!({ "dirB": "west" }),
+        );
+        // And the bot decodes the FE's exact bytes back to the same move.
+        let parsed: CrossMove =
+            serde_json::from_value(serde_json::json!({ "dirA": "south" })).unwrap();
+        assert_eq!(
+            parsed,
+            CrossMove {
+                dir_a: Some(CrossDir::South),
+                dir_b: None,
+            },
+        );
+    }
+}

@@ -387,3 +387,44 @@ impl Protocol for WorldCanvasStroke {
         Some(StrokePaintMove { cells })
     }
 }
+
+#[cfg(test)]
+mod wire_parity {
+    use super::*;
+
+    // The relayed move is JSON (the fleet's JsonFrameCodec), so the bot's `StrokePaintMove` must
+    // serialize to the EXACT shape the FE `WorldCanvasPvpProtocol` sends — a `cells` array of plain
+    // {cx,cy,x,y,color,seq} ints (no codec) — or the human's tunnel rejects the frame.
+    #[test]
+    fn move_json_matches_fe_world_canvas_wire() {
+        let mv = StrokePaintMove {
+            cells: vec![StrokeCellMove {
+                cx: -1,
+                cy: 2,
+                x: 3,
+                y: 4,
+                color: 13,
+                seq: 7,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&mv).unwrap(),
+            serde_json::json!({
+                "cells": [{ "cx": -1, "cy": 2, "x": 3, "y": 4, "color": 13, "seq": 7 }]
+            }),
+        );
+        let parsed: StrokePaintMove = serde_json::from_value(serde_json::json!({
+            "cells": [{ "cx": 0, "cy": 0, "x": 1, "y": 1, "color": 0, "seq": 1 }]
+        }))
+        .unwrap();
+        assert_eq!(parsed.cells.len(), 1);
+    }
+
+    // The co-signed genesis digest is `blake2b256(domain)`; the domain MUST equal the FE's
+    // `protocolDomain("world_canvas.stroke.v1")` = "sui_tunnel::proto::world_canvas.stroke.v1", or the
+    // two parties' INITIAL state hashes differ and co-signing fails before any move is even painted.
+    #[test]
+    fn genesis_domain_matches_fe_protocol_domain() {
+        assert_eq!(STROKE_DOMAIN, b"sui_tunnel::proto::world_canvas.stroke.v1");
+    }
+}

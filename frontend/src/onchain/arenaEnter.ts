@@ -24,6 +24,10 @@ export interface ArenaAllocation {
   botEphPubkey: string;
   /** Tunnel party B's `address` (funds/receives seat B); distinct from the ephemeral pubkey. */
   botAddress: string;
+  /** Per-seat stake (smallest MTPS unit) from the game's backend `GameProfile`. The fleet funded
+   *  seat B with exactly this; the user's batched deposit funds seat A with the SAME amount, and the
+   *  off-chain tunnel inits both balances to it. Single source of truth — the FE never hardcodes it. */
+  stakeEach: number;
 }
 
 /** One opened arena game: the bot to play, the relay match, and the live tunnel. */
@@ -97,7 +101,10 @@ export async function enterArena(
   opts: {
     games: string[];
     userAddress: string;
-    stakePerGame: bigint;
+    /** Fallback per-seat stake if an allocation omits `stakeEach` (back-compat). Each game's
+     *  deposit prefers `allocation.stakeEach` — the backend's single source of truth — so games
+     *  with different stakes batch correctly into ONE PTB. */
+    stakePerGame?: bigint;
     makeUserParty: MakeUserParty;
     open?: (req: TunnelOpenRequest) => Promise<string>;
     coinType?: string;
@@ -130,12 +137,18 @@ export async function enterArena(
         address: alloc.botAddress,
         publicKey: fromHex(alloc.botEphPubkey),
       };
+      // Per-game stake from the allocation (backend GameProfile) so games with different stakes
+      // batch into one PTB; fall back to the caller's flat stake for back-compat.
+      const aAmount =
+        alloc.stakeEach != null ? BigInt(alloc.stakeEach) : opts.stakePerGame;
+      if (aAmount == null)
+        throw new Error(`arena: no stake for ${alloc.game} (allocation.stakeEach + stakePerGame both unset)`);
       const tunnelId = await open({
         mode: "deposit",
         tunnelId: alloc.tunnelId,
         partyA,
         partyB,
-        aAmount: opts.stakePerGame,
+        aAmount,
         bAmount: 0n, // the fleet already funded seat B; unused in deposit mode
         coinType: opts.coinType,
         usesAddressBalance: opts.usesAddressBalance ?? true,
