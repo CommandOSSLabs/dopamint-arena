@@ -6,7 +6,10 @@
 use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts};
 use std::sync::Arc;
 use std::time::Instant;
-use sui_tunnel_anchor::{AnchorCostSnapshot, SuiSponsoredAnchor, SuiSponsoredAnchorConfig};
+use sui_tunnel_anchor::{
+    AnchorCostSnapshot, SuiOpenIntentAnchor, SuiOpenIntentId, SuiSponsoredAnchor,
+    SuiSponsoredAnchorConfig,
+};
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
 use tunnel_blackjack::{BjMove, BjState, Blackjack, BlackjackStrategy};
 use tunnel_harness::instrument::{InstrumentedAnchor, InstrumentedRecorder, InstrumentedTransport};
@@ -52,6 +55,7 @@ pub fn build_sui_sponsored_bench_context(
         settle_mode: opts.settle_mode,
         funding_profile: opts.funding_profile.clone(),
         open_batching: opts.open_batching.clone(),
+        settle_batching: opts.settle_batching.clone(),
     })
     .map_err(|err| format!("sponsored Sui anchor config: {err:?}"))?;
     Ok(SuiSponsoredBenchContext {
@@ -59,13 +63,20 @@ pub fn build_sui_sponsored_bench_context(
     })
 }
 
-fn clone_sui_sponsored_anchor_handle_for_tunnel(
+fn sui_sponsored_anchor_for_tunnel(
     sui_context: Option<&SuiSponsoredBenchContext>,
-) -> Arc<SuiSponsoredAnchor> {
-    sui_context
+) -> &Arc<SuiSponsoredAnchor> {
+    &sui_context
         .expect("sponsored Sui anchor mode requires run-level Sui bench context")
         .anchor
-        .clone()
+}
+
+fn scoped_sui_anchor_for_tunnel(
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    tunnel_id: &str,
+) -> SuiOpenIntentAnchor {
+    sui_sponsored_anchor_for_tunnel(sui_context)
+        .for_open_intent(SuiOpenIntentId::from_label(tunnel_id))
 }
 
 /// Outcome of one completed tunnel (both seats joined).
@@ -128,7 +139,16 @@ pub struct TunnelTelemetry {
 #[derive(Clone)]
 enum BenchAnchorInner {
     Memory(InMemoryAnchor),
-    Sui(Arc<SuiSponsoredAnchor>),
+    Sui(SuiOpenIntentAnchor),
+}
+
+impl BenchAnchorInner {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Memory(_) => "memory",
+            Self::Sui(_) => "sui-sponsored",
+        }
+    }
 }
 
 impl TunnelAnchor for BenchAnchorInner {
@@ -140,20 +160,53 @@ impl TunnelAnchor for BenchAnchorInner {
     }
 
     async fn open(&self, request: TunnelOpenRequest) -> Result<OpenedTunnel, TunnelAnchorError> {
-        match self {
+        let anchor = self.label();
+        let protocol = request.protocol.as_str().to_owned();
+        tracing::debug!(anchor, protocol, "anchor open start");
+        let result = match self {
             Self::Memory(a) => a.open(request).await,
             Self::Sui(a) => a.open(request).await,
+        };
+        match &result {
+            Ok(opened) => tracing::debug!(
+                anchor,
+                protocol,
+                tunnel_id = opened.tunnel_id,
+                created = opened.created,
+                "anchor open done"
+            ),
+            Err(error) => tracing::warn!(anchor, protocol, ?error, "anchor open failed"),
         }
+        result
     }
 
     async fn settle(
         &self,
         request: TunnelSettleRequest,
     ) -> Result<SettledTunnel, TunnelAnchorError> {
-        match self {
+        let anchor = self.label();
+        let tunnel_id = request.tunnel_id.clone();
+        let by = request.by;
+        let final_nonce = request.final_nonce;
+        tracing::debug!(anchor, tunnel_id, ?by, final_nonce, "anchor settle start");
+        let result = match self {
             Self::Memory(a) => a.settle(request).await,
             Self::Sui(a) => a.settle(request).await,
+        };
+        match &result {
+            Ok(_) => tracing::debug!(anchor, tunnel_id, ?by, final_nonce, "anchor settle done"),
+            Err(error) => {
+                tracing::warn!(
+                    anchor,
+                    tunnel_id,
+                    ?by,
+                    final_nonce,
+                    ?error,
+                    "anchor settle failed"
+                )
+            }
         }
+        result
     }
 }
 
@@ -261,7 +314,7 @@ where
     let inner_anchor = match anchor_mode {
         AnchorMode::Memory => BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id(tunnel_id)),
         AnchorMode::SuiSponsored => {
-            BenchAnchorInner::Sui(clone_sui_sponsored_anchor_handle_for_tunnel(sui_context))
+            BenchAnchorInner::Sui(scoped_sui_anchor_for_tunnel(sui_context, tunnel_id))
         }
     };
     // Recorder choice follows the anchor's settlement mode, so capture it before
@@ -547,10 +600,13 @@ mod tests {
     fn recorder_follows_transcript_flag_on_rootless_anchor() {
         // --transcript-recorder memory wires a real recorder even when the anchor is rootless.
         assert!(bench_recorder_for::<BjMove>(SettlementMode::Rootless, true).records_transcript());
-        assert!(!bench_recorder_for::<BjMove>(SettlementMode::Rootless, false).records_transcript());
+        assert!(
+            !bench_recorder_for::<BjMove>(SettlementMode::Rootless, false).records_transcript()
+        );
         // Root-settling anchors always get a real recorder regardless of the flag.
         assert!(
-            bench_recorder_for::<BjMove>(SettlementMode::TranscriptRoot, false).records_transcript()
+            bench_recorder_for::<BjMove>(SettlementMode::TranscriptRoot, false)
+                .records_transcript()
         );
     }
 
@@ -675,7 +731,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn shared_sui_anchor_context_reuses_anchor_handle() {
+    async fn shared_sui_anchor_context_scopes_intents_per_tunnel() {
         let anchor = SuiSponsoredAnchor::new(SuiSponsoredAnchorConfig {
             rpc_url: "http://rpc.invalid".into(),
             backend_url: "http://backend.invalid".into(),
@@ -691,16 +747,20 @@ mod tests {
                 },
             },
             open_batching: Default::default(),
+            settle_batching: Default::default(),
         })
         .expect("test sponsored Sui anchor");
         let context = SuiSponsoredBenchContext::from_anchor_for_test(anchor);
 
-        let first = clone_sui_sponsored_anchor_handle_for_tunnel(Some(&context));
-        let second = clone_sui_sponsored_anchor_handle_for_tunnel(Some(&context));
+        let first = scoped_sui_anchor_for_tunnel(Some(&context), "bench-tunnel-1");
+        let second = scoped_sui_anchor_for_tunnel(Some(&context), "bench-tunnel-2");
+        let shared_first = sui_sponsored_anchor_for_tunnel(Some(&context));
+        let shared_second = sui_sponsored_anchor_for_tunnel(Some(&context));
 
+        assert_ne!(first.intent_id(), second.intent_id());
         assert!(
-            std::sync::Arc::ptr_eq(&first, &second),
-            "tunnels must reuse the run-level sponsored Sui anchor"
+            Arc::ptr_eq(shared_first, shared_second),
+            "tunnels must reuse the run-level sponsored Sui service"
         );
     }
 }

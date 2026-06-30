@@ -124,6 +124,7 @@ pub struct SuiSponsoredAnchorOpts {
     pub settle_mode: SuiSettleMode,
     pub funding_profile: SuiFundingProfile,
     pub open_batching: SuiOpenBatchingConfig,
+    pub settle_batching: SuiOpenBatchingConfig,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -184,6 +185,10 @@ Sui sponsored anchor flags:\n  \
 --sui-open-batch-flush-ms: open batch flush cadence in milliseconds; default 250\n  \
 --sui-open-batch-max-wait-ms: maximum time an open request waits before flush; default 1000\n  \
 --sui-disable-open-batching: execute each sponsored open request without the batch queue\n\n\
+--sui-settle-batch-size: max PTB settle requests per batch; default 255, maximum 255\n  \
+--sui-settle-batch-flush-ms: settle batch flush cadence in milliseconds; default 250\n  \
+--sui-settle-batch-max-wait-ms: maximum time a settle request waits before flush; default 1000\n  \
+--sui-disable-settle-batching: execute each PTB settlement without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
 memory: retain committed transitions in memory during each tunnel; useful for measuring recorder overhead"
@@ -324,6 +329,30 @@ struct Raw {
     /// Disable Sui sponsored open PTB batching.
     #[arg(long = "sui-disable-open-batching")]
     sui_disable_open_batching: bool,
+    /// Maximum Sui PTB settle requests per batch.
+    #[arg(
+        long = "sui-settle-batch-size",
+        default_value_t = 255,
+        value_name = "N"
+    )]
+    sui_settle_batch_size: usize,
+    /// Sui settle PTB batch flush interval in milliseconds.
+    #[arg(
+        long = "sui-settle-batch-flush-ms",
+        default_value_t = 250,
+        value_name = "MS"
+    )]
+    sui_settle_batch_flush_ms: u64,
+    /// Maximum Sui settle request wait time before a batch flush.
+    #[arg(
+        long = "sui-settle-batch-max-wait-ms",
+        default_value_t = 1_000,
+        value_name = "MS"
+    )]
+    sui_settle_batch_max_wait_ms: u64,
+    /// Disable Sui PTB settlement batching.
+    #[arg(long = "sui-disable-settle-batching")]
+    sui_disable_settle_batching: bool,
 }
 
 /// Resolves the raw `--protocol-ids` value into the ordered, de-duplicated set
@@ -554,6 +583,21 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
                     .to_string(),
             );
         }
+        if raw.sui_settle_batch_size == 0 {
+            return Err("--sui-settle-batch-size must be greater than 0".to_string());
+        }
+        if raw.sui_settle_batch_size > 255 {
+            return Err("--sui-settle-batch-size must be <= 255".to_string());
+        }
+        if raw.sui_settle_batch_flush_ms == 0 {
+            return Err("--sui-settle-batch-flush-ms must be greater than 0".to_string());
+        }
+        if raw.sui_settle_batch_max_wait_ms < raw.sui_settle_batch_flush_ms {
+            return Err(
+                "--sui-settle-batch-max-wait-ms must be greater than or equal to --sui-settle-batch-flush-ms"
+                    .to_string(),
+            );
+        }
         Some(SuiSponsoredAnchorOpts {
             rpc_url: raw.sui_rpc_url.unwrap(),
             backend_url: raw.sui_backend_url.unwrap(),
@@ -567,6 +611,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
                 max_batch_size: raw.sui_open_batch_size,
                 flush_interval_ms: raw.sui_open_batch_flush_ms,
                 max_wait_ms: raw.sui_open_batch_max_wait_ms,
+            },
+            settle_batching: SuiOpenBatchingConfig {
+                enabled: !raw.sui_disable_settle_batching,
+                max_batch_size: raw.sui_settle_batch_size,
+                flush_interval_ms: raw.sui_settle_batch_flush_ms,
+                max_wait_ms: raw.sui_settle_batch_max_wait_ms,
             },
         })
     } else {
@@ -1057,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn anchor_sui_open_batching_defaults_to_enabled_conservative_limits() {
+    fn anchor_sui_ptb_batching_defaults_to_enabled_conservative_limits() {
         let opts = parse(vec![
             "--anchor".into(),
             "sui".into(),
@@ -1080,10 +1130,14 @@ mod tests {
         assert_eq!(sui.open_batching.max_batch_size, 255);
         assert_eq!(sui.open_batching.flush_interval_ms, 250);
         assert_eq!(sui.open_batching.max_wait_ms, 1000);
+        assert!(sui.settle_batching.enabled);
+        assert_eq!(sui.settle_batching.max_batch_size, 255);
+        assert_eq!(sui.settle_batching.flush_interval_ms, 250);
+        assert_eq!(sui.settle_batching.max_wait_ms, 1000);
     }
 
     #[test]
-    fn anchor_sui_open_batching_flags_override_defaults() {
+    fn anchor_sui_ptb_batching_flags_override_defaults() {
         let opts = parse(vec![
             "--anchor".into(),
             "sui".into(),
@@ -1105,16 +1159,25 @@ mod tests {
             "100".into(),
             "--sui-open-batch-max-wait-ms".into(),
             "500".into(),
+            "--sui-settle-batch-size".into(),
+            "15".into(),
+            "--sui-settle-batch-flush-ms".into(),
+            "75".into(),
+            "--sui-settle-batch-max-wait-ms".into(),
+            "300".into(),
         ]);
         let opts = opts.expect("parse sui opts");
         let sui = opts.sui_anchor.expect("sui opts");
         assert_eq!(sui.open_batching.max_batch_size, 25);
         assert_eq!(sui.open_batching.flush_interval_ms, 100);
         assert_eq!(sui.open_batching.max_wait_ms, 500);
+        assert_eq!(sui.settle_batching.max_batch_size, 15);
+        assert_eq!(sui.settle_batching.flush_interval_ms, 75);
+        assert_eq!(sui.settle_batching.max_wait_ms, 300);
     }
 
     #[test]
-    fn anchor_sui_open_batching_can_be_disabled() {
+    fn anchor_sui_ptb_batching_can_be_disabled() {
         let opts = parse_v(&[
             "--anchor",
             "sui",
@@ -1131,14 +1194,16 @@ mod tests {
             "--sui-funder-stake-coin-id",
             "0x7",
             "--sui-disable-open-batching",
+            "--sui-disable-settle-batching",
         ])
         .expect("parse sui opts");
         let sui = opts.sui_anchor.expect("sui opts");
         assert!(!sui.open_batching.enabled);
+        assert!(!sui.settle_batching.enabled);
     }
 
     #[test]
-    fn anchor_sui_open_batching_rejects_invalid_limits() {
+    fn anchor_sui_ptb_batching_rejects_invalid_limits() {
         let base = [
             "--anchor",
             "sui",
@@ -1180,6 +1245,31 @@ mod tests {
         ]);
         let err = parse_v(&max_wait_before_flush).unwrap_err();
         assert!(err.contains("sui-open-batch-max-wait-ms"), "{err}");
+
+        let mut zero_settle_batch_size = base.to_vec();
+        zero_settle_batch_size.extend(["--sui-settle-batch-size", "0"]);
+        let err = parse_v(&zero_settle_batch_size).unwrap_err();
+        assert!(err.contains("sui-settle-batch-size"), "{err}");
+
+        let mut oversized_settle_batch = base.to_vec();
+        oversized_settle_batch.extend(["--sui-settle-batch-size", "256"]);
+        let err = parse_v(&oversized_settle_batch).unwrap_err();
+        assert!(err.contains("sui-settle-batch-size"), "{err}");
+
+        let mut zero_settle_flush_ms = base.to_vec();
+        zero_settle_flush_ms.extend(["--sui-settle-batch-flush-ms", "0"]);
+        let err = parse_v(&zero_settle_flush_ms).unwrap_err();
+        assert!(err.contains("sui-settle-batch-flush-ms"), "{err}");
+
+        let mut settle_max_wait_before_flush = base.to_vec();
+        settle_max_wait_before_flush.extend([
+            "--sui-settle-batch-flush-ms",
+            "250",
+            "--sui-settle-batch-max-wait-ms",
+            "249",
+        ]);
+        let err = parse_v(&settle_max_wait_before_flush).unwrap_err();
+        assert!(err.contains("sui-settle-batch-max-wait-ms"), "{err}");
     }
 
     #[test]
@@ -1309,5 +1399,9 @@ mod tests {
         assert!(help.contains("--sui-open-batch-flush-ms <MS>"));
         assert!(help.contains("--sui-open-batch-max-wait-ms <MS>"));
         assert!(help.contains("--sui-disable-open-batching"));
+        assert!(help.contains("--sui-settle-batch-size <N>"));
+        assert!(help.contains("--sui-settle-batch-flush-ms <MS>"));
+        assert!(help.contains("--sui-settle-batch-max-wait-ms <MS>"));
+        assert!(help.contains("--sui-disable-settle-batching"));
     }
 }
