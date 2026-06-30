@@ -320,6 +320,255 @@ fun extend_timeout_wrong_status() {
   clock.destroy_for_testing();
 }
 
+#[test]
+fun extend_timeout_within_caps_succeeds() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  let mut tunnel = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    60000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  tunnel::extend_timeout(&mut tunnel, 30000, &clock, &ctx);
+  assert_eq!(tunnel::timeout_ms(&tunnel), 90000);
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
+#[
+  test,
+  expected_failure(
+    abort_code = sui_tunnel::tunnel::ETimeoutExtensionTooLarge,
+    location = sui_tunnel::tunnel,
+  ),
+]
+fun extend_timeout_rejects_oversized_single_extension() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  let mut tunnel = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    60000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  // Just over MAX_TIMEOUT_EXTENSION_MS (7 days) -> rejected.
+  tunnel::extend_timeout(&mut tunnel, 604_800_001, &clock, &ctx);
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
+#[
+  test,
+  expected_failure(
+    abort_code = sui_tunnel::tunnel::ETimeoutTooLong,
+    location = sui_tunnel::tunnel,
+  ),
+]
+fun extend_timeout_rejects_total_over_ceiling() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  // Start at the total ceiling so any non-zero (in-cap) extension overflows it.
+  let mut tunnel = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    2_592_000_000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  tunnel::extend_timeout(&mut tunnel, 1, &clock, &ctx);
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
+#[
+  test,
+  expected_failure(
+    abort_code = sui_tunnel::tunnel::ETimeoutTooLong,
+    location = sui_tunnel::tunnel,
+  ),
+]
+fun create_rejects_timeout_over_ceiling() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  // Just over MAX_TOTAL_TIMEOUT_MS (30 days): a tunnel opened above the ceiling could
+  // never extend, so creation itself is rejected.
+  let tunnel = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    2_592_000_001,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
+#[test]
+fun can_extend_timeout_by_matches_extend_acceptance() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  let active = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    60000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+  // The predicate agrees with extend_timeout: an in-cap extension is accepted, but a
+  // zero duration and an over-cap duration are both rejected.
+  assert!(tunnel::can_extend_timeout_by(&active, 30000));
+  assert!(!tunnel::can_extend_timeout_by(&active, 0));
+  assert!(!tunnel::can_extend_timeout_by(&active, 604_800_001));
+
+  let at_ceiling = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    2_592_000_000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+  // Already at the total ceiling: no further extension is possible.
+  assert!(!tunnel::can_extend_timeout_by(&at_ceiling, 1));
+
+  tunnel::destroy_for_testing(active);
+  tunnel::destroy_for_testing(at_ceiling);
+  clock.destroy_for_testing();
+}
+
+// ============================================
+// VERSION MIGRATION TESTS
+// ============================================
+
+#[test]
+fun migrate_upgrades_then_mutator_runs() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  let mut tunnel = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    60000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  // Simulate an old-version tunnel left behind by a package upgrade.
+  tunnel::set_version_for_testing(&mut tunnel, 0);
+  tunnel::migrate(&mut tunnel, &ctx);
+  assert_eq!(tunnel::version(&tunnel), tunnel::current_version());
+
+  // A normal mutator gates on the current version; it would abort EInvalidVersion
+  // without the migration above.
+  tunnel::extend_timeout(&mut tunnel, 30000, &clock, &ctx);
+  assert_eq!(tunnel::timeout_ms(&tunnel), 90000);
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
+#[
+  test,
+  expected_failure(
+    abort_code = sui_tunnel::tunnel::ENotAnUpgrade,
+    location = sui_tunnel::tunnel,
+  ),
+]
+fun migrate_rejects_current_version() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  let mut tunnel = tunnel::create_active_for_testing<SUI>(
+    @0x0,
+    @0xBBBB,
+    100,
+    100,
+    60000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  // Already at CURRENT_VERSION -> no-op migration is rejected.
+  tunnel::migrate(&mut tunnel, &ctx);
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
+#[
+  test,
+  expected_failure(
+    abort_code = sui_tunnel::tunnel::ENotAuthorized,
+    location = sui_tunnel::tunnel,
+  ),
+]
+fun migrate_rejects_unauthorized_sender() {
+  let mut ctx = sui::tx_context::dummy();
+  let mut clock = clock::create_for_testing(&mut ctx);
+  clock.set_for_testing(1000);
+
+  // Neither party is the dummy sender (@0x0).
+  let mut tunnel = tunnel::create_active_for_testing<SUI>(
+    @0xAAAA,
+    @0xBBBB,
+    100,
+    100,
+    60000,
+    0,
+    &clock,
+    &mut ctx,
+  );
+
+  tunnel::set_version_for_testing(&mut tunnel, 0);
+  tunnel::migrate(&mut tunnel, &ctx);
+
+  tunnel::destroy_for_testing(tunnel);
+  clock.destroy_for_testing();
+}
+
 // ============================================
 // PENALTY AMOUNT TESTS
 // ============================================

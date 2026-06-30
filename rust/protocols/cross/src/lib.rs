@@ -357,12 +357,18 @@ impl Protocol for Cross {
         &self,
         state: &CrossState,
         mv: &CrossMove,
-        _by: Seat,
+        by: Seat,
     ) -> Result<CrossState, ProtocolError> {
         if self.is_terminal(state) {
             return Err(ProtocolError(
                 "game over: the race is already decided".into(),
             ));
+        }
+        if by == Seat::A && mv.dir_b.is_some() {
+            return Err(ProtocolError("A cannot submit B's direction".into()));
+        }
+        if by == Seat::B && mv.dir_a.is_some() {
+            return Err(ProtocolError("B cannot submit A's direction".into()));
         }
         let tick = state.tick + 1;
         let players = [

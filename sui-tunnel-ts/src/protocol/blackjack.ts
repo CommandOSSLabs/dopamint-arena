@@ -400,6 +400,25 @@ function randomSecret(rng: () => number): BlackjackSlotSecret {
   };
 }
 
+/**
+ * Build a `commit` move whose secret is drawn from `bytes`. The real-money path
+ * MUST pass a CSPRNG here: salts are revealed publicly each draw, so a
+ * predictable RNG lets an opponent recover the generator state and steer cards.
+ */
+export function secureCommitMove(
+  bytes: (n: number) => Uint8Array,
+): Extract<BlackjackMove, { kind: "commit" }> {
+  const secret: BlackjackSlotSecret = {
+    value: bytes(1),
+    salt: bytes(MIN_SALT_LEN),
+  };
+  return {
+    kind: "commit",
+    commitment: computeCommitment(secret.value, secret.salt),
+    localSecret: secret,
+  };
+}
+
 /** Which seat owes the next move in the current phase (null if none/terminal-ish). */
 export function actorFor(
   s: BlackjackState,

@@ -1,24 +1,25 @@
-import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
-import {
-  BattleshipProtocol,
-  battleshipMoveCodec,
-  type BattleshipState,
-  type BattleshipMove,
-} from "@/games/battleship/protocol/battleship";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { defaultStateHash } from "@/agent/stateHash";
 import {
   BOT_CONFIGS,
-  type BotDifficulty,
   DEFAULT_BOT_DIFFICULTY,
   pickShot,
+  type BotDifficulty,
 } from "@/games/battleship/engine/bot";
+import { proveCell } from "@/games/battleship/engine/merkle";
 import {
   randomFleetSecret,
   type FleetSecret,
 } from "@/games/battleship/engine/selfPlay";
-import { proveCell } from "@/games/battleship/engine/merkle";
-import { defaultStateHash } from "@/agent/stateHash";
-import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import {
+  BattleshipProtocol,
+  battleshipMoveCodec,
+  pendingBoardReveal,
+  type BattleshipMove,
+  type BattleshipState,
+} from "@/games/battleship/protocol/battleship";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
+import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
 
 export interface BattleshipBotConfig {
   difficulty?: BotDifficulty;
@@ -52,6 +53,15 @@ class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
       const committed = this.seat === "A" ? state.commitA : state.commitB;
       if (committed !== null) return null;
       return { type: "commit", root: this.secret.commitment.root };
+    }
+
+    if (state.phase === "awaitingBoardReveal") {
+      if (pendingBoardReveal(state) !== this.seat) return null;
+      return {
+        type: "reveal_board",
+        cells: this.secret.board,
+        salts: this.secret.salts,
+      };
     }
 
     if (state.pendingShot) {

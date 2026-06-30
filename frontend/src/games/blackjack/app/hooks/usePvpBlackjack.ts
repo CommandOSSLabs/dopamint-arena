@@ -1,29 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
-import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
-import {
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-} from "@mysten/dapp-kit";
-import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { BET_OPTIONS, bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 import { getSuiClient } from "@/games/blackjack/app/lib/bjBots";
+import { handValue as bjCardsHandValue } from "@/games/blackjack/app/lib/bjCards";
 import { getOrCreateEphemeral } from "@/games/blackjack/app/lib/bjPvpIdentity";
 import {
+  buildCloseWithRootTx,
   buildCreateAndShareTx,
   buildDepositTx,
-  buildCloseTx,
-  buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
-import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "@/onchain/sponsor";
+import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
 import {
   MTPS_COIN_TYPE,
   isMtpsAddressBalance,
   isMtpsConfigured,
 } from "@/onchain/mtps";
-import { handValue as bjCardsHandValue } from "@/games/blackjack/app/lib/bjCards";
+import { withSponsorFallback } from "@/onchain/sponsor";
+import {
+  raiseDisputeUnilateral,
+  submitRebuildingOnStale,
+} from "@/onchain/tunnelTx";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   MpClient,
   resolveMpWsUrl,
@@ -31,31 +29,32 @@ import {
   type PeerMessage,
   type PvpChannel,
 } from "@/pvp/mpClient";
+import {
+  clearResumeRecord,
+  evictExpiredRecords,
+  installResumePersistence,
+  readResumeRecord,
+} from "@/pvp/resume";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
-  raiseDisputeUnilateral,
-  submitRebuildingOnStale,
-} from "@/onchain/tunnelTx";
-import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
-import {
-  installResumePersistence,
-  evictExpiredRecords,
-  readResumeRecord,
-  clearResumeRecord,
-} from "@/pvp/resume";
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { bytesToHex, core, hexToBytes, proof } from "sui-tunnel-ts";
 import {
   BlackjackProtocol,
-  actorFor,
-  getPlayerParty,
-  getDealerParty,
-  blackjackHandValue as handValue,
   MIN_BET,
+  actorFor,
+  getDealerParty,
+  getPlayerParty,
+  secureCommitMove,
   maxBet as tableMaxBet,
-  type BlackjackState,
   type BlackjackMove,
+  type BlackjackState,
 } from "sui-tunnel-ts/protocol/blackjack";
 import { blackjackMoveCodec } from "sui-tunnel-ts/protocol/blackjackCodec";
-import { BET_OPTIONS, bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
@@ -404,7 +403,11 @@ export function usePvpBlackjack(): PvpView {
           (st.phase === "draw_commit" || st.phase === "draw_reveal") &&
           owed === info.role
         ) {
-          const mv = proto.randomMove(st, info.role, Math.random); // mints commit secret / reveals
+          // Commit secrets must come from the CSPRNG (salts are revealed publicly).
+          const mv =
+            st.phase === "draw_commit"
+              ? secureCommitMove(core.randomBytes)
+              : proto.randomMove(st, info.role, Math.random); // reveal only discloses the stored secret
           if (mv)
             setTimeout(
               () => {
@@ -862,7 +865,11 @@ export function usePvpBlackjack(): PvpView {
       const owed = actorFor(st, getPlayerParty);
       if (!owed || owed !== roleRef.current) return;
       if (st.phase === "draw_commit" || st.phase === "draw_reveal") {
-        const mv = proto.randomMove(st, roleRef.current, Math.random);
+        // Commit secrets must come from the CSPRNG (salts are revealed publicly).
+        const mv =
+          st.phase === "draw_commit"
+            ? secureCommitMove(core.randomBytes)
+            : proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
           setTimeout(() => {
             try {

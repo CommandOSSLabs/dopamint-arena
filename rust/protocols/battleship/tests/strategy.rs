@@ -167,6 +167,9 @@ async fn direct_strategy_play_reaches_terminal_and_conserves_balances() {
 
     for _ in 0..1000 {
         if state.phase == BattleshipPhase::Over {
+            // A legal bench fleet means the sinker claims the win at the board reveal
+            // (no forfeit), and the pot is conserved.
+            assert_ne!(state.winner, BattleshipWinner::None);
             assert_eq!(protocol.balances(&state).sum(), 400);
             return;
         }

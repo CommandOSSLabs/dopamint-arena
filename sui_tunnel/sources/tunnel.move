@@ -151,6 +151,15 @@ const EInvalidPartyASignature: vector<u8> = b"Party A's signature over the refer
 #[error]
 const EInvalidPartyBSignature: vector<u8> = b"Party B's signature over the referee assignment is invalid.";
 
+#[error]
+const ETimeoutExtensionTooLarge: vector<u8> = b"The requested timeout extension exceeds the maximum allowed single extension.";
+
+#[error]
+const ETimeoutTooLong: vector<u8> = b"The resulting timeout exceeds the maximum allowed total timeout.";
+
+#[error]
+const ENotAnUpgrade: vector<u8> = b"The tunnel is already at the current version; there is nothing to migrate.";
+
 // ============================================
 // CONSTANTS
 // ============================================
@@ -175,6 +184,14 @@ const STATUS_DESTROYED: u8 = 4;
 
 /// Minimum deposit amount (in base units)
 const MIN_DEPOSIT: u64 = 1;
+
+/// Largest single dispute-timeout extension (7 days). Generous for long-lived
+/// channels while bounding any one unilateral push of the force-close deadline.
+const MAX_TIMEOUT_EXTENSION_MS: u64 = 604_800_000;
+
+/// Hard ceiling on the dispute timeout (30 days). Caps the unilateral-exit delay
+/// so a party cannot freeze funds indefinitely by extending repeatedly.
+const MAX_TOTAL_TIMEOUT_MS: u64 = 2_592_000_000;
 
 // ============================================
 // STRUCTS
@@ -536,6 +553,9 @@ fun build_tunnel<T>(
   // State channels require a timeout for dispute resolution safety.
   // Without a timeout, funds can be permanently trapped if a party becomes unresponsive.
   assert!(timeout_ms > 0, EInvalidTimeout);
+  // Cap the opening timeout at the same ceiling extend_timeout enforces, so a channel
+  // can never be opened above the ceiling and then be unable to extend at all.
+  assert!(timeout_ms <= MAX_TOTAL_TIMEOUT_MS, ETimeoutTooLong);
 
   let now = clock.timestamp_ms();
   let tunnel_id = object::new(ctx);
@@ -1635,6 +1655,22 @@ public fun can_extend_timeout<T>(tunnel: &Tunnel<T>): bool {
   tunnel.status == STATUS_ACTIVE
 }
 
+/// Whether `extend_timeout` would accept `additional_ms`: the tunnel is ACTIVE, the
+/// duration is positive, within the per-call cap, and keeps the resulting timeout
+/// within the total ceiling. A faithful pre-check so a client that gates on this never
+/// submits an extension the call then aborts. The `&&` short-circuits, so the
+/// subtraction only runs once `additional_ms <= MAX_TIMEOUT_EXTENSION_MS` rules out
+/// underflow.
+public fun can_extend_timeout_by<T>(
+  tunnel: &Tunnel<T>,
+  additional_ms: u64,
+): bool {
+  can_extend_timeout(tunnel)
+    && additional_ms > 0
+    && additional_ms <= MAX_TIMEOUT_EXTENSION_MS
+    && tunnel.timeout_ms <= MAX_TOTAL_TIMEOUT_MS - additional_ms
+}
+
 /// Extends the tunnel's dispute timeout by an additional duration.
 /// Either party can call this to accommodate long-lived channels.
 /// Only allowed while ACTIVE: extending during a dispute would let the losing
@@ -1651,6 +1687,13 @@ public fun extend_timeout<T>(
   assert!(tunnel.status != STATUS_DISPUTED, ECannotExtendDuringDispute);
   assert!(can_extend_timeout(tunnel), EInvalidState);
   assert!(additional_ms > 0, EInvalidParameter);
+  // Bound the extension so a single party cannot inflate the force-close
+  // deadline out of reach; distinct codes attribute which limit was hit.
+  assert!(additional_ms <= MAX_TIMEOUT_EXTENSION_MS, ETimeoutExtensionTooLarge);
+  assert!(
+    tunnel.timeout_ms <= MAX_TOTAL_TIMEOUT_MS - additional_ms,
+    ETimeoutTooLong,
+  );
 
   let sender = ctx.sender();
   assert!(
@@ -2643,6 +2686,22 @@ public fun assert_current_version<T>(tunnel: &Tunnel<T>) {
   assert!(is_current_version(tunnel), EInvalidVersion);
 }
 
+/// Upgrade an old-version tunnel to the current module version so its mutators
+/// (which all require the current version) can run again after a package
+/// upgrade; without this an existing tunnel would be permanently frozen, unable
+/// even to settle. Either party may call it since the tunnel is their shared
+/// object and there is no admin capability. Aborts with `ENotAuthorized` if the
+/// sender is not a party, or `ENotAnUpgrade` if the tunnel is already current.
+public fun migrate<T>(tunnel: &mut Tunnel<T>, ctx: &TxContext) {
+  let sender = ctx.sender();
+  assert!(
+    sender == tunnel.party_a.address || sender == tunnel.party_b.address,
+    ENotAuthorized,
+  );
+  assert!(tunnel.version < CURRENT_VERSION, ENotAnUpgrade);
+  tunnel.version = CURRENT_VERSION;
+}
+
 /// Get the tunnel ID
 public fun id<T>(tunnel: &Tunnel<T>): ID {
   object::id(tunnel)
@@ -3039,6 +3098,13 @@ public fun close_cooperative_no_sig_for_testing<T>(
   let coin_b = coin::from_balance(tunnel.balance.split(party_b_balance), ctx);
   transfer::public_transfer(coin_a, tunnel.party_a.address);
   transfer::public_transfer(coin_b, tunnel.party_b.address);
+}
+
+#[test_only]
+/// Stamp an arbitrary struct version to exercise the version guard and `migrate`,
+/// since the public API only ever produces current-version tunnels.
+public fun set_version_for_testing<T>(tunnel: &mut Tunnel<T>, version: u64) {
+  tunnel.version = version;
 }
 
 #[test_only]

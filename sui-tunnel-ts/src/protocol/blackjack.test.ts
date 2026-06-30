@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computeCommitment } from "../core/commitment";
+import { computeCommitment, MIN_SALT_LEN, verifyCommitment } from "../core/commitment";
 import {
+  actorFor,
   BlackjackMove,
   BlackjackProtocol,
   BlackjackSlotSecret,
   BlackjackState,
-  FIXED_PLAYER_A,
-  MIN_BET,
-  actorFor,
   deriveRank,
+  FIXED_PLAYER_A,
   getDealerParty,
   getPlayerParty,
   blackjackHandValue as handValue,
+  MIN_BET,
+  secureCommitMove,
 } from "./blackjack";
 
 const proto = new BlackjackProtocol();
@@ -68,7 +69,7 @@ export {
   proto,
   revealMove,
   secret,
-  secretsForRank,
+  secretsForRank
 };
 
 /** Fixed bet used by the round-playing tests. */
@@ -140,6 +141,45 @@ test("both commits advance draw_commit -> draw_reveal", () => {
   s = proto.applyMove(s, commitMove(secret(2)), "B");
   assert.equal(s.phase, "draw_reveal");
   assert.ok(s.pendingCommitA && s.pendingCommitB);
+});
+
+test("secureCommitMove draws the secret from the supplied byte source, not Math.random", () => {
+  const requested: number[] = [];
+  let n = 0;
+  const bytes = (len: number) => {
+    requested.push(len);
+    return Uint8Array.from({ length: len }, () => ++n);
+  };
+  const realRandom = Math.random;
+  Math.random = () => {
+    throw new Error("Math.random must not be used to mint a commit secret");
+  };
+  try {
+    const mv = secureCommitMove(bytes);
+    assert.deepEqual(requested, [1, MIN_SALT_LEN]);
+    assert.equal(mv.localSecret!.value.length, 1);
+    assert.equal(mv.localSecret!.salt.length, MIN_SALT_LEN);
+    assert.ok(
+      verifyCommitment(
+        mv.commitment,
+        mv.localSecret!.value,
+        mv.localSecret!.salt,
+      ),
+    );
+  } finally {
+    Math.random = realRandom;
+  }
+});
+
+test("secureCommitMove yields a commit applyMove accepts and stores", () => {
+  let s = placeBet(fresh());
+  let bj = 0;
+  const bytes = (len: number) =>
+    Uint8Array.from({ length: len }, () => (bj = (bj + 7) & 0xff));
+  const mv = secureCommitMove(bytes);
+  s = proto.applyMove(s, mv, "A");
+  assert.deepEqual(s.localSecretA, mv.localSecret);
+  assert.equal(s.phase, "draw_commit");
 });
 
 test("a party cannot commit twice for the same card", () => {

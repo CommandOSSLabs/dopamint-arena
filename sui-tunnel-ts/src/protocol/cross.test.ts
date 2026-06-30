@@ -1,15 +1,18 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { CrossMove, CrossState } from "./cross";
 import {
-  laneKind,
+  COLUMN_COUNT,
+  CrossProtocol,
+  destOf,
   hazardsAt,
   isLethal,
-  destOf,
-  COLUMN_COUNT,
+  laneKind,
+  MIN_STAKE,
   SPAWN_COL,
+  TICK_CAP,
+  WIN_LANE,
 } from "./cross";
-import { CrossProtocol, WIN_LANE, TICK_CAP, MIN_STAKE } from "./cross";
-import type { CrossState, CrossMove } from "./cross";
 
 test("laneKind cycles grass,grass,road,road,water,rails,grass,grass after lane 2", () => {
   assert.equal(laneKind(0), "grass");
@@ -47,8 +50,8 @@ test("water is inverted: lethal exactly when NOT on a log span", () => {
     const c = col + 0.5;
     const onLog = spans.some((s) =>
       [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
-        (cc) => cc > s.center - s.half && cc < s.center + s.half
-      )
+        (cc) => cc > s.center - s.half && cc < s.center + s.half,
+      ),
     );
     assert.equal(isLethal(seed, col, lane, tick), !onLog);
   }
@@ -96,16 +99,8 @@ test("initialState locks the total and starts at tick 0 with two spawned chicken
 
 test("encodeState is canonical: identical states encode to identical bytes", () => {
   const p = new CrossProtocol();
-  const a = p.applyMove(
-    p.initialState(CTX),
-    { dirA: "north", dirB: "north" },
-    "A"
-  );
-  const b = p.applyMove(
-    p.initialState(CTX),
-    { dirA: "north", dirB: "north" },
-    "A"
-  );
+  const a = p.applyMove(p.initialState(CTX), { dirA: "north" }, "A");
+  const b = p.applyMove(p.initialState(CTX), { dirA: "north" }, "A");
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
 });
 
@@ -115,7 +110,7 @@ test("different states encode to different bytes (tick advances)", () => {
   const s1 = p.applyMove(s0, { dirA: "north" }, "A");
   assert.notDeepEqual(
     Array.from(p.encodeState(s0)),
-    Array.from(p.encodeState(s1))
+    Array.from(p.encodeState(s1)),
   );
 });
 
@@ -163,8 +158,11 @@ test("applyMove throws once the game is terminal", () => {
 
 test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", () => {
   const p = new CrossProtocol();
-  // Both chickens one hop from the finish, dead even — the exact dead-heat case.
-  // Lane WIN_LANE is grass (always safe), so both hops land and both arrive this tick.
+  // Synthetic state: under the single-seat model each move advances only the proposer,
+  // so the first chicken to reach WIN_LANE ends the game and this exact simultaneous
+  // arrival cannot arise in normal play. We construct it directly to exercise the
+  // defensive aWon && bWon push branch; the genuine reachable pushes (TICK_CAP score
+  // tie) are covered above. Lane WIN_LANE is grass (always safe), so A's hop lands.
   const deadHeat: CrossState = {
     ...p.initialState(CTX),
     tick: 10n,
@@ -176,14 +174,14 @@ test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", (
         invulnTicks: 0,
       },
       {
-        lane: WIN_LANE - 1,
+        lane: WIN_LANE,
         col: SPAWN_COL,
-        score: WIN_LANE - 1,
+        score: WIN_LANE,
         invulnTicks: 0,
       },
     ],
   };
-  const next = p.applyMove(deadHeat, { dirA: "north", dirB: "north" }, "A");
+  const next = p.applyMove(deadHeat, { dirA: "north" }, "A");
   assert.equal(next.players[0].lane >= WIN_LANE, true);
   assert.equal(next.players[1].lane >= WIN_LANE, true);
   assert.equal(next.winner, null); // dead heat ⇒ push, matching the TICK_CAP tie path
@@ -198,6 +196,20 @@ test("randomMove carries only the acting seat's hop (2-party model)", () => {
   assert.equal(a.dirB, undefined, "A's update must not carry B's dir");
   const b = p.randomMove(s, "B", mulberry32ForTest(1)) as CrossMove;
   assert.equal(b.dirA, undefined, "B's update must not carry A's dir");
+});
+
+test("seat A cannot drive B's chicken", () => {
+  const p = new CrossProtocol();
+  const s = p.initialState(CTX);
+  assert.throws(() => p.applyMove(s, { dirA: "north", dirB: "north" }, "A"));
+  assert.throws(() => p.applyMove(s, { dirB: "north" }, "A"));
+});
+
+test("seat B cannot drive A's chicken", () => {
+  const p = new CrossProtocol();
+  const s = p.initialState(CTX);
+  assert.throws(() => p.applyMove(s, { dirA: "north", dirB: "north" }, "B"));
+  assert.throws(() => p.applyMove(s, { dirA: "north" }, "B"));
 });
 
 // Local deterministic RNG for tests (mirrors the protocol's internal one).
