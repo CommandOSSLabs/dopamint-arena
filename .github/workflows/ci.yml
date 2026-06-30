@@ -12,7 +12,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ubuntu-latest-m
+    runs-on: linux-x64-m
     outputs:
       ci: ${{ steps.filter.outputs.ci }}
       ts_sdk: ${{ steps.filter.outputs.ts_sdk }}
@@ -55,7 +55,7 @@ jobs:
 
   ts-sdk:
     name: TypeScript SDK
-    runs-on: ubuntu-latest-m
+    runs-on: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.ts_sdk == 'true'
     defaults:
@@ -79,7 +79,7 @@ jobs:
 
   move:
     name: Move contracts
-    runs-on: ubuntu-latest-m
+    runs-on: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.move == 'true'
     # Bump to an existing release tag if the download 404s.
@@ -106,7 +106,7 @@ jobs:
 
   rust-backend:
     name: Rust backend
-    runs-on: ubuntu-latest-m
+    runs-on: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.rust_backend == 'true'
     steps:
@@ -122,7 +122,7 @@ jobs:
 
   rust-tunnel:
     name: Rust tunnel crates
-    runs-on: ubuntu-latest-m
+    runs-on: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.rust_tunnel == 'true'
     steps:
@@ -141,7 +141,7 @@ jobs:
 
   frontend:
     name: Frontend
-    runs-on: ubuntu-latest-m
+    runs-on: linux-x64-m
     needs: changes
     if: needs.changes.outputs.ci == 'true' || needs.changes.outputs.frontend == 'true'
     defaults:
