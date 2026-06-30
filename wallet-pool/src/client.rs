@@ -493,6 +493,11 @@ impl std::fmt::Debug for WalletPoolHandle {
 }
 
 impl WalletPoolHandle {
+    /// Return the total number of members in the pool (not counting the master).
+    pub fn member_count(&self) -> u32 {
+        self.blob.index.len().saturating_sub(1) as u32
+    }
+
     /// Return the decrypted key pair for a selected member.
     ///
     /// This method is synchronous: it only touches in-memory state.
@@ -860,6 +865,36 @@ mod tests {
             .get_member_key(By::Address(member_entry.address.clone()))
             .unwrap();
         assert_eq!(by_address.public_key(), member_key.public_key());
+    }
+
+    #[tokio::test]
+    async fn member_count_accessor_returns_non_master_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FileWalletPoolStore::new(dir.path()));
+        let rpc: Arc<dyn SuiRpc> = Arc::new(MockRpc::default());
+        let pool = pool(store, rpc);
+
+        const N: u32 = 5;
+        let created = pool
+            .create(CreateOptions {
+                network: Network::Testnet,
+                member_count: N,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let handle = pool
+            .open(OpenOptions {
+                id: created.wallet_pool_id,
+                access_value: created.access_value,
+                network: Network::Testnet,
+                cache_mode: CacheMode::None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(handle.member_count(), N);
     }
 
     #[tokio::test]

@@ -59,7 +59,10 @@ async fn wait_for_balance(
 
 fn fund_master_sui(master: &str, amount: u64) -> String {
     // pick the largest gas coin of the CLI active address
-    let out = Command::new("sui").args(["client", "gas", "--json"]).output().unwrap();
+    let out = Command::new("sui")
+        .args(["client", "gas", "--json"])
+        .output()
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let coin = json
         .as_array()
@@ -71,12 +74,25 @@ fn fund_master_sui(master: &str, amount: u64) -> String {
     println!("Funding master {MASTER_FUND_GAS_MIST} MIST from CLI coin {coin_id}");
     let out = Command::new("sui")
         .args([
-            "client", "transfer-sui", "--to", master, "--sui-coin-object-id", coin_id,
-            "--amount", &amount.to_string(), "--gas-budget", "5000000", "--json",
+            "client",
+            "transfer-sui",
+            "--to",
+            master,
+            "--sui-coin-object-id",
+            coin_id,
+            "--amount",
+            &amount.to_string(),
+            "--gas-budget",
+            "5000000",
+            "--json",
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     v["digest"].as_str().unwrap().to_string()
 }
@@ -85,19 +101,33 @@ fn fund_master_buck(master: &str, buck_object_id: &str, amount: u64) -> String {
     println!("Funding master 1 BUCK from CLI object {buck_object_id}");
     let out = Command::new("sui")
         .args([
-            "client", "pay", "--input-coins", buck_object_id, "--recipients", master,
-            "--amounts", &amount.to_string(), "--gas-budget", "5000000", "--json",
+            "client",
+            "pay",
+            "--input-coins",
+            buck_object_id,
+            "--recipients",
+            master,
+            "--amounts",
+            &amount.to_string(),
+            "--gas-budget",
+            "5000000",
+            "--json",
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     v["digest"].as_str().unwrap().to_string()
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rpc_url = std::env::var("SUI_RPC_URL").unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".into());
+    let rpc_url = std::env::var("SUI_RPC_URL")
+        .unwrap_or_else(|_| "https://fullnode.testnet.sui.io:443".into());
     let buck_object_id = std::env::var("BUCK_OBJECT_ID")
         .expect("set BUCK_OBJECT_ID to a testnet BUCK coin owned by the CLI active address");
 
@@ -117,7 +147,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool_id = created.wallet_pool_id.clone();
     let access_value = created.access_value.clone();
     println!("  pool id: {pool_id}");
-    println!("  persisted in S3: {}", store.list().await?.contains(&pool_id));
+    println!(
+        "  persisted in S3: {}",
+        store.list().await?.contains(&pool_id)
+    );
 
     // 2. Open and derive the master address.
     let mut handle = pool
@@ -135,16 +168,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Fund master with SUI (gas) and 1 BUCK (to distribute).
     let d = fund_master_sui(&master_address, MASTER_FUND_GAS_MIST);
     println!("  master SUI digest: {d}");
-    wait_for_balance(rpc.as_ref(), &master_address, SUI_COIN_TYPE, MASTER_FUND_GAS_MIST, 30).await;
+    wait_for_balance(
+        rpc.as_ref(),
+        &master_address,
+        SUI_COIN_TYPE,
+        MASTER_FUND_GAS_MIST,
+        30,
+    )
+    .await;
     let d = fund_master_buck(&master_address, &buck_object_id, MASTER_FUND_BUCK);
     println!("  master BUCK digest: {d}");
-    wait_for_balance(rpc.as_ref(), &master_address, BUCK_COIN_TYPE, MASTER_FUND_BUCK, 30).await;
+    wait_for_balance(
+        rpc.as_ref(),
+        &master_address,
+        BUCK_COIN_TYPE,
+        MASTER_FUND_BUCK,
+        30,
+    )
+    .await;
 
     // 4. Fund all members with BUCK.
     let members = pool
         .list(ListOptions {
             id: pool_id.clone(),
-            filter: Filter { role: Some(WalletRole::Member), ..Default::default() },
+            filter: Filter {
+                role: Some(WalletRole::Member),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -185,7 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .await?;
-    println!("Members with BUCK balance >= 1: {} (expected 50)", funded.len());
+    println!(
+        "Members with BUCK balance >= 1: {} (expected 50)",
+        funded.len()
+    );
 
     let member0 = recipients[0].clone();
 
