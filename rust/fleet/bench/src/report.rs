@@ -47,25 +47,119 @@ pub fn format_resources(r: &ResourceSummary) -> String {
     )
 }
 
-pub fn render(opts: &BenchOpts, simple: &SwarmOutcome, res: &ResourceSummary) -> String {
+/// Share of wall time spent on per-match setup rather than play; 0 when no
+/// timing was collected.
+pub fn setup_overhead_pct(o: &SwarmOutcome) -> f64 {
+    if o.total_ns_total == 0 {
+        return 0.0;
+    }
+    let overhead = o.total_ns_total.saturating_sub(o.play_ns_total) as f64;
+    overhead / o.total_ns_total as f64 * 100.0
+}
+
+/// Wall move-TPS scaled up by (total / play) to isolate match play from setup
+/// overhead; falls back to wall TPS when no timing was collected.
+pub fn play_only_tps(o: &SwarmOutcome) -> f64 {
+    let tps = move_tps(o.moves, o.elapsed_ms);
+    if o.play_ns_total == 0 {
+        tps
+    } else {
+        tps * (o.total_ns_total as f64 / o.play_ns_total as f64)
+    }
+}
+
+/// Headline metrics for one protocol's bench run, collected across a
+/// multi-protocol invocation to build the comparison summary.
+#[derive(Clone, Debug)]
+pub struct ProtocolRunSummary {
+    pub protocol_id: &'static str,
+    pub headline_tps: f64,
+    pub play_only_tps: f64,
+    pub matches: u64,
+    pub tunnels_settled: u64,
+    pub moves: u64,
+    pub setup_overhead_pct: f64,
+    pub elapsed_ms: u128,
+}
+
+impl ProtocolRunSummary {
+    /// Derives the summary row from a protocol's headline window.
+    pub fn from_run(protocol_id: &'static str, simple: &SwarmOutcome) -> Self {
+        Self {
+            protocol_id,
+            headline_tps: move_tps(simple.moves, simple.elapsed_ms),
+            play_only_tps: play_only_tps(simple),
+            matches: simple.matches_claimed,
+            tunnels_settled: simple.tunnels_settled,
+            moves: simple.moves,
+            setup_overhead_pct: setup_overhead_pct(simple),
+            elapsed_ms: simple.elapsed_ms,
+        }
+    }
+}
+
+/// Comparison table + aggregate totals across the protocols that ran. Resources
+/// are not aggregated: averaging CPU/RSS across heterogeneous sequential runs
+/// isn't meaningful, so they stay in each per-protocol block.
+pub fn render_summary(opts: &BenchOpts, rows: &[ProtocolRunSummary]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{PREFIX} summary: {} protocols, frame-codec {}, workers {}\n",
+        rows.len(),
+        frame_codec_id(opts.frame_codec),
+        opts.workers,
+    ));
+
+    let id_width = rows
+        .iter()
+        .map(|r| r.protocol_id.len())
+        .max()
+        .unwrap_or(0)
+        .max("protocol-id".len());
+
+    let header = format!(
+        "{PREFIX} {:<id_width$}  {:>12}  {:>12}  {:>9}  {:>9}  {:>9}",
+        "protocol-id", "move-TPS", "play-TPS", "matches", "settled", "setup%",
+    );
+    out.push_str(&header);
+    out.push('\n');
+
+    for r in rows {
+        let row = format!(
+            "{PREFIX} {:<id_width$}  {:>12.1}  {:>12.1}  {:>9}  {:>9}  {:>8.1}%",
+            r.protocol_id,
+            r.headline_tps,
+            r.play_only_tps,
+            r.matches,
+            r.tunnels_settled,
+            r.setup_overhead_pct,
+        );
+        out.push_str(&row);
+        out.push('\n');
+    }
+
+    let total_matches: u64 = rows.iter().map(|r| r.matches).sum();
+    let total_moves: u64 = rows.iter().map(|r| r.moves).sum();
+    let total_settled: u64 = rows.iter().map(|r| r.tunnels_settled).sum();
+    let total_ms: u128 = rows.iter().map(|r| r.elapsed_ms).sum();
+    out.push_str(&format!(
+        "{PREFIX} aggregate: {total_moves} moves over {total_matches} matches, \
+         {total_settled} tunnels settled, {:.1}s wall\n",
+        total_ms as f64 / 1000.0,
+    ));
+
+    out
+}
+
+pub fn render(
+    opts: &BenchOpts,
+    protocol_id: &str,
+    simple: &SwarmOutcome,
+    res: &ResourceSummary,
+) -> String {
     let secs = simple.elapsed_ms as f64 / 1000.0;
     let tps = move_tps(simple.moves, simple.elapsed_ms);
     let tps_line = format!("{PREFIX} aggregate move-TPS: {:.1}", tps);
-
-    let setup_overhead_pct = if simple.total_ns_total == 0 {
-        0.0
-    } else {
-        let overhead = simple.total_ns_total.saturating_sub(simple.play_ns_total) as f64;
-        overhead / simple.total_ns_total as f64 * 100.0
-    };
-
-    // Scale wall TPS up by (total / play) to isolate match play from setup overhead.
-    // If no timing data was collected, return wall TPS unscaled.
-    let play_only_tps = if simple.play_ns_total == 0 {
-        tps
-    } else {
-        tps * (simple.total_ns_total as f64 / simple.play_ns_total as f64)
-    };
 
     format!(
         "{PREFIX} fleet: workers={}\n\
@@ -82,7 +176,7 @@ pub fn render(opts: &BenchOpts, simple: &SwarmOutcome, res: &ResourceSummary) ->
          {PREFIX} play-loop µs: avg={:.1} p50={:.1} p99={:.1}\n\
          {PREFIX} resources: {}, threads={}, util_p50={:.1}%, util_p99={:.1}%, basis={}\n",
         opts.workers,
-        opts.protocol_id,
+        protocol_id,
         frame_codec_id(opts.frame_codec),
         simple.moves,
         simple.matches_claimed,
@@ -96,8 +190,8 @@ pub fn render(opts: &BenchOpts, simple: &SwarmOutcome, res: &ResourceSummary) ->
         simple.moves_dist.p90,
         simple.moves_dist.p99,
         simple.moves_dist.peak,
-        setup_overhead_pct,
-        play_only_tps,
+        setup_overhead_pct(simple),
+        play_only_tps(simple),
         simple.play_ns_dist.avg / 1_000.0,
         simple.play_ns_dist.p50 / 1_000.0,
         simple.play_ns_dist.p99 / 1_000.0,
@@ -122,7 +216,7 @@ mod tests {
             duration_secs: 15,
             matches: None,
             signer_init_mode,
-            protocol_id: tunnel_core::protocol_id::BLACKJACK_BET_V1,
+            protocol_ids: vec![tunnel_core::protocol_id::BLACKJACK_BET_V1],
             scenario: crate::cli::ScenarioMode::Golden,
             frame_codec: crate::cli::FrameCodecKind::Json,
             anchor_mode: AnchorMode::Memory,
@@ -177,6 +271,7 @@ mod tests {
     fn render_emits_headline_metrics() {
         let s = render(
             &opts(12, SignerInitMode::PerMatch),
+            "blackjack.bet.v1",
             &outcome(481234, 3366, 15000),
             &res(),
         );
@@ -203,7 +298,12 @@ mod tests {
             moves_dist: summarize(&[143.0, 143.0, 143.0]),
             play_ns_dist: summarize(&[266_000_000.0, 267_000_000.0, 267_000_000.0]),
         };
-        let s = render(&opts(1, SignerInitMode::PerMatch), &o, &res());
+        let s = render(
+            &opts(1, SignerInitMode::PerMatch),
+            "blackjack.bet.v1",
+            &o,
+            &res(),
+        );
         assert!(s.contains("[local/memory] tunnels opened: 3"), "got:\n{s}");
         assert!(
             s.contains("[local/memory] matches conducted: 3"),
@@ -235,6 +335,41 @@ mod tests {
         );
         assert!(
             s.contains("[local/memory] frame-codec: json.distributed.v1"),
+            "got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn summary_table_lists_each_protocol_and_aggregate() {
+        let rows = vec![
+            ProtocolRunSummary::from_run("caro.v1", &outcome(1000, 10, 2000)),
+            ProtocolRunSummary::from_run("blackjack.v2", &outcome(2000, 20, 3000)),
+        ];
+        let s = render_summary(&opts(8, SignerInitMode::PerMatch), &rows);
+        assert!(
+            s.contains("[local/memory] summary: 2 protocols"),
+            "got:\n{s}"
+        );
+        assert!(s.contains("caro.v1"), "got:\n{s}");
+        assert!(s.contains("blackjack.v2"), "got:\n{s}");
+        assert!(!s.contains("preinit-TPS"), "got:\n{s}");
+
+        // Header and every data row must share the same width so columns line up.
+        let lines: Vec<&str> = s.lines().collect();
+        let header = lines
+            .iter()
+            .find(|l| l.contains("move-TPS"))
+            .expect("header row");
+        for id in ["caro.v1", "blackjack.v2"] {
+            let row = lines.iter().find(|l| l.contains(id)).expect("data row");
+            assert_eq!(
+                row.chars().count(),
+                header.chars().count(),
+                "column widths drifted:\n{header}\n{row}"
+            );
+        }
+        assert!(
+            s.contains("aggregate: 3000 moves over 30 matches, 30 tunnels settled, 5.0s wall"),
             "got:\n{s}"
         );
     }

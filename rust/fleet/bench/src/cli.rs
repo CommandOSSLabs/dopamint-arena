@@ -54,7 +54,10 @@ pub struct BenchOpts {
     pub duration_secs: u64,
     pub matches: Option<u64>,
     pub signer_init_mode: SignerInitMode,
-    pub protocol_id: &'static str,
+    /// Protocols to run, in the order the user listed them (or
+    /// `PORTED_PROTOCOL_IDS` order for `all`). Always non-empty; runs execute
+    /// sequentially so they don't contend for CPU.
+    pub protocol_ids: Vec<&'static str>,
     /// Protocol scenario for generated matches (`Varied` by default).
     pub scenario: ScenarioMode,
     /// Wire codec used to serialize tunnel frames (`Json` by default).
@@ -93,12 +96,15 @@ chain transactions.",
     after_help = "Examples:\n  \
 fleet-bench --anchor memory --signer-init-mode per-match --matches 50 --scenario golden --frame-codec postcard\n  \
 fleet-bench --signer-init-mode pre-initialized --matches 1000 --frame-codec bcs\n  \
-fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory\n\n\
+fleet-bench --protocol-ids blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory\n  \
+fleet-bench --protocol-ids caro.v1,blackjack.v2 --matches 100\n  \
+fleet-bench --protocol-ids all --matches 50\n\n\
 Signer init mode values:\n  \
 per-match: create signer material inside each measured match\n  \
 pre-initialized: create all signer material before the timed run\n\n\
 Protocol IDs:\n  \
-fleet-bench executes every ported Rust protocol ID:\n  \
+--protocol-ids takes one ID, a comma-separated list, or `all`; listed\n  \
+protocols run sequentially with a comparison summary at the end. Ported IDs:\n  \
 api_credits.v1, battleship.v1, battleship.series.v1, blackjack.bet.v1,\n  \
 blackjack.duel.v1, blackjack.v2, bomb_it.v1, bomb_it.series.v1, caro.v1,\n  \
 caro.series.v1, chat.v1, cross.v1, cross.series.v1, payments.v1,\n  \
@@ -177,9 +183,13 @@ struct Raw {
         value_name = "local"
     )]
     frame_transport: String,
-    /// Protocol ID to execute.
-    #[arg(long = "protocol-id", default_value = BLACKJACK_BET_V1, value_name = "ID")]
-    protocol_id: String,
+    /// Protocol IDs to execute, comma-separated, or `all` for every ported ID.
+    #[arg(
+        long = "protocol-ids",
+        default_value = BLACKJACK_BET_V1,
+        value_name = "ID[,ID...]|all"
+    )]
+    protocol_ids: String,
     /// Sui gRPC endpoint used by --anchor sui-sponsored.
     #[arg(long = "sui-rpc-url", value_name = "URL")]
     sui_rpc_url: Option<String>,
@@ -252,6 +262,46 @@ struct Raw {
     sui_disable_open_batching: bool,
 }
 
+/// Resolves the raw `--protocol-ids` value into the ordered, de-duplicated set
+/// of ported protocol IDs to run. `all` (only valid alone) expands to every
+/// ported ID in declaration order.
+fn resolve_protocol_ids(raw: &str) -> Result<Vec<&'static str>, String> {
+    let tokens: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return Err("--protocol-ids requires at least one protocol ID".to_string());
+    }
+    if tokens.contains(&"all") {
+        if tokens.len() != 1 {
+            return Err("--protocol-ids 'all' cannot be combined with other IDs".to_string());
+        }
+        return Ok(PORTED_PROTOCOL_IDS.to_vec());
+    }
+
+    let mut resolved: Vec<&'static str> = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let id = PORTED_PROTOCOL_IDS
+            .iter()
+            .copied()
+            .find(|id| *id == token)
+            .ok_or_else(|| {
+                format!(
+                    "--protocol-ids: {} is not a ported Rust protocol ID; known IDs: {}",
+                    token,
+                    PORTED_PROTOCOL_IDS.join(", ")
+                )
+            })?;
+        if resolved.contains(&id) {
+            return Err(format!("--protocol-ids contains duplicate ID: {id}"));
+        }
+        resolved.push(id);
+    }
+    Ok(resolved)
+}
+
 pub fn help_text() -> String {
     let mut help = Vec::new();
     Raw::command()
@@ -272,18 +322,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             raw.frame_transport
         ));
     }
-    if !PORTED_PROTOCOL_IDS.contains(&raw.protocol_id.as_str()) {
-        return Err(format!(
-            "--protocol-id {} is not a ported Rust protocol ID; known IDs: {}",
-            raw.protocol_id,
-            PORTED_PROTOCOL_IDS.join(", ")
-        ));
-    }
-    let protocol_id = PORTED_PROTOCOL_IDS
-        .iter()
-        .copied()
-        .find(|id| *id == raw.protocol_id)
-        .expect("ported protocol id was validated");
+    let protocol_ids = resolve_protocol_ids(&raw.protocol_ids)?;
 
     let workers = if raw.workers == "auto" {
         std::thread::available_parallelism()
@@ -472,7 +511,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         duration_secs: raw.duration,
         matches: raw.matches,
         signer_init_mode,
-        protocol_id,
+        protocol_ids,
         scenario,
         frame_codec,
         anchor_mode,
@@ -496,14 +535,14 @@ mod tests {
             "memory",
             "--frame-transport",
             "local",
-            "--protocol-id",
+            "--protocol-ids",
             "blackjack.bet.v1",
         ])
         .unwrap();
         assert_eq!(o.duration_secs, 15);
         assert_eq!(o.matches, None);
         assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
-        assert_eq!(o.protocol_id, "blackjack.bet.v1");
+        assert_eq!(o.protocol_ids, vec!["blackjack.bet.v1"]);
         assert!(o.workers >= 1);
     }
 
@@ -570,15 +609,54 @@ mod tests {
     fn onchain_and_relay_are_rejected() {
         assert!(parse_v(&["--onchain"]).is_err());
         assert!(parse_v(&["--frame-transport", "relay"]).is_err());
-        assert!(parse_v(&["--protocol-id", "poker.v1"]).is_err());
+        assert!(parse_v(&["--protocol-ids", "poker.v1"]).is_err());
     }
 
     #[test]
     fn all_ported_protocol_ids_are_executable() {
         for id in PORTED_PROTOCOL_IDS {
-            let o = parse_v(&["--protocol-id", id]).unwrap();
-            assert_eq!(o.protocol_id, *id);
+            let o = parse_v(&["--protocol-ids", id]).unwrap();
+            assert_eq!(o.protocol_ids, vec![*id]);
         }
+    }
+
+    #[test]
+    fn comma_separated_ids_run_in_listed_order() {
+        let o = parse_v(&["--protocol-ids", "caro.v1, blackjack.v2 ,battleship.v1"]).unwrap();
+        assert_eq!(
+            o.protocol_ids,
+            vec!["caro.v1", "blackjack.v2", "battleship.v1"]
+        );
+    }
+
+    #[test]
+    fn all_expands_to_every_ported_id_in_order() {
+        let o = parse_v(&["--protocol-ids", "all"]).unwrap();
+        assert_eq!(o.protocol_ids, PORTED_PROTOCOL_IDS.to_vec());
+    }
+
+    #[test]
+    fn all_cannot_be_combined_with_other_ids() {
+        let err = parse_v(&["--protocol-ids", "all,caro.v1"]).unwrap_err();
+        assert!(err.contains("all"), "got: {err}");
+    }
+
+    #[test]
+    fn duplicate_ids_are_rejected() {
+        let err = parse_v(&["--protocol-ids", "caro.v1,caro.v1"]).unwrap_err();
+        assert!(err.contains("duplicate"), "got: {err}");
+    }
+
+    #[test]
+    fn empty_protocol_ids_are_rejected() {
+        let err = parse_v(&["--protocol-ids", " , "]).unwrap_err();
+        assert!(err.contains("at least one"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_id_in_a_list_names_the_offender() {
+        let err = parse_v(&["--protocol-ids", "caro.v1,poker.v1"]).unwrap_err();
+        assert!(err.contains("poker.v1"), "got: {err}");
     }
 
     #[test]
@@ -986,13 +1064,14 @@ mod tests {
             "fleet-bench --anchor memory --signer-init-mode per-match --matches 50 --scenario golden --frame-codec postcard"
         ));
         assert!(help.contains(
-            "fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory"
+            "fleet-bench --protocol-ids blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory"
         ));
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
         assert!(help.contains("per-match|pre-initialized"));
-        assert!(help.contains("fleet-bench executes every ported Rust protocol ID"));
-        assert!(!help.contains("fleet-bench currently executes"));
+        assert!(help.contains("--protocol-ids takes one ID, a comma-separated list, or `all`"));
+        assert!(help.contains("fleet-bench --protocol-ids caro.v1,blackjack.v2 --matches 100"));
+        assert!(help.contains("fleet-bench --protocol-ids all --matches 50"));
         assert!(help.contains("blackjack.bet.v1"));
         assert!(help.contains("json|bcs|postcard"));
         assert!(
