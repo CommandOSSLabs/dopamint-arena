@@ -8,8 +8,19 @@ publish.workspace = true
 
 [dependencies]
 wallet-pool = { path = ".." }
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
+aws-config = { version = "1", default-features = false, features = [
+    "behavior-version-latest",
+    "rt-tokio",
+] }
+aws-sdk-s3 = { version = "1", default-features = false, features = [
+    "behavior-version-latest",
+    "rt-tokio",
+    "http-1x",
+    "sigv4a",
+] }
+# Use the ring-based rustls stack instead of the default aws-lc-rs stack so the
+# workspace only has one rustls crypto provider.
+aws-smithy-runtime = { version = "1", features = ["tls-rustls"] }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 

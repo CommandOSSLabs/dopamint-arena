@@ -23,11 +23,11 @@
 //!   cargo run -p wallet-pool-s3 --example s3_fund_300_members_mtps
 
 use std::sync::Arc;
-use wallet_pool::{
-    CacheMode, Filter, FundBatchOptions, ListOptions, Network, OpenOptions, Pagination,
-    WalletPool, WalletRole,
-};
 use wallet_pool::rpc::ReqwestRpc;
+use wallet_pool::{
+    CacheMode, Filter, FundBatchOptions, ListOptions, Network, OpenOptions, Pagination, WalletPool,
+    WalletRole,
+};
 use wallet_pool_s3::S3WalletPoolStore;
 
 const MTPS_COIN_TYPE: &str =
