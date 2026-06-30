@@ -45,6 +45,7 @@ pub const BLACKJACK: GameProfile = GameProfile {
 /// `signer` is this bot's fresh per-match ephemeral key; `match_info.role` is its seat; the
 /// `anchor` brackets the on-chain open/settle (its impl decides off-chain vs Sui vs relay-bridged);
 /// `recorder` taps the transcript (use `NullTranscriptRecorder` when not archiving).
+#[allow(clippy::too_many_arguments)] // game + match + transport + anchor + signer + recorder seams
 pub async fn play_match<P, Strat, T, A, R>(
     protocol: P,
     strategy: Strat,
