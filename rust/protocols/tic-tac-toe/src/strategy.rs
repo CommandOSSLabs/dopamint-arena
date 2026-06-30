@@ -66,6 +66,22 @@ impl Default for TicTacToeStrategy {
     }
 }
 
+/// Derive a deterministic 16-byte salt from a seed and move index.
+///
+/// Bots need idempotent salts so that `plan_move` on the same state always
+/// produces the same move (including salt), which is required for replays.
+fn derive_salt(seed: u32, moves_count: u8) -> Vec<u8> {
+    let mut salt = [0u8; 16];
+    let seed_bytes = seed.to_be_bytes();
+    salt[..4].copy_from_slice(&seed_bytes);
+    salt[4] = moves_count;
+    // Fill remaining bytes with a simple expansion of the seed.
+    for i in 5..16 {
+        salt[i] = seed_bytes[(i - 5) % 4] ^ (i as u8);
+    }
+    salt.to_vec()
+}
+
 impl MoveStrategy<TicTacToe> for TicTacToeStrategy {
     async fn plan_move(
         &mut self,
@@ -76,8 +92,10 @@ impl MoveStrategy<TicTacToe> for TicTacToeStrategy {
         if state.winner != Winner::None || state.turn != seat {
             return None;
         }
-        self.pick_cell(state, seat)
-            .map(|cell| TicTacToeMove { cell })
+        self.pick_cell(state, seat).map(|cell| TicTacToeMove {
+            cell,
+            salt: derive_salt(self.fast_seed, state.moves_count),
+        })
     }
 }
 
@@ -111,7 +129,10 @@ impl MoveStrategy<TicTacToeSeries> for TicTacToeSeriesStrategy {
         if cannot_continue || seat != Seat::A {
             return None;
         }
-        Some(TicTacToeMove { cell: 0 })
+        Some(TicTacToeMove {
+            cell: 0,
+            salt: derive_salt(self.inner.fast_seed, state.inner.moves_count),
+        })
     }
 }
 
@@ -259,7 +280,12 @@ mod tests {
             balance_b: 100,
             total: 200,
             stake: 10,
+            move_accumulator: [0u8; 32],
         }
+    }
+
+    fn test_salt() -> Vec<u8> {
+        vec![0u8; 16]
     }
 
     #[tokio::test]
@@ -331,7 +357,7 @@ mod tests {
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await;
 
-        assert_eq!(planned, Some(TicTacToeMove { cell: 2 }));
+        assert!(planned.is_some_and(|m| m.cell == 2));
     }
 
     #[tokio::test]
@@ -351,18 +377,25 @@ mod tests {
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await;
 
-        assert_eq!(planned, Some(TicTacToeMove { cell: 2 }));
+        assert!(planned.is_some_and(|m| m.cell == 2));
     }
 
     #[tokio::test]
     async fn series_kickoff_is_only_seat_a_while_session_live() {
         let protocol = TicTacToe::new(10).unwrap();
         let won =
-            [0, 3, 1, 4, 2]
+            [0u8, 3, 1, 4, 2]
                 .into_iter()
                 .fold(protocol.initial_state(&ctx()), |state, cell| {
                     protocol
-                        .apply_move(&state, &TicTacToeMove { cell }, state.turn)
+                        .apply_move(
+                            &state,
+                            &TicTacToeMove {
+                                cell,
+                                salt: test_salt(),
+                            },
+                            state.turn,
+                        )
                         .unwrap()
                 });
         let series_state = TicTacToeSeriesState {
@@ -379,7 +412,7 @@ mod tests {
             .plan_move(&series_state, Seat::B, &strategy_ctx(Seat::B))
             .await;
 
-        assert_eq!(a, Some(TicTacToeMove { cell: 0 }));
+        assert!(a.is_some_and(|m| m.cell == 0));
         assert!(b.is_none());
     }
 
@@ -387,11 +420,18 @@ mod tests {
     async fn terminal_series_returns_none_for_both_seats() {
         let protocol = TicTacToe::new(10).unwrap();
         let won =
-            [0, 3, 1, 4, 2]
+            [0u8, 3, 1, 4, 2]
                 .into_iter()
                 .fold(protocol.initial_state(&ctx()), |state, cell| {
                     protocol
-                        .apply_move(&state, &TicTacToeMove { cell }, state.turn)
+                        .apply_move(
+                            &state,
+                            &TicTacToeMove {
+                                cell,
+                                salt: test_salt(),
+                            },
+                            state.turn,
+                        )
                         .unwrap()
                 });
         let series_state = TicTacToeSeriesState {

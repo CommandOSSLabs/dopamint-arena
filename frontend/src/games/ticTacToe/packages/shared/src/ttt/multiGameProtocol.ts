@@ -45,7 +45,7 @@
  * the state hash.
  */
 
-import { core, protocols } from "sui-tunnel-ts";
+import { core, protocols, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 
 type Protocol<State, Move> = protocols.Protocol<State, Move>;
 type Party = protocols.Party;
@@ -53,6 +53,21 @@ type Balances = protocols.Balances;
 type ProtocolContext = protocols.ProtocolContext;
 type TicTacToeState = protocols.TicTacToeState;
 type TicTacToeMove = protocols.TicTacToeMove;
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
+
+/**
+ * Codec for `TicTacToeMove` (and `MultiGameTicTacToeMove`). The `salt` field is a
+ * `Uint8Array` which does not survive JSON round-trip via the identity codec — it
+ * becomes a plain object `{"0":0,...}`. This codec encodes it as a hex string so
+ * the distributed-tunnel wire format preserves the type.
+ */
+export const tttMoveCodec: MoveCodec<TicTacToeMove> = {
+  encode: (m) => ({ cell: m.cell, salt: bytesToHex(m.salt) }),
+  decode: (j) => {
+    const o = j as { cell: number; salt: string };
+    return { cell: o.cell, salt: hexToBytes(o.salt) };
+  },
+};
 
 export interface MultiGameTicTacToeState {
   /** Current single-game state (board, turn, winner, carried balances, stake). */
@@ -67,6 +82,15 @@ export interface MultiGameTicTacToeState {
 export type MultiGameTicTacToeMove = TicTacToeMove;
 
 /**
+ * Alternate the opening side each game so neither seat keeps the first-move edge
+ * across a series (game 0 → A, game 1 → B, …). The inner protocol always opens with
+ * A; the series wrapper overrides it by game index.
+ */
+function seriesOpener(gameIndex: number): Party {
+  return gameIndex % 2 === 0 ? "A" : "B";
+}
+
+/**
  * Plays `maxGames` Tic-Tac-Toe games over one tunnel, composing the SDK's
  * single-game `TicTacToeProtocol`. Domain tag is distinct from the inner protocol
  * so the two encodings can never collide on the wire.
@@ -75,11 +99,11 @@ export class MultiGameTicTacToeProtocol implements Protocol<
   MultiGameTicTacToeState,
   MultiGameTicTacToeMove
 > {
-  readonly name = "tic_tac_toe.multi.v1";
+  readonly name = "tic_tac_toe.series.v2";
 
   // Distinct domain tag so a multi-game state hash never collides with a
   // single-game one, even when the inner game state happens to match.
-  private readonly domain = protocols.protocolDomain("tic_tac_toe.multi.v1");
+  private readonly domain = protocols.protocolDomain("tic_tac_toe.series.v2");
   private readonly inner: protocols.TicTacToeProtocol;
   private readonly maxGames: number;
 
@@ -97,7 +121,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
 
   initialState(ctx: ProtocolContext): MultiGameTicTacToeState {
     return {
-      inner: this.inner.initialState(ctx),
+      inner: { ...this.inner.initialState(ctx), turn: seriesOpener(0) },
       gamesPlayed: 0,
       maxGames: this.maxGames,
     };
@@ -127,13 +151,14 @@ export class MultiGameTicTacToeProtocol implements Protocol<
     // We rebuild the inner game via the inner protocol's initialState so the stake
     // is re-capped to what each side can now afford — identical to how a single
     // tunnel would have re-opened, but without any on-chain round-trip.
+    const nextGame = state.gamesPlayed + 1;
     const carried = this.inner.initialState({
       tunnelId: "",
       initialBalances: { a: state.inner.balanceA, b: state.inner.balanceB },
     });
     return {
-      inner: carried,
-      gamesPlayed: state.gamesPlayed + 1,
+      inner: { ...carried, turn: seriesOpener(nextGame) },
+      gamesPlayed: nextGame,
       maxGames: state.maxGames,
     };
   }
@@ -167,16 +192,20 @@ export class MultiGameTicTacToeProtocol implements Protocol<
     by: Party,
     rng: () => number,
   ): MultiGameTicTacToeMove | null {
-    // Mid-game: defer to the inner protocol's legal-move picker.
-    if (!this.inner.isTerminal(state.inner)) {
-      return this.inner.randomMove?.(state.inner, by, rng) ?? null;
-    }
+    if (this.isTerminal(state)) return null;
+    // Derive a 16-byte deterministic salt from the rng.
+    const saltBytes = new Uint8Array(16);
+    const saltView = new DataView(saltBytes.buffer);
+    saltView.setFloat64(0, rng(), false);
+    saltView.setFloat64(8, rng(), false);
+    const salt = saltBytes;
     // Between games: any cell on the fresh board is a legal advance trigger; the
     // reset ignores the cell, so just nominate cell 0 (and only let A drive it,
     // mirroring Blackjack's "A starts the next round" convention).
-    if (this.isTerminal(state)) return null;
-    if (by !== "A") return null;
-    return { cell: 0 };
+    if (this.inner.isTerminal(state.inner))
+      return by === "A" ? { cell: 0, salt } : null;
+    // Mid-game: defer to the inner protocol's legal-move picker.
+    return this.inner.randomMove?.(state.inner, by, rng) ?? null;
   }
 
   /** Whether both sides can still cover the per-game stake for another game. */

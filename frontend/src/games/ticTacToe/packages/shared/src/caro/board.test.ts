@@ -53,11 +53,36 @@ describe("caro board", () => {
     expect(winnerAround(d2, size, idx(size, 5, 6))).toBe(2);
   });
 
-  it("counts an overline (6 in a row) as a win (free-style)", () => {
+  it("an overline (6 in a row) does not win (standard caro: exactly five)", () => {
     const size = 15;
     let b = empty(size);
     for (let c = 2; c <= 7; c++) b = applyMark(b, idx(size, 0, c), 1); // 6 marks
-    expect(winnerAround(b, size, idx(size, 0, 7))).toBe(1);
+    expect(winnerAround(b, size, idx(size, 0, 7))).toBe(0);
+  });
+
+  it("a five flanked by the opponent on both ends does not win", () => {
+    const size = 15;
+    let b = empty(size);
+    b = applyMark(b, idx(size, 2, 2), 2); // O blocks the left end
+    for (let c = 3; c <= 7; c++) b = applyMark(b, idx(size, 2, c), 1); // X x5
+    b = applyMark(b, idx(size, 2, 8), 2); // O blocks the right end
+    expect(winnerAround(b, size, idx(size, 2, 7))).toBe(0);
+  });
+
+  it("a five blocked on only one end still wins (other end open)", () => {
+    const size = 15;
+    let b = empty(size);
+    b = applyMark(b, idx(size, 4, 2), 2); // O blocks the left end; col 8 left empty
+    for (let c = 3; c <= 7; c++) b = applyMark(b, idx(size, 4, c), 1); // X x5
+    expect(winnerAround(b, size, idx(size, 4, 7))).toBe(1);
+  });
+
+  it("the board edge counts as an open end (a five against the wall wins)", () => {
+    const size = 15;
+    let b = empty(size);
+    for (let c = 0; c <= 4; c++) b = applyMark(b, idx(size, 5, c), 1); // X x5 at the wall
+    b = applyMark(b, idx(size, 5, 5), 2); // O blocks the inner end; the wall end is open
+    expect(winnerAround(b, size, idx(size, 5, 4))).toBe(1);
   });
 
   it("does not fire on only four in a row", () => {
