@@ -8,10 +8,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use serde::Serialize;
 use tunnel_telemetry::{StageCost, StageId, StageSample, TelemetrySink};
 
 use crate::anchor::{
     OpenedTunnel, SettledTunnel, TunnelAnchor, TunnelOpenRequest, TunnelSettleRequest,
+};
+use crate::error::FrameTransportError;
+use crate::frame_transport::FrameTransport;
+use crate::transcript::{
+    Transcript, TranscriptCodec, TranscriptEntry, TranscriptError, TranscriptRecorder,
 };
 use crate::TunnelAnchorError;
 
@@ -120,11 +126,6 @@ impl<A: TunnelAnchor + Send + Sync, S: TelemetrySink + Send> TunnelAnchor
         result
     }
 }
-
-use crate::transcript::{
-    Transcript, TranscriptCodec, TranscriptEntry, TranscriptError, TranscriptRecorder,
-};
-use serde::Serialize;
 
 /// Codec-agnostic byte length of a serialized output.
 pub trait TranscriptSize {
@@ -264,6 +265,112 @@ mod recorder_tests {
             .samples()
             .iter()
             .any(|s| s.stage == StageId::RecorderRecord));
+    }
+}
+
+pub struct InstrumentedTransport<T, S> {
+    inner: T,
+    sink: Arc<Mutex<S>>,
+    bytes_sent: Arc<AtomicU64>,
+}
+
+impl<T: Clone, S> Clone for InstrumentedTransport<T, S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            sink: Arc::clone(&self.sink),
+            bytes_sent: Arc::clone(&self.bytes_sent),
+        }
+    }
+}
+
+impl<T, S: TelemetrySink + Send> InstrumentedTransport<T, S> {
+    pub fn new(inner: T, sink: S) -> Self {
+        Self {
+            inner,
+            sink: Arc::new(Mutex::new(sink)),
+            bytes_sent: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Drain the shared sink. Caller must hold the only remaining clone (after
+    /// the driver that owns the moved-in clone has finished and dropped).
+    pub fn into_sink(self) -> S {
+        Arc::try_unwrap(self.sink)
+            .unwrap_or_else(|_| panic!("transport sink still shared; drop the driver first"))
+            .into_inner()
+            .expect("sink mutex poisoned")
+    }
+
+    pub fn bytes_sent(&self) -> u64 {
+        self.bytes_sent.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    fn emit(&self, stage: StageId, started: Instant, bytes: u64) {
+        let mut sink = self.sink.lock().expect("sink mutex poisoned");
+        if sink.enabled() {
+            sink.record(StageSample {
+                stage,
+                dur_ns: started.elapsed().as_nanos() as u64,
+                cost: StageCost { gas_mist: 0, paid_by: None, bytes },
+            });
+        }
+    }
+}
+
+impl<T: FrameTransport, S: TelemetrySink + Send + 'static> FrameTransport
+    for InstrumentedTransport<T, S>
+{
+    async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+        let len = bytes.len() as u64;
+        let started = Instant::now();
+        let result = self.inner.send(bytes).await;
+        self.emit(StageId::FrameSend, started, len);
+        if result.is_ok() {
+            self.bytes_sent.fetch_add(len, Ordering::Relaxed);
+        }
+        result
+    }
+
+    async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+        let started = Instant::now();
+        let result = self.inner.recv().await;
+        let len = result
+            .as_ref()
+            .ok()
+            .and_then(|o| o.as_ref())
+            .map(|b| b.len() as u64)
+            .unwrap_or(0);
+        self.emit(StageId::FrameRecv, started, len);
+        result
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use crate::frame_transport::{in_memory::InMemoryFrameTransport, FrameTransport};
+    use tunnel_telemetry::{CollectingSink, StageId};
+
+    fn _assert_send_sync<X: Send + Sync + 'static>() {}
+
+    #[test]
+    fn instrumented_transport_is_send_sync() {
+        _assert_send_sync::<InstrumentedTransport<InMemoryFrameTransport, CollectingSink>>();
+    }
+
+    #[tokio::test]
+    async fn send_records_framesend_with_byte_len_and_counts_bytes() {
+        let (a, b) = InMemoryFrameTransport::pair();
+        let ta = InstrumentedTransport::new(a, CollectingSink::with_capacity(4));
+        ta.send(vec![1, 2, 3, 4, 5]).await.unwrap();
+        assert_eq!(ta.bytes_sent(), 5);
+        // Drain on the peer so the channel isn't dropped mid-flight.
+        let _ = b.recv().await.unwrap();
+        let sink = ta.into_sink();
+        let send = sink.samples().iter().find(|s| s.stage == StageId::FrameSend).unwrap();
+        assert_eq!(send.cost.bytes, 5);
     }
 }
 
