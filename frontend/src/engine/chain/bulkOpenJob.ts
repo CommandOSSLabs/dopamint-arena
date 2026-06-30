@@ -1,8 +1,9 @@
 /**
  * Time-windowed bulk-open job (design §4.1). Workers never sign; they enqueue seat-A open
  * intents through the chain bridge. This main-thread job drains the per-sender queue on a
- * fixed ~5 s tick and is the single place where many game-window opens are meant to collapse
- * into ONE sponsored PTB — the motivation is the Enoki rate limit (one sponsor+execute pair
+ * trailing-quiet debounce ({@link BULK_OPEN_QUIET_MS} after the last open, capped at
+ * {@link BULK_OPEN_MAX_WINDOW_MS}) and is the single place where many game-window opens are meant to
+ * collapse into ONE sponsored PTB — the motivation is the Enoki rate limit (one sponsor+execute pair
  * per batch), not wallet popups (sponsored opens are already popup-free).
  *
  * Each flush composes its window into ONE Programmable Transaction Block via the PvP many-open
@@ -22,25 +23,34 @@ import { engineEnabled } from "../flag";
 import { elog, emark, ENGINE_DEBUG } from "../debug";
 import { BatchCommittedError, normalizeSuiAddress } from "@/onchain/tunnelTx";
 
-/** The batching window (design §4.1): a fixed ~5 s tick, not a sub-second debounce — independent
- *  game opens arrive seconds apart, so a short debounce would never coalesce them. */
-export const BULK_OPEN_WINDOW_MS = 5000;
+/**
+ * Trailing-quiet debounce (design §4.1). A flush fires once a sender's window has been QUIET for
+ * this long — i.e. ~{@link BULK_OPEN_QUIET_MS} after the LAST open arrived, not a fixed tick from
+ * the FIRST. The realistic batching case — "open all games at once" on reload — mounts every window
+ * within a few hundred ms, so the batch goes quiet (and flushes as ONE PTB) ~{@link BULK_OPEN_QUIET_MS}
+ * after the last one, instead of every match waiting a fixed full window. A lone open with nothing
+ * joining flushes after the same quiet gap, so a single match starts fast.
+ */
+export const BULK_OPEN_QUIET_MS = 500;
 
-/** A lone intent that has waited this short minimum with nothing else arriving flushes early, so
- *  a single match doesn't pay the full {@link BULK_OPEN_WINDOW_MS} to start (design §4.1). */
-export const BULK_OPEN_LONE_FLUSH_MS = 300;
+/** Hard cap (design §4.1): the longest a flush is held from the FIRST intent, so a sustained trickle
+ *  of opens (each resetting the quiet timer) still flushes by this deadline rather than never. Bounds
+ *  the worst-case "Starting…" latency; far under the old fixed 5 s tick. */
+export const BULK_OPEN_MAX_WINDOW_MS = 2000;
 
 export type OpenResult = { tunnelId: string };
 
 /**
  * Rejection for a seat-A open cancelled before its window flushed (orphan-tunnel cancel,
- * design §4.1): the match/window was torn down inside the ~5 s bulk-open window, so no tunnel
+ * design §4.1): the match/window was torn down inside the bulk-open debounce window, so no tunnel
  * should be opened (and no stake consumed) for it. Benign — the awaiting caller is already
  * tearing the session down, so this is an expected cancellation, not a real open failure.
  */
 export class OpenCancelledError extends Error {
   constructor(intentId: string) {
-    super(`bulk-open intent ${intentId} cancelled before flush (match torn down)`);
+    super(
+      `bulk-open intent ${intentId} cancelled before flush (match torn down)`,
+    );
     this.name = "OpenCancelledError";
   }
 }
@@ -53,8 +63,10 @@ export class OpenCancelledError extends Error {
 export type BatchOpen = (batch: OpenTunnelParams[]) => Promise<OpenResult[]>;
 
 export interface BulkOpenJobOptions {
-  windowMs?: number;
-  loneFlushMs?: number;
+  /** Trailing-quiet gap; flush this long after the last open arrived. Default {@link BULK_OPEN_QUIET_MS}. */
+  quietMs?: number;
+  /** Hard cap from the first open. Default {@link BULK_OPEN_MAX_WINDOW_MS}. */
+  maxWindowMs?: number;
   /** Flag predicate (injectable for tests); defaults to the `?engine=worker` flag. Off → the job
    *  is a transparent pass-through (immediate per-match open), so non-worker behaviour is unchanged. */
   enabled?: () => boolean;
@@ -71,17 +83,20 @@ interface PendingOpen {
 
 /** One sender's accumulating window. A Sui tx has a single `sender` and the sponsor guard forces
  *  every stake withdrawal to `WithdrawFrom::Sender`, so cross-sender batching is rejected — the
- *  job shards by sender and each shard becomes (at most) one PTB. */
+ *  job shards by sender and each shard becomes (at most) one PTB.
+ *
+ *  `quietTimer` is reset on every new intent (the trailing debounce); `capTimer` is armed once on
+ *  the FIRST intent and never reset (the hard cap). Whichever fires first flushes; flush clears both. */
 interface SenderShard {
   pending: PendingOpen[];
-  windowTimer: ReturnType<typeof setTimeout> | null;
-  loneTimer: ReturnType<typeof setTimeout> | null;
+  quietTimer: ReturnType<typeof setTimeout> | null;
+  capTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export class BulkOpenJob {
   private readonly shards = new Map<string, SenderShard>();
-  private readonly windowMs: number;
-  private readonly loneFlushMs: number;
+  private readonly quietMs: number;
+  private readonly maxWindowMs: number;
   private readonly enabled: () => boolean;
   /** Debug counters: PTBs actually signed+executed via Enoki (one per flush) and the total intents
    *  opened across them — so `window.__bulkOpen()` shows that many matches collapsed into FEWER
@@ -93,8 +108,8 @@ export class BulkOpenJob {
     private readonly batchOpen: BatchOpen,
     opts?: BulkOpenJobOptions,
   ) {
-    this.windowMs = opts?.windowMs ?? BULK_OPEN_WINDOW_MS;
-    this.loneFlushMs = opts?.loneFlushMs ?? BULK_OPEN_LONE_FLUSH_MS;
+    this.quietMs = opts?.quietMs ?? BULK_OPEN_QUIET_MS;
+    this.maxWindowMs = opts?.maxWindowMs ?? BULK_OPEN_MAX_WINDOW_MS;
     this.enabled = opts?.enabled ?? engineEnabled;
     // Debug: expose the live per-sender queue at `window.__bulkOpen()` (see inspect()).
     if (ENGINE_DEBUG && typeof window !== "undefined") {
@@ -108,7 +123,11 @@ export class BulkOpenJob {
   inspect(): {
     signedPtbs: number;
     openedIntents: number;
-    pending: { sender: string; pending: number; intentIds: (string | undefined)[] }[];
+    pending: {
+      sender: string;
+      pending: number;
+      intentIds: (string | undefined)[];
+    }[];
   } {
     return {
       signedPtbs: this.signedPtbs,
@@ -138,18 +157,16 @@ export class BulkOpenJob {
         queued: shard.pending.length,
         intentId,
       });
-      if (shard.pending.length === 1) {
-        // First intent: arm the full window plus a short lone-flush timer.
-        shard.windowTimer = setTimeout(() => this.flush(sender), this.windowMs);
-        shard.loneTimer = setTimeout(() => {
-          // Still lone — nothing else joined the window — so don't make it wait the full tick.
-          if (this.shards.get(sender)?.pending.length === 1) this.flush(sender);
-        }, this.loneFlushMs);
-      } else if (shard.loneTimer) {
-        // A real batch is forming: cancel the early flush and let the full window accumulate more.
-        clearTimeout(shard.loneTimer);
-        shard.loneTimer = null;
+      // Arm the hard cap once, on the first intent (anchored to it; never reset). It bounds the
+      // worst-case hold when opens keep trickling in and resetting the quiet timer below.
+      if (shard.capTimer === null) {
+        shard.capTimer = setTimeout(() => this.flush(sender), this.maxWindowMs);
       }
+      // Trailing debounce: (re)start the quiet timer on EVERY intent, so a flush fires `quietMs`
+      // after the LAST open — a near-simultaneous "open all" batch coalesces, a lone open still
+      // starts fast, and a steady stream is caught by the cap above.
+      if (shard.quietTimer !== null) clearTimeout(shard.quietTimer);
+      shard.quietTimer = setTimeout(() => this.flush(sender), this.quietMs);
     });
   }
 
@@ -171,8 +188,8 @@ export class BulkOpenJob {
       elog("bulkopen", "cancel", { intentId, remaining: shard.pending.length });
       cancelled.reject(new OpenCancelledError(intentId));
       if (shard.pending.length === 0) {
-        if (shard.windowTimer) clearTimeout(shard.windowTimer);
-        if (shard.loneTimer) clearTimeout(shard.loneTimer);
+        if (shard.quietTimer) clearTimeout(shard.quietTimer);
+        if (shard.capTimer) clearTimeout(shard.capTimer);
         this.shards.delete(sender);
       }
       return;
@@ -182,7 +199,7 @@ export class BulkOpenJob {
   private shardFor(sender: string): SenderShard {
     let shard = this.shards.get(sender);
     if (!shard) {
-      shard = { pending: [], windowTimer: null, loneTimer: null };
+      shard = { pending: [], quietTimer: null, capTimer: null };
       this.shards.set(sender, shard);
     }
     return shard;
@@ -192,11 +209,14 @@ export class BulkOpenJob {
   private flush(sender: string): void {
     const shard = this.shards.get(sender);
     if (!shard || shard.pending.length === 0) return;
-    if (shard.windowTimer) clearTimeout(shard.windowTimer);
-    if (shard.loneTimer) clearTimeout(shard.loneTimer);
+    if (shard.quietTimer) clearTimeout(shard.quietTimer);
+    if (shard.capTimer) clearTimeout(shard.capTimer);
     const batch = shard.pending;
     this.shards.delete(sender);
-    elog("bulkopen", "flush", { sender: sender.slice(0, 10), batch: batch.length });
+    elog("bulkopen", "flush", {
+      sender: sender.slice(0, 10),
+      batch: batch.length,
+    });
     void this.openBatch(batch);
   }
 
@@ -213,11 +233,26 @@ export class BulkOpenJob {
   private async openBatch(batch: PendingOpen[]): Promise<void> {
     let results: OpenResult[];
     const done = emark("bulkopen", `openBatch n=${batch.length}`);
+    // Always-on visibility into each queued PTB sign (inspect how many opens collapse into ONE tx).
+    console.log(
+      `🧾 [PTB sign] bulk-open · ${batch.length} open(s) → ONE sponsored PTB`,
+      batch.map((p) => ({
+        game: p.params.label,
+        stake: String(p.params.amount),
+        partyA: p.params.partyA.address,
+        partyB: p.params.partyB.address,
+        intentId: p.intentId,
+      })),
+    );
     try {
       results = await this.batchOpen(batch.map((p) => p.params));
       done();
       this.signedPtbs += 1;
       this.openedIntents += batch.length;
+      console.log(
+        `✅ [PTB sign] bulk-open OK · PTB #${this.signedPtbs} · ${results.length} tunnel(s) · ${this.openedIntents} opens across ${this.signedPtbs} PTB(s)`,
+        results.map((r) => r.tunnelId),
+      );
       elog("bulkopen", "PTB signed via Enoki", {
         ptb: this.signedPtbs,
         intentsThisPtb: batch.length,
