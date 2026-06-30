@@ -8357,6 +8357,9 @@ dependencies = [
  "tunnel-core",
  "tunnel-harness",
  "uuid",
+ "wallet-pool",
+ "wallet-pool-core",
+ "wallet-pool-s3",
  "wiremock",
 ]
 

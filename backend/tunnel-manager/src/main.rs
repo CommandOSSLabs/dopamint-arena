@@ -14,6 +14,7 @@ mod stats;
 mod stats_counter;
 mod store;
 mod sui;
+mod wallet;
 mod walrus;
 
 use std::sync::Arc;
@@ -145,6 +146,20 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    // Funded seat-B wallet pool (PR #124): opened once if WALLET_POOL_ID is set, else None (bots use
+    // the placeholder identity). Same RPC + network as the settler; SUI_RPC_URL is already required.
+    let wallet_pool = crate::wallet::build(
+        config.wallet_pool_id.as_deref(),
+        config.wallet_pool_access_value.as_deref(),
+        config.sui_rpc_url.as_deref().unwrap_or_default(),
+        if config.sui_network == "mainnet" {
+            wallet_pool::Network::Mainnet
+        } else {
+            wallet_pool::Network::Testnet
+        },
+    )
+    .await?;
+
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
@@ -163,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         arena_fleet_count: config.colocated_fleet_count,
         arena_fleet_games: config.colocated_fleet_games.iter().cloned().collect(),
+        wallet_pool,
         faucet_user_amount: config.faucet_user_amount,
         faucet_internal_amount: config.faucet_internal_amount,
         faucet_cooldown_secs: config.faucet_cooldown_secs,

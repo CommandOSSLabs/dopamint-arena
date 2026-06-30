@@ -59,6 +59,7 @@ pub(crate) mod test_support {
             arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: 0,
             arena_fleet_games: std::collections::HashSet::new(),
+            wallet_pool: None,
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,

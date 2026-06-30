@@ -43,6 +43,9 @@ pub struct AppState {
     /// Games the co-located fleet serves (config `FLEET_COLOCATED_GAMES`). A game not in this set has
     /// an effective cap of 0 — the trusted-subset gate (a `play_game` arm may exist before it's live).
     pub arena_fleet_games: std::collections::HashSet<String>,
+    /// Funded seat-B identity source (PR #124): `Some` when `WALLET_POOL_ID` is configured, else
+    /// `None` (on-demand bots use the deterministic placeholder address).
+    pub wallet_pool: Option<crate::wallet::WalletPoolSource>,
     /// Whole-token MTPS one public-faucet pull mints (config `FAUCET_USER_AMOUNT`).
     pub faucet_user_amount: u64,
     /// Whole-token MTPS the internal faucet mints by default (config `FAUCET_INTERNAL_AMOUNT`);
@@ -97,6 +100,7 @@ impl AppState {
             arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: count,
             arena_fleet_games: games.into_iter().collect(),
+            wallet_pool: None,
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,

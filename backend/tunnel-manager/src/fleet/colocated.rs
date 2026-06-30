@@ -58,12 +58,20 @@ pub async fn reserve_or_spawn(
     // `notify(Reserved/Opened)` reaches it; its lifecycle runs in a one-shot task.
     let match_key = DurableSigner::from_secret(&random_secret());
     let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel();
+    // Seat-B on-chain identity: a real funded address checked out of the wallet pool (PR #124) when
+    // configured, else a distinct deterministic placeholder (a fixed index would collide across
+    // concurrent matches). A checkout error is non-fatal — fall back to the placeholder.
+    let address = match state.wallet_pool.as_ref().map(|p| p.checkout_address()) {
+        Some(Ok(addr)) => addr,
+        Some(Err(e)) => {
+            tracing::warn!("wallet pool checkout failed, using placeholder: {e:#}");
+            bot_address(game, ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+        }
+        None => bot_address(game, ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+    };
     let bot = BotHandle {
         eph_pubkey: hex::encode(match_key.public_key()),
-        // Distinct placeholder seat-B identity per spawn (a fixed index would collide across
-        // concurrent matches). Replaced by a wallet-pool checkout (`get_member_key(Ordinal)`) once
-        // the funded 1M-pool crate is in this branch — see ADR-0028 / wallet-pool (PR #124).
-        address: bot_address(game, ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        address,
         ctrl: ctrl_tx,
     };
     let (reservation, bot_id) = state.fleet.reserve_under_cap(game, cap, now_ms, bot)?;
