@@ -1054,9 +1054,22 @@ mod tests {
         );
     }
 
+    // Render help at a fixed width so the example/flag assertions don't depend on the ambient
+    // terminal: clap wraps `write_long_help` to `COLUMNS`/terminal size, and a degenerate
+    // `COLUMNS=0` (common in non-interactive shells) splits the long example lines and breaks
+    // `contains`. Production `help_text()` stays ambient-width for real `--help`.
+    fn help_text_at_fixed_width() -> String {
+        let mut help = Vec::new();
+        Raw::command()
+            .term_width(200)
+            .write_long_help(&mut help)
+            .expect("help renders");
+        String::from_utf8(help).expect("clap help is utf8")
+    }
+
     #[test]
     fn help_documents_common_runs_and_value_meanings() {
-        let help = help_text();
+        let help = help_text_at_fixed_width();
 
         assert!(help.contains("Run the local memory-anchored tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
@@ -1083,7 +1096,7 @@ mod tests {
 
     #[test]
     fn help_documents_sui_sponsored_composition_flags() {
-        let help = help_text();
+        let help = help_text_at_fixed_width();
 
         assert!(help.contains("--anchor <memory|sui-sponsored>"));
         assert!(help.contains("  sui-sponsored: Sui Tunnel anchor"));
