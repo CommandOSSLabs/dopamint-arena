@@ -102,6 +102,43 @@ test("publishTranscript targets the session-scoped backend route", async () => {
   assert.equal(postedHeaders["Authorization"], "Bearer tok_test");
 });
 
+test("publishTranscript refreshes credentials and retries when the session expired", async () => {
+  // A long-running agent registers once at startup; the backend evicts the
+  // session after its TTL, so the next publish 404s. The client must invoke its
+  // refresh callback and retry the publish with the fresh credentials instead of
+  // failing forever.
+  const refreshed = { sessionId: "sess_fresh", statsToken: "tok_fresh" };
+  const publishUrls: string[] = [];
+  let refreshCalls = 0;
+  mockFetch((_url, _body, init) => {
+    const auth = ((init?.headers as Record<string, string> | undefined) ?? {})
+      .Authorization;
+    publishUrls.push(_url);
+    return auth === "Bearer tok_expired"
+      ? new Response("unknown_session", { status: 404 })
+      : new Response("{}", { status: 200 });
+  });
+  const client = new OllamaBackendClient(
+    "http://localhost:11434",
+    "http://localhost:8080",
+    "qwen2.5:1.5b",
+    SPEED,
+    "sess_expired",
+    "tok_expired",
+    () => {
+      refreshCalls += 1;
+      return Promise.resolve(refreshed);
+    },
+  );
+  await client.publishTranscript([{ sender: "bot-alice", text: "hi" }]);
+  assert.equal(refreshCalls, 1);
+  assert.equal(publishUrls.length, 2);
+  assert.equal(
+    publishUrls[1],
+    "http://localhost:8080/v1/sessions/sess_fresh/chat/live/publish",
+  );
+});
+
 test("chat surfaces a non-2xx as an error", async () => {
   globalThis.fetch = (() =>
     Promise.resolve(new Response("boom", { status: 500 }))) as unknown as typeof fetch;

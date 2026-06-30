@@ -37,11 +37,12 @@ export async function main(): Promise<void> {
   console.log("[chat-agent] operator address:", operatorAddress);
   console.log("[chat-agent] bob address:", bobAddress);
   const sui = createSuiClient(cfg.suiRpcUrl);
+  // Register once at startup, then reuse the same call to re-register on the
+  // 401/404 that follows the backend's session-TTL eviction — a long-running
+  // agent would otherwise lose transcript publishing after ~24h.
+  const register = () => registerChatSessionWithRetry(cfg.backendUrl, operatorAddress);
   console.log("[chat-agent] registering chat session...");
-  const chatSession = await registerChatSessionWithRetry(
-    cfg.backendUrl,
-    operatorAddress,
-  );
+  const chatSession = await register();
   console.log("[chat-agent] chat session:", chatSession.sessionId);
   const ollama = new OllamaBackendClient(
     cfg.ollamaUrl,
@@ -50,6 +51,7 @@ export async function main(): Promise<void> {
     cfg.ollamaSpeed,
     chatSession.sessionId,
     chatSession.statsToken,
+    register,
   );
 
   const botNeed = BigInt(cfg.stakeRaw) * 2n;

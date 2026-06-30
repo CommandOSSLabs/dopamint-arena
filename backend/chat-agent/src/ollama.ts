@@ -115,8 +115,15 @@ export class OllamaBackendClient {
   readonly backendUrl: string;
   readonly model: string;
   private readonly speed: OllamaSpeedOptions;
-  private readonly sessionId: string;
-  private readonly statsToken: string;
+  private sessionId: string;
+  private statsToken: string;
+  /**
+   * Re-registers the chat session and returns fresh credentials. The agent
+   * registers once at startup, but the backend evicts idle sessions after its
+   * TTL, so `publishTranscript` calls this on a 401/404 and retries instead of
+   * failing every transcript from then on.
+   */
+  private readonly refreshCredentials?: () => Promise<ChatSessionCredentials>;
 
   constructor(
     ollamaUrl: string,
@@ -125,6 +132,7 @@ export class OllamaBackendClient {
     speed: OllamaSpeedOptions,
     sessionId: string,
     statsToken: string,
+    refreshCredentials?: () => Promise<ChatSessionCredentials>,
   ) {
     this.ollamaUrl = ollamaUrl.replace(/\/+$/, "");
     this.backendUrl = backendUrl.replace(/\/+$/, "");
@@ -132,6 +140,7 @@ export class OllamaBackendClient {
     this.speed = speed;
     this.sessionId = sessionId;
     this.statsToken = statsToken;
+    this.refreshCredentials = refreshCredentials;
   }
 
   /** Non-streaming chat completion; output length is capped by `num_predict`. */
@@ -174,8 +183,28 @@ export class OllamaBackendClient {
   async publishTranscript(
     messages: { sender: string; text: string }[],
   ): Promise<void> {
+    let resp = await this.postPublish(messages);
+    // A 401/404 means the session was evicted (the backend expires idle
+    // sessions; the agent registers once at startup). Re-register once and
+    // retry so a long-running agent keeps the spectator feed live.
+    if ((resp.status === 401 || resp.status === 404) && this.refreshCredentials) {
+      const creds = await this.refreshCredentials();
+      this.sessionId = creds.sessionId;
+      this.statsToken = creds.statsToken;
+      resp = await this.postPublish(messages);
+    }
+    if (!resp.ok) {
+      throw new Error(
+        `publish transcript failed: ${resp.status} ${await resp.text()}`,
+      );
+    }
+  }
+
+  private async postPublish(
+    messages: { sender: string; text: string }[],
+  ): Promise<Response> {
     const url = `${this.backendUrl}/v1/sessions/${this.sessionId}/chat/live/publish`;
-    const resp = await fetch(url, {
+    return fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -183,10 +212,5 @@ export class OllamaBackendClient {
       },
       body: JSON.stringify({ messages }),
     });
-    if (!resp.ok) {
-      throw new Error(
-        `publish transcript failed: ${resp.status} ${await resp.text()}`,
-      );
-    }
   }
 }
