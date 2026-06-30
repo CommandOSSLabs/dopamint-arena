@@ -9,10 +9,9 @@ use sui_tunnel_anchor::{
 use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BenchMode {
-    PerMatchSigners,
-    PreInitializedSigners,
-    CompareSigners,
+pub enum SignerInitMode {
+    PerMatch,
+    PreInitialized,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -54,7 +53,7 @@ pub struct BenchOpts {
     pub workers: usize,
     pub duration_secs: u64,
     pub matches: Option<u64>,
-    pub bench_mode: BenchMode,
+    pub signer_init_mode: SignerInitMode,
     pub protocol_id: &'static str,
     /// Protocol scenario for generated matches (`Varied` by default).
     pub scenario: ScenarioMode,
@@ -92,14 +91,12 @@ throughput, frame bytes, match counts, and resource usage. It uses the memory \
 anchor by default, runs CPU-local with local frame transport, and submits no \
 chain transactions.",
     after_help = "Examples:\n  \
-fleet-bench --anchor memory --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard\n  \
-fleet-bench --bench-mode compare-signers --matches 1000 --frame-codec json\n  \
-fleet-bench --bench-mode pre-initialized-signers --matches 1000 --frame-codec bcs\n  \
+fleet-bench --anchor memory --signer-init-mode per-match --matches 50 --scenario golden --frame-codec postcard\n  \
+fleet-bench --signer-init-mode pre-initialized --matches 1000 --frame-codec bcs\n  \
 fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory\n\n\
-Bench mode values:\n  \
-per-match-signers: create signer material inside each measured match\n  \
-pre-initialized-signers: create all signer material before the timed run\n  \
-compare-signers: run per-match-signers first, then pre-initialized-signers\n\n\
+Signer init mode values:\n  \
+per-match: create signer material inside each measured match\n  \
+pre-initialized: create all signer material before the timed run\n\n\
 Protocol IDs:\n  \
 fleet-bench executes every ported Rust protocol ID:\n  \
 api_credits.v1, battleship.v1, battleship.series.v1, blackjack.bet.v1,\n  \
@@ -144,13 +141,13 @@ struct Raw {
     /// Stop after exactly this many matches. Useful for golden regressions.
     #[arg(long, value_name = "N")]
     matches: Option<u64>,
-    /// Measurement mode: per-match-signers, pre-initialized-signers, or compare-signers.
+    /// Signer initialization timing: per-match or pre-initialized.
     #[arg(
-        long = "bench-mode",
-        default_value = "per-match-signers",
-        value_name = "per-match-signers|pre-initialized-signers|compare-signers"
+        long = "signer-init-mode",
+        default_value = "per-match",
+        value_name = "per-match|pre-initialized"
     )]
-    bench_mode: String,
+    signer_init_mode: String,
     /// Frame wire codec: json, bcs, or postcard.
     #[arg(
         long = "frame-codec",
@@ -304,24 +301,19 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         return Err("--workers must be at least 1".to_string());
     }
 
-    let bench_mode = match raw.bench_mode.as_str() {
-        "per-match-signers" => BenchMode::PerMatchSigners,
-        "pre-initialized-signers" => BenchMode::PreInitializedSigners,
-        "compare-signers" => BenchMode::CompareSigners,
+    let signer_init_mode = match raw.signer_init_mode.as_str() {
+        "per-match" => SignerInitMode::PerMatch,
+        "pre-initialized" => SignerInitMode::PreInitialized,
         other => {
             return Err(format!(
-                "--bench-mode must be per-match-signers|pre-initialized-signers|compare-signers, got {other}"
+                "--signer-init-mode must be per-match|pre-initialized, got {other}"
             ))
         }
     };
-    if matches!(
-        bench_mode,
-        BenchMode::PreInitializedSigners | BenchMode::CompareSigners
-    ) && raw.matches.is_none()
-    {
+    if signer_init_mode == SignerInitMode::PreInitialized && raw.matches.is_none() {
         return Err(format!(
-            "--bench-mode {} requires --matches so the full signer pool can be created before timing",
-            raw.bench_mode
+            "--signer-init-mode {} requires --matches so the full signer pool can be created before timing",
+            raw.signer_init_mode
         ));
     }
 
@@ -479,7 +471,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         workers,
         duration_secs: raw.duration,
         matches: raw.matches,
-        bench_mode,
+        signer_init_mode,
         protocol_id,
         scenario,
         frame_codec,
@@ -510,7 +502,7 @@ mod tests {
         .unwrap();
         assert_eq!(o.duration_secs, 15);
         assert_eq!(o.matches, None);
-        assert_eq!(o.bench_mode, BenchMode::PerMatchSigners);
+        assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
         assert_eq!(o.protocol_id, "blackjack.bet.v1");
         assert!(o.workers >= 1);
     }
@@ -527,38 +519,38 @@ mod tests {
     }
 
     #[test]
-    fn explicit_workers_matches_and_bench_mode() {
+    fn explicit_workers_matches_and_signer_init_mode() {
         let o = parse_v(&[
             "--workers",
             "1",
             "--matches",
             "10",
-            "--bench-mode",
-            "per-match-signers",
+            "--signer-init-mode",
+            "per-match",
         ])
         .unwrap();
         assert_eq!(o.workers, 1);
         assert_eq!(o.matches, Some(10));
-        assert_eq!(o.bench_mode, BenchMode::PerMatchSigners);
+        assert_eq!(o.signer_init_mode, SignerInitMode::PerMatch);
     }
 
     #[test]
     fn pre_initialized_signers_requires_matches() {
-        let err = parse_v(&["--bench-mode", "pre-initialized-signers"]).unwrap_err();
+        let err = parse_v(&["--signer-init-mode", "pre-initialized"]).unwrap_err();
         assert!(err.contains("--matches"), "got: {err}");
-        assert!(parse_v(&["--bench-mode", "pre-initialized-signers", "--matches", "4"]).is_ok());
+        assert!(parse_v(&["--signer-init-mode", "pre-initialized", "--matches", "4"]).is_ok());
     }
 
     #[test]
     fn scenario_is_varied_by_default_and_golden_opts_in() {
         assert_eq!(
-            parse_v(&["--bench-mode", "per-match-signers"])
+            parse_v(&["--signer-init-mode", "per-match"])
                 .unwrap()
                 .scenario,
             ScenarioMode::Varied
         );
         assert_eq!(
-            parse_v(&["--bench-mode", "per-match-signers", "--scenario", "golden"])
+            parse_v(&["--signer-init-mode", "per-match", "--scenario", "golden"])
                 .unwrap()
                 .scenario,
             ScenarioMode::Golden
@@ -592,21 +584,21 @@ mod tests {
     #[test]
     fn frame_codec_defaults_to_json_and_parses_each_variant() {
         assert_eq!(
-            parse_v(&["--bench-mode", "per-match-signers"])
+            parse_v(&["--signer-init-mode", "per-match"])
                 .unwrap()
                 .frame_codec,
             FrameCodecKind::Json
         );
         assert_eq!(
-            parse_v(&["--bench-mode", "per-match-signers", "--frame-codec", "bcs"])
+            parse_v(&["--signer-init-mode", "per-match", "--frame-codec", "bcs"])
                 .unwrap()
                 .frame_codec,
             FrameCodecKind::Bcs
         );
         assert_eq!(
             parse_v(&[
-                "--bench-mode",
-                "per-match-signers",
+                "--signer-init-mode",
+                "per-match",
                 "--frame-codec",
                 "postcard"
             ])
@@ -991,14 +983,14 @@ mod tests {
         assert!(help.contains("Run the local memory-anchored tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
         assert!(help.contains(
-            "fleet-bench --anchor memory --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard"
+            "fleet-bench --anchor memory --signer-init-mode per-match --matches 50 --scenario golden --frame-codec postcard"
         ));
         assert!(help.contains(
             "fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied --transcript-recorder memory"
         ));
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
-        assert!(help.contains("per-match-signers|pre-initialized-signers|compare-signers"));
+        assert!(help.contains("per-match|pre-initialized"));
         assert!(help.contains("fleet-bench executes every ported Rust protocol ID"));
         assert!(!help.contains("fleet-bench currently executes"));
         assert!(help.contains("blackjack.bet.v1"));

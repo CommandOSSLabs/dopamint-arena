@@ -1,7 +1,7 @@
 //! `fleet-bench` swarm bench binary. Parses flags, runs the rayon fleet under a
 //! resource sampler, and prints the loadbench-shaped report.
 
-use fleet_bench::cli::{self, AnchorMode, BenchMode};
+use fleet_bench::cli::{self, AnchorMode, SignerInitMode};
 use fleet_bench::party_driver::build_sui_sponsored_bench_context;
 use fleet_bench::report;
 use fleet_bench::{resources, swarm};
@@ -34,10 +34,10 @@ fn main() {
         }
     };
 
-    let (simple, preinitialized, res) = match opts.bench_mode {
-        BenchMode::PerMatchSigners => {
+    let (outcome, res) = match opts.signer_init_mode {
+        SignerInitMode::PerMatch => {
             let sampler = resources::start(250, opts.workers);
-            let simple = swarm::run_fresh_keys(
+            let outcome = swarm::run_fresh_keys(
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
@@ -48,11 +48,11 @@ fn main() {
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
-            (simple, None, sampler.stop())
+            (outcome, sampler.stop())
         }
-        BenchMode::PreInitializedSigners => {
+        SignerInitMode::PreInitialized => {
             let sampler = resources::start(250, opts.workers);
-            let preinitialized = swarm::run_preinitialized_signers(
+            let outcome = swarm::run_preinitialized_signers(
                 opts.workers,
                 opts.duration_secs,
                 opts.matches.expect("validated by cli"),
@@ -63,41 +63,8 @@ fn main() {
                 opts.transcript_recorder,
                 opts.protocol_id,
             );
-            // Report the steady-state window as the headline; no parenthetical.
-            (preinitialized, None, sampler.stop())
-        }
-        BenchMode::CompareSigners => {
-            // Per-match signer window first (the resources line describes it), then
-            // the steady-state pre-initialized signer window.
-            let sampler = resources::start(250, opts.workers);
-            let simple = swarm::run_fresh_keys(
-                opts.workers,
-                opts.duration_secs,
-                opts.matches,
-                opts.scenario,
-                opts.frame_codec,
-                opts.anchor_mode,
-                sui_context.as_ref(),
-                opts.transcript_recorder,
-                opts.protocol_id,
-            );
-            let res = sampler.stop();
-            let preinitialized = swarm::run_preinitialized_signers(
-                opts.workers,
-                opts.duration_secs,
-                opts.matches.expect("validated by cli"),
-                opts.scenario,
-                opts.frame_codec,
-                opts.anchor_mode,
-                sui_context.as_ref(),
-                opts.transcript_recorder,
-                opts.protocol_id,
-            );
-            (simple, Some(preinitialized), res)
+            (outcome, sampler.stop())
         }
     };
-    print!(
-        "{}",
-        report::render(&opts, &simple, preinitialized.as_ref(), &res)
-    );
+    print!("{}", report::render(&opts, &outcome, &res));
 }

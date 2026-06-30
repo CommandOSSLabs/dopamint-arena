@@ -1,6 +1,5 @@
 //! Console report, format-parity with the loadbench swarm output. Pure string
-//! building — the binary prints the result. Headline lines describe the first
-//! bench window; pre-initialized signer TPS is appended in compare mode.
+//! building — the binary prints the result.
 
 use crate::cli::BenchOpts;
 use crate::resources::ResourceSummary;
@@ -48,22 +47,10 @@ pub fn format_resources(r: &ResourceSummary) -> String {
     )
 }
 
-pub fn render(
-    opts: &BenchOpts,
-    simple: &SwarmOutcome,
-    preinitialized: Option<&SwarmOutcome>,
-    res: &ResourceSummary,
-) -> String {
+pub fn render(opts: &BenchOpts, simple: &SwarmOutcome, res: &ResourceSummary) -> String {
     let secs = simple.elapsed_ms as f64 / 1000.0;
     let tps = move_tps(simple.moves, simple.elapsed_ms);
-    let tps_line = match preinitialized {
-        Some(o) => format!(
-            "{PREFIX} aggregate move-TPS: {:.1}   (pre-initialized-signers: {:.1})",
-            tps,
-            move_tps(o.moves, o.elapsed_ms)
-        ),
-        None => format!("{PREFIX} aggregate move-TPS: {:.1}", tps),
-    };
+    let tps_line = format!("{PREFIX} aggregate move-TPS: {:.1}", tps);
 
     let setup_overhead_pct = if simple.total_ns_total == 0 {
         0.0
@@ -125,16 +112,16 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{AnchorMode, BenchMode, BenchOpts, TranscriptRecorderMode};
+    use crate::cli::{AnchorMode, BenchOpts, SignerInitMode, TranscriptRecorderMode};
     use crate::resources::ResourceSummary;
     use crate::swarm::SwarmOutcome;
 
-    fn opts(workers: usize, bench_mode: BenchMode) -> BenchOpts {
+    fn opts(workers: usize, signer_init_mode: SignerInitMode) -> BenchOpts {
         BenchOpts {
             workers,
             duration_secs: 15,
             matches: None,
-            bench_mode,
+            signer_init_mode,
             protocol_id: tunnel_core::protocol_id::BLACKJACK_BET_V1,
             scenario: crate::cli::ScenarioMode::Golden,
             frame_codec: crate::cli::FrameCodecKind::Json,
@@ -187,31 +174,17 @@ mod tests {
     }
 
     #[test]
-    fn render_single_mode_has_no_parenthetical() {
+    fn render_emits_headline_metrics() {
         let s = render(
-            &opts(12, BenchMode::PerMatchSigners),
+            &opts(12, SignerInitMode::PerMatch),
             &outcome(481234, 3366, 15000),
-            None,
             &res(),
         );
         assert!(s.contains("[local/memory] fleet: workers=12\n"));
         assert!(s.contains("[local/memory] swarm: 481234 moves over 3366 matches in 15.0s\n"));
         assert!(s.contains("[local/memory] tunnels settled: 3366 (224.4/s)\n"));
         assert!(s.contains("[local/memory] aggregate move-TPS: 32082.3\n"));
-        assert!(!s.contains("pre-initialized-signers:"));
         assert!(s.contains("[local/memory] resources: cpu avg=11.2 cores"));
-    }
-
-    #[test]
-    fn render_compare_appends_preinitialized_tps() {
-        let opt = outcome(616000, 4308, 15000); // ~41066.7 TPS
-        let s = render(
-            &opts(12, BenchMode::CompareSigners),
-            &outcome(481234, 3366, 15000),
-            Some(&opt),
-            &res(),
-        );
-        assert!(s.contains("aggregate move-TPS: 32082.3   (pre-initialized-signers: 41066.7)\n"));
     }
 
     #[test]
@@ -230,7 +203,7 @@ mod tests {
             moves_dist: summarize(&[143.0, 143.0, 143.0]),
             play_ns_dist: summarize(&[266_000_000.0, 267_000_000.0, 267_000_000.0]),
         };
-        let s = render(&opts(1, BenchMode::PerMatchSigners), &o, None, &res());
+        let s = render(&opts(1, SignerInitMode::PerMatch), &o, &res());
         assert!(s.contains("[local/memory] tunnels opened: 3"), "got:\n{s}");
         assert!(
             s.contains("[local/memory] matches conducted: 3"),
