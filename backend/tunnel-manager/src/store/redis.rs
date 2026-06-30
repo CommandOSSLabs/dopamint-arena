@@ -22,6 +22,18 @@ const SEEN_TTL: i64 = 24 * 3600;
 // Count-once horizon for settled tunnels: exceeds the indexer cursor-replay window (matches SEEN_TTL).
 const SETTLED_SEEN_TTL: i64 = 24 * 3600;
 
+// Per-address fixed-window faucet rate limit. Refuse (return 0) WITHOUT incrementing when already at
+// `max`, so a rejected pull never inflates the counter (else a released slot couldn't be re-claimed);
+// otherwise INCR, set the window TTL on the first pull (the key self-expires, resetting the window),
+// and return 1. Atomic so a concurrent burst can't exceed `max`.
+// KEYS[1]=faucet:count:<addr>  ARGV[1]=window_secs  ARGV[2]=max
+const CLAIM_FAUCET_SLOT: &str = r#"
+if tonumber(redis.call('GET', KEYS[1]) or '0') >= tonumber(ARGV[2]) then return 0 end
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])) end
+return 1
+"#;
+
 // Atomic dedup-then-push for the recent-events ring. Dedup is a per-digest
 // `events:seen:<digest>` key with a TTL, so the dedup set self-expires (no unbounded growth).
 // A re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
@@ -299,6 +311,46 @@ impl ControlStore for RedisControlStore {
         raws.iter()
             .filter_map(|j| serde_json::from_str(j).ok())
             .collect()
+    }
+
+    async fn claim_faucet_slot(
+        &self,
+        address: &str,
+        window_secs: i64,
+        max_per_window: u32,
+    ) -> bool {
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                CLAIM_FAUCET_SLOT,
+                vec![format!("faucet:count:{address}")],
+                vec![window_secs.to_string(), max_per_window.to_string()],
+            )
+            .await;
+        match res {
+            Ok(allowed) => allowed == 1,
+            Err(e) => {
+                // Fail closed: a cache blip must never enable unmetered (gas-costing) mints.
+                tracing::warn!(error = %e, "redis claim_faucet_slot eval failed");
+                false
+            }
+        }
+    }
+
+    async fn faucet_window_ttl(&self, address: &str) -> Option<i64> {
+        let ttl: Result<i64, _> = self.pool.ttl(format!("faucet:count:{address}")).await;
+        match ttl {
+            Ok(secs) if secs > 0 => Some(secs),
+            _ => None,
+        }
+    }
+
+    async fn release_faucet_slot(&self, address: &str) {
+        // Give back one pull (a claimed mint that then failed). The key keeps its window TTL.
+        let res: Result<i64, _> = self.pool.decr(format!("faucet:count:{address}")).await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis release_faucet_slot decr failed");
+        }
     }
 
     // fred 9.4.0: ping takes no argument (cheat-sheet erroneously shows `ping::<String>(None)`).
@@ -1492,6 +1544,33 @@ mod tests {
             .await
             .unwrap_or(-2);
         assert!(ttl > 0, "per-digest dedup key must have a TTL, got {ttl}");
+    }
+
+    // The faucet is a self-expiring windowed counter: up to `max` pulls succeed within the window
+    // (the key carries a positive TTL), the next is refused, and releasing a slot frees one pull.
+    #[tokio::test]
+    async fn faucet_slot_allows_n_per_window_then_refuses() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisControlStore::new(pool.clone());
+        let addr = format!("0x{}", uuid::Uuid::new_v4().simple());
+        for i in 0..3 {
+            assert!(
+                s.claim_faucet_slot(&addr, 1800, 3).await,
+                "pull {i} within the limit must succeed"
+            );
+        }
+        assert!(
+            !s.claim_faucet_slot(&addr, 1800, 3).await,
+            "the 4th pull in the window is refused"
+        );
+        let ttl = s.faucet_window_ttl(&addr).await.expect("window active");
+        assert!(ttl > 0 && ttl <= 1800, "ttl within the window, got {ttl}");
+        // Releasing a slot (failed mint) frees one pull within the same window.
+        s.release_faucet_slot(&addr).await;
+        assert!(
+            s.claim_faucet_slot(&addr, 1800, 3).await,
+            "a freed slot can be re-claimed"
+        );
     }
 
     #[tokio::test]

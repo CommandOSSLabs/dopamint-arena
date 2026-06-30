@@ -57,7 +57,7 @@ function dealerPartyForWith(
   return playerPartyFor(round) === "A" ? "B" : "A";
 }
 
-export const MIN_BET = 25n;
+export const MIN_BET = 1n;
 export const ROUND_CAP = 1000n;
 const DEALER_STANDS_AT = 17;
 const BUST_AT = 21;

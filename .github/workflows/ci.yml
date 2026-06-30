@@ -32,7 +32,7 @@ jobs:
               - 'sui-tunnel-ts/**'
             move:
               - 'sui_tunnel/**'
-              - 'mtps/**'
+              - 'contracts/mtps/**'
             rust_backend:
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -100,7 +100,7 @@ jobs:
           cd sui_tunnel
           sui move build --build-env testnet
           sui move test --build-env testnet
-          cd ../mtps
+          cd ../contracts/mtps
           sui move build --build-env testnet
           sui move test --build-env testnet
 

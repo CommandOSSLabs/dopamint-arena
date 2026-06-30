@@ -47,8 +47,6 @@ import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
 const FRAME_BUDGET_MS = 10;
 const MAX_STEPS_PER_FRAME = 8;
 
-/** MTPS bank locked per seat (1 MTPS, 9 decimals) — funds MANY per-game stakes. */
-const LOCKED_PER_SEAT = 1_000_000_000n;
 /** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 
@@ -494,14 +492,23 @@ class SoloBotSession<
     this.pendingIntent = undefined;
     this.paused = false;
 
-    // Per-game stake from the lobby (the small swap), floored at the game's minimum.
+    // Per-game stake is the SMALL swap — the game's minimum — so a funded bank survives MANY duels
+    // on one tunnel. The bank, not the stake, is what carries across duels: the session ends only
+    // when a seat can no longer fund the next stake. Keeping the stake at the minimum is what makes
+    // auto-rematch actually replay instead of bankrupting a seat after the first duel.
+    const stakePerGame = BigInt(this.spec.minStake);
+    // The bank funded on-chain per seat: the chunk brought to the table (lobby stake / AUTO_STAKE),
+    // never below one stake so a duel can't underflow a seat (u64 out of range). MTPS withdraws/
+    // faucets it from the address balance; the SUI fallback keeps its fixed MIST bank.
     const floored = Math.floor(nextStake);
-    const stakePerGame = BigInt(
-      Math.max(
-        Number(this.spec.minStake),
-        Number.isFinite(floored) ? floored : 0,
-      ),
-    );
+    const fundedPerSeat = isMtpsConfigured
+      ? BigInt(
+          Math.max(
+            Number(stakePerGame),
+            Number.isFinite(floored) ? floored : 0,
+          ),
+        )
+      : SUI_PER_SEAT;
     this.stake = Number(stakePerGame);
     this.emit();
 
@@ -510,10 +517,6 @@ class SoloBotSession<
 
     void (async () => {
       try {
-        // The LARGE bank funded on-chain per seat (vs the small per-game stake). Multi-game
-        // swaps `stakePerGame` per duel off this bank, so it survives MANY duels (not one).
-        const fundedPerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
-
         const reads = deps.client as unknown as SuiReads;
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };

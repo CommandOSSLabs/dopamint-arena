@@ -82,8 +82,9 @@ jobs:
           VITE_ENOKI_API_KEY: ${{ secrets.VITE_ENOKI_API_KEY }}
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
           VITE_MTPS_PACKAGE_ID: ${{ secrets.VITE_MTPS_PACKAGE_ID }}
-          VITE_MTPS_FAUCET_ID: ${{ secrets.VITE_MTPS_FAUCET_ID }}
           VITE_MTPS_COIN_TYPE: ${{ secrets.VITE_MTPS_COIN_TYPE }}
+          VITE_AGENT_ALLOWANCE_PACKAGE_ID: ${{ secrets.VITE_AGENT_ALLOWANCE_PACKAGE_ID }}
+          VITE_STREAMING_PAYMENT_PACKAGE_ID: ${{ secrets.VITE_STREAMING_PAYMENT_PACKAGE_ID }}
         run: pnpm build
 
       - name: Deploy to S3

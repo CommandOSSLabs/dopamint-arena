@@ -49,11 +49,12 @@ import {
 } from "./engine/selfPlay";
 import { type BotDifficulty } from "./engine/bot";
 
-/** MTPS stake locked per seat (1 MTPS, 9 decimals). */
-const LOCKED_PER_SEAT = 1_000_000_000n;
-/** SUI-fallback stake per seat (MIST), when the MTPS env is unset. */
+const STAKE = 1n; // per-game wager shifted loser -> winner: the winner takes 1 MTPS (0-decimal; ADR-0023)
+/** MTPS bank locked per seat — funds MANY duels off one tunnel before a seat is exhausted (the
+ *  session ends only when neither side can fund the next STAKE). */
+const LOCKED_PER_SEAT = 500n; // 500 MTPS/seat → ~500 games per tunnel
+/** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
-const STAKE = 100n;
 // Throughput, not per-move pacing: the driver applies moves in a synchronous batch
 // and only renders + yields to the UI once per ~frame. This uncaps TPS from both the
 // setTimeout(0) clamp (~4ms/move) and the per-move React re-render of the boards,

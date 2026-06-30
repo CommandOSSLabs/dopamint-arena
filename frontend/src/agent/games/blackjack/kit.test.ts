@@ -16,9 +16,11 @@ function mulberry32(seed: number): () => number {
 describe("blackjack kit", () => {
   // Small stacks so the game terminates in a few hands; each card costs 4 moves
   // (A commit, B commit, A reveal, B reveal) so the total move count per hand is high.
+  // Sized to MIN_BET (1): the bot always bets the minimum, so two equal stacks are a
+  // step-1 random walk to ruin (~N² hands) — keep N tiny to terminate within the cap.
   const ctx: ProtocolContext = {
     tunnelId: "bj-1",
-    initialBalances: { a: 200n, b: 200n },
+    initialBalances: { a: 10n, b: 10n },
   };
 
   it("uses the SDK commit-reveal protocol", () => {

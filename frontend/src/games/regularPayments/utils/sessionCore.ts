@@ -45,7 +45,17 @@ export function verifyMove(
     return { valid: false, error: "Payment amount must be positive" };
   }
 
-  // 2. Balance constraint checks
+  // 2. Price validation: the amount must match a catalog price. A parameter check, so it runs
+  // before the balance check — a wrong amount is "invalid price", not "insufficient balance".
+  const isValidPrice = catalog.some((p) => p.priceMtps === move.amount);
+  if (!isValidPrice) {
+    return {
+      valid: false,
+      error: "Payment amount does not match any catalog item price",
+    };
+  }
+
+  // 3. Balance constraint checks
   if (move.from === "A" && move.amount > state.balanceA) {
     return {
       valid: false,
@@ -56,15 +66,6 @@ export function verifyMove(
     return {
       valid: false,
       error: "Shop has insufficient balance to issue refund",
-    };
-  }
-
-  // 3. Price validation check
-  const isValidPrice = catalog.some((p) => p.priceMtps === move.amount);
-  if (!isValidPrice) {
-    return {
-      valid: false,
-      error: "Payment amount does not match any catalog item price",
     };
   }
 

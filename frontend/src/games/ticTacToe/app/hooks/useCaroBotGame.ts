@@ -57,8 +57,8 @@ const STEP_MS = 350;
 // model — so TPS is CPU-bound instead of capped at one move per timer tick. 16ms ≈ one 60Hz frame.
 const FRAME_BUDGET_MS = 16;
 const MIN_PLAY_MIST = 20_000_000n;
-// MTPS mode: per-seat stake (1 MTPS, 9 decimals); both seats funded from one coin.
-const MTPS_PER_SEAT = 1_000_000_000n;
+// MTPS mode: per-seat stake (1 MTPS; 0 decimals, ADR-0023); both seats funded from one coin.
+const MTPS_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0023)
 // SUI-fallback per-seat stake (MIST), when the MTPS env is unset.
 const SUI_PER_SEAT = 1n;
 const NEXT_GAME_MS = 1200;
@@ -366,7 +366,6 @@ export function useCaroBotGame(
                 coinType,
                 stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
-                  signExec: xSignExec,
                   owner: bots.x.address,
                   need: 2n * stakePerSeat,
                 }),

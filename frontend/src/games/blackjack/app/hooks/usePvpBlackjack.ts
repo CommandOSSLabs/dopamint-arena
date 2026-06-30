@@ -67,14 +67,16 @@ const MP_URL =
       ? location.origin
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
-/** Default buy-in (bankroll) deposited on-chain per seat (MIST). Each player chooses their own
- *  before matchmaking; the bet protocol caps each round at min(both balances). */
-const DEFAULT_STAKE = 5000n;
-/** Buy-in options offered before "Find match" (MIST units, shown 1:1 as chips). */
-const FUND_OPTIONS = [2500, 5000, 10000, 25000] as const;
+/** Default buy-in (bankroll) deposited on-chain per seat — whole MTPS (0-decimal; ADR-0023), shown
+ *  1:1 as chips. Each player chooses their own before matchmaking; the bet protocol caps each round
+ *  at min(both balances). */
+const DEFAULT_STAKE = 1000n;
+/** Buy-in options offered before "Find match" — whole MTPS (0-decimal), shown 1:1 as chips. Stacks
+ *  big enough for many rounds (min-bet 1, options up to 100); each fits a single faucet pull. */
+const FUND_OPTIONS = [500, 1000, 2500] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const NEXT_MS = 900; // pause before auto-dealing the next round
-const DEFAULT_BET = 100; // auto's starting bet until the player picks one
+const DEFAULT_BET = Number(MIN_BET); // auto's starting bet until the player picks one
 
 /** Pacing for auto-driven commit/reveal plumbing moves (ms). */
 const PLUMBING_MS = 120;

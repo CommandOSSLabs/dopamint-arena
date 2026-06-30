@@ -28,6 +28,17 @@ pub struct AppState {
     pub pairing: crate::stats_counter::MatchPairingMetrics,
     /// Shared transcript for the bot-vs-bot live chat feed, fanned out via SSE.
     pub chat: crate::chat_store::ChatTranscriptStore,
+    /// Whole-token MTPS one public-faucet pull mints (config `FAUCET_USER_AMOUNT`).
+    pub faucet_user_amount: u64,
+    /// Whole-token MTPS the internal faucet mints by default (config `FAUCET_INTERNAL_AMOUNT`);
+    /// capped at `crate::sui::MAX_MINT_PER_CALL`.
+    pub faucet_internal_amount: u64,
+    /// Public-faucet rate-limit window, seconds (config `FAUCET_COOLDOWN_SECS`).
+    pub faucet_cooldown_secs: i64,
+    /// Max public-faucet pulls per address within one window (config `FAUCET_MAX_PER_WINDOW`).
+    pub faucet_max_per_window: u32,
+    /// Shared bearer secret gating the internal faucet; `None` disables it (fail closed).
+    pub faucet_admin_token: Option<String>,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -60,6 +71,11 @@ impl AppState {
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            faucet_user_amount: 10_000,
+            faucet_internal_amount: 1_000_000,
+            faucet_cooldown_secs: 1_800,
+            faucet_max_per_window: 5,
+            faucet_admin_token: None,
         })
     }
 }

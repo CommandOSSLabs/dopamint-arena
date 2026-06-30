@@ -119,7 +119,7 @@ test("initialState waits at round_over for the first bet", () => {
 test("initialState is terminal when neither side can fund MIN_BET", () => {
   const s = proto.initialState({
     tunnelId: "0xab",
-    initialBalances: { a: 10n, b: 1000n },
+    initialBalances: { a: 0n, b: 1000n },
   });
   assert.equal(s.phase, "round_over");
   assert.ok(proto.isTerminal(s));
@@ -473,10 +473,10 @@ test("settlement transfers exactly the chosen bet", () => {
 });
 
 test("the game is terminal once neither side can fund MIN_BET", () => {
-  // a = 20 (< MIN_BET 25) -> no fundable bet -> terminal at round_over.
+  // a = 0 (< MIN_BET) -> no fundable bet -> terminal at round_over.
   const s = proto.initialState({
     tunnelId: "0xab",
-    initialBalances: { a: 20n, b: 1000n },
+    initialBalances: { a: 0n, b: 1000n },
   });
   assert.equal(s.phase, "round_over");
   assert.ok(proto.isTerminal(s));
