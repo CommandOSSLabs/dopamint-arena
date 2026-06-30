@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use wallet_pool_core::blob::{
-    aad_for, create_blob, parse_blob, serialize_blob, MemberSecret, Network, PoolBlob,
-    SealedMembers, WalletEntry, WalletRole,
+    aad_for, add_members_to_blob, create_blob, parse_blob, serialize_blob, MemberSecret, Network,
+    PoolBlob, SealedMembers, WalletEntry, WalletRole,
 };
 use wallet_pool_core::crypto::{ed25519_address, keypair_from_secret, KeyPair};
 use wallet_pool_core::envelope::{seal, unseal, AccessMode};
@@ -90,6 +90,26 @@ pub struct CreateResult {
     pub network: Network,
     /// Number of members generated (not counting the master).
     pub member_count: u32,
+}
+
+/// Options for adding members to an existing pool.
+#[derive(Clone, Debug)]
+pub struct AddMembersOptions {
+    /// Pool identifier.
+    pub id: String,
+    /// Access value that unlocks the sealed payload.
+    pub access_value: String,
+    /// Number of new member wallets to generate and append.
+    pub additional_count: u32,
+}
+
+/// Summary returned after a successful [`WalletPool::add_members`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddMembersResult {
+    /// The pool identifier.
+    pub wallet_pool_id: String,
+    /// Total number of members in the pool after the addition (not counting master).
+    pub total_member_count: u32,
 }
 
 /// Options for opening an existing wallet pool.
@@ -244,6 +264,50 @@ impl WalletPool {
             access_value,
             network: opts.network,
             member_count: opts.member_count,
+        })
+    }
+
+    /// Add new member wallets to an existing pool.
+    ///
+    /// Generates `additional_count` fresh keypairs, appends them to the public
+    /// index and the sealed secrets, re-seals with the same access value and
+    /// access mode, and writes the updated blob back to the store.
+    pub async fn add_members(&self, opts: AddMembersOptions) -> Result<AddMembersResult> {
+        if opts.additional_count == 0 {
+            return Err(Error::InvalidInput(
+                "additional_count must be greater than zero".into(),
+            ));
+        }
+
+        let mut blob = self.read_blob(&opts.id).await?;
+        if !blob.index.iter().any(|e| e.role == WalletRole::Master) {
+            return Err(Error::Core(
+                wallet_pool_core::error::Error::MasterNotRetrievable,
+            ));
+        }
+
+        let aad = aad_for(&blob);
+        let plaintext = unseal(&blob.crypto, &opts.access_value, &aad)?;
+        let mut members: SealedMembers = serde_json::from_slice(&plaintext)
+            .map_err(|e| Error::Core(wallet_pool_core::error::Error::InvalidBlob(e.to_string())))?;
+
+        add_members_to_blob(&mut blob, &mut members, opts.additional_count)?;
+
+        let plaintext = serde_json::to_vec(&members)
+            .map_err(|e| Error::Core(wallet_pool_core::error::Error::InvalidBlob(e.to_string())))?;
+        blob.crypto = seal(
+            &plaintext,
+            &opts.access_value,
+            blob.crypto.mode.clone(),
+            &aad,
+        )?;
+
+        let bytes = serialize_blob(&blob)?;
+        self.store.write(&blob.wallet_pool_id, &bytes).await?;
+
+        Ok(AddMembersResult {
+            wallet_pool_id: blob.wallet_pool_id,
+            total_member_count: blob.index.len().saturating_sub(1) as u32,
         })
     }
 
@@ -796,6 +860,56 @@ mod tests {
             .get_member_key(By::Address(member_entry.address.clone()))
             .unwrap();
         assert_eq!(by_address.public_key(), member_key.public_key());
+    }
+
+    #[tokio::test]
+    async fn add_members_preserves_passphrase_access_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FileWalletPoolStore::new(dir.path()));
+        let rpc: Arc<dyn SuiRpc> = Arc::new(MockRpc::default());
+        let pool = pool(store, rpc);
+
+        let passphrase = "correct horse battery staple".to_string();
+        let created = pool
+            .create(CreateOptions {
+                network: Network::Testnet,
+                member_count: 1,
+                access_value: Some(passphrase.clone()),
+                access_mode: AccessMode::Passphrase,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.member_count, 1);
+
+        let added = pool
+            .add_members(AddMembersOptions {
+                id: created.wallet_pool_id.clone(),
+                access_value: passphrase.clone(),
+                additional_count: 2,
+            })
+            .await
+            .unwrap();
+        assert_eq!(added.total_member_count, 3);
+
+        let handle = pool
+            .open(OpenOptions {
+                id: created.wallet_pool_id,
+                access_value: passphrase,
+                network: Network::Testnet,
+                cache_mode: CacheMode::Default,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            handle
+                .blob
+                .index
+                .iter()
+                .filter(|e| e.role == WalletRole::Member)
+                .count(),
+            3
+        );
     }
 
     #[tokio::test]
