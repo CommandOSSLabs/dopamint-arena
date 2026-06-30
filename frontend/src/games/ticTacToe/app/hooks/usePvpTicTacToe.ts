@@ -76,9 +76,9 @@ const MP_URL =
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 // Per-seat deposit and per-game stake, mode-scaled. In MTPS mode (production path) both are
-// 1 MTPS (9 decimals), so an abandoner forfeits exactly one deposit. In the SUI dev fallback
-// the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
-const MTPS_PER_SEAT = 1_000_000_000n;
+// 1 MTPS (0 decimals; ADR-0023), so an abandoner forfeits exactly one deposit. In the SUI dev
+// fallback the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
+const MTPS_PER_SEAT = 1n;
 const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
 // MTPS mode (ADR-0023): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
