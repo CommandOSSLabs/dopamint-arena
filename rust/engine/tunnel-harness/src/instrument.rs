@@ -75,11 +75,14 @@ impl<A, S: TelemetrySink + Send> InstrumentedAnchor<A, S> {
 
     #[inline]
     fn emit(&self, stage: StageId, started: Instant) {
+        // Read the clock before taking the lock so the recorded duration is the
+        // seam's latency, not seam + lock-wait under cross-seat contention.
+        let dur_ns = started.elapsed().as_nanos() as u64;
         let mut sink = self.sink.lock().expect("sink mutex poisoned");
         if sink.enabled() {
             sink.record(StageSample {
                 stage,
-                dur_ns: started.elapsed().as_nanos() as u64,
+                dur_ns,
                 cost: StageCost::default(),
             });
         }
@@ -179,11 +182,12 @@ impl<R, S: TelemetrySink + Send> InstrumentedRecorder<R, S> {
         let started = Instant::now();
         let out = self.inner.export(codec, preprocess)?;
         let len = out.byte_len();
+        let dur_ns = started.elapsed().as_nanos() as u64;
         let mut sink = self.sink.lock().expect("sink mutex poisoned");
         if sink.enabled() {
             sink.record(StageSample {
                 stage: StageId::RecorderExport,
-                dur_ns: started.elapsed().as_nanos() as u64,
+                dur_ns,
                 cost: StageCost {
                     gas_mist: 0,
                     paid_by: None,
@@ -205,11 +209,12 @@ impl<M, R: TranscriptRecorder<M> + Send + Sync, S: TelemetrySink + Send> Transcr
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
         let started = Instant::now();
         let result = self.inner.record(entry);
+        let dur_ns = started.elapsed().as_nanos() as u64;
         let mut sink = self.sink.lock().expect("sink mutex poisoned");
         if sink.enabled() {
             sink.record(StageSample {
                 stage: StageId::RecorderRecord,
-                dur_ns: started.elapsed().as_nanos() as u64,
+                dur_ns,
                 cost: StageCost::default(),
             });
         }
@@ -306,14 +311,25 @@ impl<T, S: TelemetrySink + Send> InstrumentedTransport<T, S> {
         self.bytes_sent.load(Ordering::Relaxed)
     }
 
+    /// Returns clones of the shared byte counter and sink Arc so the caller can
+    /// read metrics after moving this wrapper into a driver. No `T: Clone` needed.
+    pub fn handle(&self) -> (Arc<AtomicU64>, Arc<Mutex<S>>) {
+        (Arc::clone(&self.bytes_sent), Arc::clone(&self.sink))
+    }
+
     #[inline]
     fn emit(&self, stage: StageId, started: Instant, bytes: u64) {
+        let dur_ns = started.elapsed().as_nanos() as u64;
         let mut sink = self.sink.lock().expect("sink mutex poisoned");
         if sink.enabled() {
             sink.record(StageSample {
                 stage,
-                dur_ns: started.elapsed().as_nanos() as u64,
-                cost: StageCost { gas_mist: 0, paid_by: None, bytes },
+                dur_ns,
+                cost: StageCost {
+                    gas_mist: 0,
+                    paid_by: None,
+                    bytes,
+                },
             });
         }
     }
@@ -369,7 +385,11 @@ mod transport_tests {
         // Drain on the peer so the channel isn't dropped mid-flight.
         let _ = b.recv().await.unwrap();
         let sink = ta.into_sink();
-        let send = sink.samples().iter().find(|s| s.stage == StageId::FrameSend).unwrap();
+        let send = sink
+            .samples()
+            .iter()
+            .find(|s| s.stage == StageId::FrameSend)
+            .unwrap();
         assert_eq!(send.cost.bytes, 5);
     }
 }
