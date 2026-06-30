@@ -1181,6 +1181,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_members_appends_and_preserves_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FileWalletPoolStore::new(dir.path()));
+        let rpc: Arc<dyn SuiRpc> = Arc::new(MockRpc::default());
+        let pool = WalletPool::new(store.clone(), rpc);
+
+        let created = pool
+            .create(CreateOptions {
+                network: Network::Testnet,
+                member_count: 2,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let original_addresses: Vec<String> = {
+            let blob_bytes = store.read(&created.wallet_pool_id).await.unwrap().unwrap();
+            let blob = wallet_pool_core::blob::parse_blob(&blob_bytes).unwrap();
+            blob.index.iter().map(|e| e.address.clone()).collect()
+        };
+
+        let result = pool
+            .add_members(AddMembersOptions {
+                id: created.wallet_pool_id.clone(),
+                access_value: created.access_value.clone(),
+                additional_count: 3,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.wallet_pool_id, created.wallet_pool_id);
+        assert_eq!(result.total_member_count, 5);
+
+        // Re-open and verify.
+        let handle = pool
+            .open(OpenOptions {
+                id: created.wallet_pool_id.clone(),
+                access_value: created.access_value.clone(),
+                network: Network::Testnet,
+                cache_mode: CacheMode::None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(handle.blob.index.len(), 6); // master + 5 members
+
+        // Original addresses unchanged.
+        for (i, addr) in original_addresses.iter().enumerate() {
+            assert_eq!(handle.blob.index[i].address, *addr);
+        }
+
+        // New members have ordinals 3, 4, 5 and can resolve keys.
+        for ordinal in 3..=5 {
+            assert!(handle.get_member_key(By::Ordinal(ordinal)).is_ok());
+        }
+    }
+
+    #[tokio::test]
     async fn disabled_member_cannot_be_used() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FileWalletPoolStore::new(dir.path()));
