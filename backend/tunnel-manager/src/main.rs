@@ -14,6 +14,7 @@ mod stats;
 mod stats_counter;
 mod store;
 mod sui;
+mod sui_rpc;
 mod wallet;
 mod walrus;
 
@@ -45,8 +46,14 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let bind_addr = config.bind_addr.clone();
 
-    let settler = sui::SuiSettler::new(
+    // One governed RPC client for all fullnode traffic (settler + arena opener): a single
+    // process-wide throttle + retry/backoff against the one rate-limited node.
+    let governed_rpc = sui_rpc::GovernedRpc::new(
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
+        config.rpc_limits(),
+    );
+    let settler = sui::SuiSettler::new(
+        governed_rpc.clone(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
         config.agent_allowance_package_id.as_deref(),

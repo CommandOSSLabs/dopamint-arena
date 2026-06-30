@@ -129,8 +129,9 @@ struct OwnedRef {
 }
 
 pub struct SuiSettler {
-    http: reqwest::Client,
-    rpc_url: String,
+    /// The single governed JSON-RPC client (throttle + retry/backoff), shared with the arena
+    /// opener so all fullnode traffic is throttled together against the one rate-limited node.
+    rpc: std::sync::Arc<crate::sui_rpc::GovernedRpc>,
     package_id: Address,
     coin_type: TypeTag,
     /// MTPS `AdminCap` object id (ADR-0023), owned by `sender`. `None` = the faucet is unconfigured
@@ -235,7 +236,7 @@ pub(crate) fn dryrun_effects_ok(resp: &serde_json::Value) -> Result<(), String> 
 
 impl SuiSettler {
     pub fn new(
-        rpc_url: String,
+        rpc: std::sync::Arc<crate::sui_rpc::GovernedRpc>,
         package_id: &str,
         coin_type: &str,
         agent_allowance_package_id: Option<&str>,
@@ -276,8 +277,7 @@ impl SuiSettler {
             })
             .unwrap_or(0);
         Ok(Self {
-            http: reqwest::Client::new(),
-            rpc_url,
+            rpc,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
             admin_cap_id,
@@ -296,8 +296,10 @@ impl SuiSettler {
         let signer = Ed25519PrivateKey::new([0u8; 32]);
         let sender = signer.public_key().derive_address();
         Self {
-            http: reqwest::Client::new(),
-            rpc_url: String::new(),
+            rpc: crate::sui_rpc::GovernedRpc::new(
+                String::new(),
+                crate::sui_rpc::RpcLimits::default(),
+            ),
             package_id: Address::ZERO,
             coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
             admin_cap_id: None,
@@ -464,28 +466,19 @@ impl SuiSettler {
 
     // ---- JSON-RPC reads/execute (compile-verified; e2e-deferred, see module docs) ----
 
+    /// Legacy adapter for the mint/sponsor paths: delegate to the governed client and flatten
+    /// the transient/rejected taxonomy back to `anyhow` (those callers don't distinguish). The
+    /// settle path uses `RpcError` directly (see `submit_close_typed`) so it can map transient
+    /// 429s to a 503 instead of a terminal 422.
     async fn rpc(
         &self,
         method: &str,
         params: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params});
-        let resp: serde_json::Value = self
-            .http
-            .post(&self.rpc_url)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        if let Some(err) = resp.get("error") {
-            return Err(anyhow!("rpc {method}: {err}"));
-        }
-        Ok(resp
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null))
+        self.rpc
+            .call(method, params)
+            .await
+            .map_err(|e| anyhow!("rpc {method}: {e}"))
     }
 
     async fn resolve_shared(&self, object_id: &str) -> anyhow::Result<SharedRef> {

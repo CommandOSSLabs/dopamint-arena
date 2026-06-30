@@ -24,16 +24,13 @@ pub(crate) mod test_support {
     pub(crate) fn test_state() -> SharedState {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-        let settler = crate::sui::SuiSettler::new(
+        let rpc = crate::sui_rpc::GovernedRpc::new(
             "http://127.0.0.1:9999".into(),
-            "0x2",
-            "0x2::sui::SUI",
-            None,
-            None,
-            &key,
-            None,
-        )
-        .expect("test settler");
+            crate::sui_rpc::RpcLimits::default(),
+        );
+        let settler =
+            crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, None)
+                .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
         let ollama = crate::ollama::OllamaClient::new(
             "http://localhost:11434".into(),
@@ -1218,16 +1215,10 @@ mod tests {
     fn settler_with_admin_cap(rpc_url: &str) -> crate::sui::SuiSettler {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-        crate::sui::SuiSettler::new(
-            rpc_url.into(),
-            "0x2",
-            "0x2::sui::SUI",
-            None,
-            None,
-            &key,
-            Some("0x5"),
-        )
-        .expect("settler with admin cap")
+        let rpc =
+            crate::sui_rpc::GovernedRpc::new(rpc_url.into(), crate::sui_rpc::RpcLimits::default());
+        crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, Some("0x5"))
+            .expect("settler with admin cap")
     }
 
     // The public faucet is 503 when the on-chain faucet is unconfigured (no AdminCap) — it never
