@@ -280,6 +280,56 @@ pub fn create_blob(
     })
 }
 
+/// Append `additional_count` new member wallets to an existing blob and secret set.
+///
+/// New entries continue ordinals from the end of the existing index. The master
+/// entry (ordinal 0) is never modified.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidInput`] if `additional_count` is zero or greater than
+/// 10_000_000.
+pub fn add_members_to_blob(
+    blob: &mut PoolBlob,
+    sealed_members: &mut SealedMembers,
+    additional_count: u32,
+) -> Result<()> {
+    if additional_count == 0 {
+        return Err(Error::InvalidInput(
+            "additional_count must be greater than zero".into(),
+        ));
+    }
+    if additional_count > 10_000_000 {
+        return Err(Error::InvalidInput(
+            "additional_count must be at most 10_000_000".into(),
+        ));
+    }
+
+    let start_ordinal = blob.index.len() as u32;
+    let member_kps: Vec<_> = (0..additional_count).map(|_| generate_keypair()).collect();
+
+    for (i, kp) in member_kps.iter().enumerate() {
+        let ordinal = start_ordinal + i as u32;
+        blob.index.push(WalletEntry {
+            role: WalletRole::Member,
+            address: ed25519_address(&kp.public_key()),
+            ordinal,
+            label: None,
+            created_at: blob.created_at,
+            enabled: true,
+            use_count: 0,
+            last_used_at: 0,
+            last_funded_at: None,
+            funded_amounts: None,
+        });
+        sealed_members
+            .members
+            .push(MemberSecret::new(ordinal, kp.secret_key()));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,5 +567,163 @@ mod tests {
             create_blob(Network::Testnet, 10_000_001, None, None),
             Err(Error::InvalidInput(_))
         ));
+    }
+
+    #[test]
+    fn add_members_to_blob_appends_members() {
+        let created = create_blob(Network::Testnet, 2, None, None).unwrap();
+        let mut blob = created.blob;
+        let mut members = SealedMembers::with_master_secret(
+            created.master_secret,
+            created
+                .member_secrets
+                .iter()
+                .enumerate()
+                .map(|(i, secret)| MemberSecret::new((i + 1) as u32, *secret))
+                .collect(),
+        );
+
+        add_members_to_blob(&mut blob, &mut members, 3).unwrap();
+
+        // index: master + 2 original + 3 new = 6
+        assert_eq!(blob.index.len(), 6);
+        assert_eq!(members.members.len(), 5);
+
+        // Ordinals continue: 0 master, 1, 2 original, 3, 4, 5 new.
+        let ordinals: Vec<u32> = blob.index.iter().map(|e| e.ordinal).collect();
+        assert_eq!(ordinals, vec![0, 1, 2, 3, 4, 5]);
+
+        for entry in &blob.index {
+            assert!(!entry.address.is_empty());
+        }
+
+        // Original members unchanged.
+        assert_eq!(
+            blob.index[1].address,
+            ed25519_address(
+                &keypair_from_secret(&members.members[0].decoded_secret().unwrap()).public_key()
+            )
+        );
+    }
+
+    #[test]
+    fn add_members_to_blob_rejects_zero() {
+        let created = create_blob(Network::Testnet, 1, None, None).unwrap();
+        let mut blob = created.blob;
+        let mut members = SealedMembers::with_master_secret(
+            created.master_secret,
+            created
+                .member_secrets
+                .iter()
+                .enumerate()
+                .map(|(i, secret)| MemberSecret::new((i + 1) as u32, *secret))
+                .collect(),
+        );
+
+        let err = add_members_to_blob(&mut blob, &mut members, 0).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn add_members_to_blob_appends_to_empty_pool() {
+        let created = create_blob(Network::Testnet, 0, None, None).unwrap();
+        let mut blob = created.blob;
+        let mut members = SealedMembers::with_master_secret(created.master_secret, vec![]);
+
+        add_members_to_blob(&mut blob, &mut members, 3).unwrap();
+
+        assert_eq!(blob.index.len(), 4);
+        assert_eq!(members.members.len(), 3);
+        assert_eq!(blob.index[0].role, WalletRole::Master);
+        for (i, entry) in blob.index.iter().skip(1).enumerate() {
+            assert_eq!(entry.ordinal, (i + 1) as u32);
+            assert_eq!(members.members[i].ordinal, entry.ordinal);
+            assert_eq!(
+                entry.address,
+                ed25519_address(
+                    &keypair_from_secret(&members.members[i].decoded_secret().unwrap())
+                        .public_key()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn add_members_to_blob_sequential_appends_preserve_ordinals() {
+        let created = create_blob(Network::Testnet, 1, None, None).unwrap();
+        let mut blob = created.blob;
+        let mut members = SealedMembers::with_master_secret(
+            created.master_secret,
+            created
+                .member_secrets
+                .iter()
+                .enumerate()
+                .map(|(i, secret)| MemberSecret::new((i + 1) as u32, *secret))
+                .collect(),
+        );
+
+        add_members_to_blob(&mut blob, &mut members, 2).unwrap();
+        add_members_to_blob(&mut blob, &mut members, 3).unwrap();
+
+        // master + 1 original + 2 + 3 = 7
+        assert_eq!(blob.index.len(), 7);
+        assert_eq!(members.members.len(), 6);
+
+        let ordinals: Vec<u32> = blob.index.iter().map(|e| e.ordinal).collect();
+        assert_eq!(ordinals, vec![0, 1, 2, 3, 4, 5, 6]);
+
+        for (entry, secret) in blob.index.iter().skip(1).zip(members.members.iter()) {
+            assert_eq!(entry.ordinal, secret.ordinal);
+            assert_eq!(
+                entry.address,
+                ed25519_address(
+                    &keypair_from_secret(&secret.decoded_secret().unwrap()).public_key()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn add_members_to_blob_new_member_matches_secret_and_address() {
+        let created = create_blob(Network::Testnet, 2, None, None).unwrap();
+        let mut blob = created.blob;
+        let mut members = SealedMembers::with_master_secret(
+            created.master_secret,
+            created
+                .member_secrets
+                .iter()
+                .enumerate()
+                .map(|(i, secret)| MemberSecret::new((i + 1) as u32, *secret))
+                .collect(),
+        );
+
+        add_members_to_blob(&mut blob, &mut members, 1).unwrap();
+
+        let entry = &blob.index[3];
+        let secret = &members.members[2];
+        assert_eq!(entry.ordinal, secret.ordinal);
+        assert_eq!(
+            entry.address,
+            ed25519_address(&keypair_from_secret(&secret.decoded_secret().unwrap()).public_key())
+        );
+    }
+
+    #[test]
+    fn add_members_to_blob_rejects_too_many() {
+        let created = create_blob(Network::Testnet, 1, None, None).unwrap();
+        let mut blob = created.blob;
+        let mut members = SealedMembers::with_master_secret(
+            created.master_secret,
+            created
+                .member_secrets
+                .iter()
+                .enumerate()
+                .map(|(i, secret)| MemberSecret::new((i + 1) as u32, *secret))
+                .collect(),
+        );
+
+        let err = add_members_to_blob(&mut blob, &mut members, 10_000_001).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+        assert!(err.to_string().contains("must be at most 10_000_000"));
     }
 }
