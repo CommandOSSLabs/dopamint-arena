@@ -69,6 +69,10 @@ export interface MatchSnapshot<View = unknown, Winner = unknown> {
   gamesPlayed?: number;
   /** Self-play only: the session payout result (game-specific), set once the tunnel settles. */
   result?: unknown;
+  /** Self-play only: CUMULATIVE co-signed updates this session — the worker can't reach the
+   *  main-thread telemetry, so the React binding feeds the delta to `recordGameUpdate` (the local
+   *  TPS fallback the window chip shows when the backend feed is absent). PvP is relay-counted. */
+  moves?: number;
 }
 
 /**
@@ -275,7 +279,14 @@ export interface GameSessionSpec<
   stake: bigint;
   /** Optional idle pacing for an auto/bot seat (ms); event-driven games omit it. */
   stepMs?: number;
-  makeProtocol(): Protocol<State, Move>;
+  /** Build the match protocol. `setup` (the `findMatch(setup)` payload) parameterizes it for games
+   *  that need it — ttt/caro's board size + game cap (§13). Public-state/battleship specs ignore it
+   *  (a nullary `() => Protocol` still satisfies this), so the in-scope games are unaffected. */
+  makeProtocol(setup?: Setup): Protocol<State, Move>;
+  /** Optional composite matchmaking-queue key derived from `setup` (§13): one `gameId` maps to many
+   *  queues — e.g. ttt/caro key on board size (`tictactoe:caro:${size}`). Default: the bare `gameId`,
+   *  so games that omit this match exactly as before. */
+  matchmakingKey?(setup?: Setup): string;
   /** REQUIRED iff `protocol.movesCarrySecrets` — the tunnel enforces this. */
   moveCodec?: MoveCodec<Move>;
   createMatch(
@@ -350,7 +361,9 @@ export interface SoloGameSpec<
   makeProtocol(tunnelId: string, stakePerGame: bigint): Proto;
   /** Build the per-seat kit bots for this stake; opaque to the engine, threaded into `stepWith`. */
   makeBots(stakePerGame: bigint): Bots;
-  deriveView(state: State): View;
+  /** Render-ready view. `bots` is passed so a hidden-info self-play (battleship) can render the
+   *  seats' actual fleets — the secrets live in the bots, never in `state`. Public-state specs ignore it. */
+  deriveView(state: State, bots?: Bots): View;
   /** Map the just-settled inner duel to the session's payout result. */
   sessionResult(inner: State["inner"]): Result;
   /** Co-sign one tick. `take` null ⇒ autopilot (bot drives both seats); non-null ⇒ the take-over
