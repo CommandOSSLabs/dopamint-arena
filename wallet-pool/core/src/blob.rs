@@ -198,19 +198,23 @@ pub struct CreateBlobResult {
 
 /// Creates a new pool blob with the requested number of member wallets.
 ///
+/// A pool may be created empty (master only) or with up to 10_000_000 members.
+/// Values above that bound are rejected as a sanity upper bound; the code
+/// still materializes all members in memory, so this only rejects absurdly
+/// large values.
+///
 /// # Errors
 ///
-/// Returns [`Error::InvalidInput`] if `member_count` is zero or greater than
-/// 10_000.
+/// Returns [`Error::InvalidInput`] if `member_count` is greater than 10_000_000.
 pub fn create_blob(
     network: Network,
     member_count: u32,
     master_seed: Option<[u8; 32]>,
     label: Option<String>,
 ) -> Result<CreateBlobResult> {
-    if member_count == 0 || member_count > 10_000 {
+    if member_count > 10_000_000 {
         return Err(Error::InvalidInput(format!(
-            "member_count must be between 1 and 10000, got {member_count}"
+            "member_count must be between 0 and 10_000_000, got {member_count}"
         )));
     }
 
@@ -496,16 +500,22 @@ mod tests {
     }
 
     #[test]
-    fn create_blob_member_bounds() {
+    fn create_blob_member_count_bounds() {
+        let empty = create_blob(Network::Testnet, 0, None, None).unwrap();
+        assert_eq!(empty.member_secrets.len(), 0);
+        assert_eq!(empty.blob.index.len(), 1);
+
+        let one = create_blob(Network::Testnet, 1, None, None).unwrap();
+        assert_eq!(one.member_secrets.len(), 1);
+        assert_eq!(one.blob.index.len(), 2);
+
+        let large = create_blob(Network::Testnet, 10_000, None, None).unwrap();
+        assert_eq!(large.member_secrets.len(), 10_000);
+        assert_eq!(large.blob.index.len(), 10_001);
+
         assert!(matches!(
-            create_blob(Network::Testnet, 0, None, None),
+            create_blob(Network::Testnet, 10_000_001, None, None),
             Err(Error::InvalidInput(_))
         ));
-        assert!(matches!(
-            create_blob(Network::Testnet, 10_001, None, None),
-            Err(Error::InvalidInput(_))
-        ));
-        assert!(create_blob(Network::Testnet, 1, None, None).is_ok());
-        assert!(create_blob(Network::Testnet, 10_000, None, None).is_ok());
     }
 }
