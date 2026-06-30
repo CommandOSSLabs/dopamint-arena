@@ -142,7 +142,7 @@ impl SuiArenaOpener {
     }
 
     async fn epoch_and_gas_price(&self) -> anyhow::Result<(u64, u64)> {
-        let r = self.rpc("sui_getLatestSuiSystemState", serde_json::json!({})).await?;
+        let r = self.rpc("suix_getLatestSuiSystemState", serde_json::json!({})).await?;
         let epoch = r
             .pointer("/epoch")
             .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
@@ -209,7 +209,12 @@ impl SuiArenaOpener {
 impl ArenaTunnelOpener for SuiArenaOpener {
     async fn open_and_fund_seat_b(&self, req: ArenaOpenRequest<'_>) -> anyhow::Result<String> {
         let user_addr = Address::from_str(&canonical_address(req.user_address)?).context("bad user address")?;
-        let bot_addr = Address::from_str(&canonical_address(req.bot_address)?).context("bad bot address")?;
+        // The bot's on-chain address is THIS opener's signer's address (self.sender) — it signs +
+        // sends the create+deposit PTB, and `deposit_party_b` asserts `ctx.sender() ==
+        // tunnel.party_b.address`. The `bot_address` in the request is the fleet's placeholder
+        // (a deterministic hash, not a real key) until per-bot KMS keys land; override it with the
+        // real funded address so the tunnel's party_b matches the sender.
+        let bot_addr = self.sender;
         let user_pk = hex::decode(req.user_eph_pubkey.trim_start_matches("0x"))
             .context("user ephemeral pubkey hex")?;
         let bot_pk = hex::decode(req.bot_eph_pubkey.trim_start_matches("0x"))
@@ -315,12 +320,19 @@ fn build_arena_open_tx(
         vec![tunnel, stake_coin, clock2],
     );
     // 4. transfer::public_share_object<Tunnel<T>>(tunnel) — activates the tunnel for both seats.
+    //    Needs the `Tunnel<coin_type>` type arg (the object's type), unlike the tunnel module calls
+    //    which take `T` alone — mirrors the FE's `typeArguments: ["...::tunnel::Tunnel<coinType>"]`.
+    let tunnel_type = format!("{}::tunnel::Tunnel<{}>", package_id, coin_type);
+    let tunnel_type_tag: TypeTag = tunnel_type
+        .parse()
+        .context("parse Tunnel<coin_type> type tag for share")?;
     tb.move_call(
         Function::new(
             Address::from_str("0x2").expect("static framework address"),
             Identifier::new("transfer").context("module ident")?,
             Identifier::new("public_share_object").context("fn ident")?,
-        ),
+        )
+        .with_type_args(vec![tunnel_type_tag]),
         vec![tunnel],
     );
 
