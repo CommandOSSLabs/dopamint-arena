@@ -3,7 +3,7 @@ resolver = "2"
 members = [
   "backend/tunnel-manager", "backend/explorer", "backend/shared",
   "rust/engine/tunnel-core", "rust/engine/tunnel-harness",
-  "rust/engine/sui-tunnel-anchor",
+  "rust/engine/sui-tunnel-anchor", "rust/engine/telemetry",
   "rust/protocols/api-credits", "rust/protocols/blackjack",
   "rust/protocols/battleship",
   "rust/protocols/bomb-it",

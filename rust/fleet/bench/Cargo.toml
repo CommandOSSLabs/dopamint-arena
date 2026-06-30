@@ -11,6 +11,7 @@ name = "fleet-bench"
 path = "src/main.rs"
 
 [dependencies]
+tunnel-telemetry = { path = "../../engine/telemetry" }
 tunnel-core = { path = "../../engine/tunnel-core" }
 tunnel-harness = { path = "../../engine/tunnel-harness" }
 sui-tunnel-anchor = { path = "../../engine/sui-tunnel-anchor" }
