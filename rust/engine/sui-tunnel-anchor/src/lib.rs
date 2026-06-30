@@ -1484,6 +1484,9 @@ impl SuiSponsoredAnchor {
         &self,
         request: &TunnelOpenRequest,
     ) -> Result<TransactionKind, TunnelAnchorError> {
+        if self.config.open_mode == SuiOpenMode::DirectCreateAndFund {
+            return self.build_open_kind_from_address_balance(request);
+        }
         match self.config.funding_profile.stake_source() {
             SuiStakeSource::CoinObject { coin_id } => {
                 let stake_coin_id = parse_address(coin_id)?;
@@ -1502,6 +1505,9 @@ impl SuiSponsoredAnchor {
         &self,
         requests: &[TunnelOpenRequest],
     ) -> Result<TransactionKind, TunnelAnchorError> {
+        if self.config.open_mode == SuiOpenMode::DirectCreateAndFund {
+            return self.build_batched_open_kind_from_address_balance(requests);
+        }
         match self.config.funding_profile.stake_source() {
             SuiStakeSource::CoinObject { coin_id } => {
                 let stake_coin_id = parse_address(coin_id)?;
@@ -3315,7 +3321,7 @@ mod tests {
         *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
 
         let backend = Arc::new(FakeBackend::default());
-        let mut config = address_balance_config();
+        let mut config = config();
         config.open_mode = SuiOpenMode::DirectCreateAndFund;
         config.open_batching = SuiOpenBatchingConfig {
             enabled: false,
@@ -3332,6 +3338,8 @@ mod tests {
         assert_eq!(opened.tunnel_id, tunnel_id.to_string());
         assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
         assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
+        assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 1);
         assert_address_balance_gas_transaction(&chain, shared.funder_address());
     }
 
@@ -3360,7 +3368,7 @@ mod tests {
         *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
 
         let backend = Arc::new(FakeBackend::default());
-        let mut config = address_balance_config();
+        let mut config = config();
         config.open_mode = SuiOpenMode::DirectCreateAndFund;
         config.open_batching = SuiOpenBatchingConfig {
             enabled: true,
@@ -3391,6 +3399,7 @@ mod tests {
         assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
         assert_eq!(*chain.execute_call_count.lock().unwrap(), 1);
         assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
         assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 2);
         assert_address_balance_gas_transaction(&chain, shared.funder_address());
     }
