@@ -27,8 +27,8 @@ import {
 } from "@/games/blackjack/app/components/app/chips";
 
 // Quick-pick targets for rounds played off-chain per tunnel before it settles once. Spans a
-// watchable handful up to the verifiable max (MAX_ROUNDS_PER_TUNNEL ~ 65k co-signed updates, the
-// most that fits under the backend's 16 MB /settle body cap) — the default flat-out arena target.
+// watchable handful up to the verifiable max (MAX_ROUNDS_PER_TUNNEL ~ 100k co-signed updates, the
+// most that fits under the backend's 32 MB /settle body cap) — the default flat-out arena target.
 const ROUND_PRESETS = [25, 100, 500, 1000, MAX_ROUNDS_PER_TUNNEL];
 
 // Auto-fund policy: a bot below MIN_BOT_BALANCE_MIST is topped up from the wallet. The

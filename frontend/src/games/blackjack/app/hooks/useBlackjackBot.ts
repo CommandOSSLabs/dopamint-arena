@@ -164,7 +164,7 @@ export interface BlackjackBotGame {
 // Buy-in (bankroll) each bot brings to the table per game. Chips are 1:1 with the on-chain stake, so
 // this is also the starting chip stack AND the MTPS staked per seat (0-decimal; ADR-0023). 50,000
 // chips = 50,000 whole MTPS — 500× the top bet option (100), so the table sustains the full
-// rounds-per-tunnel target (2600) before a seat drains and the funder rebuys, even at high bets.
+// rounds-per-tunnel target (4000) before a seat drains and the funder rebuys, even at high bets.
 const BUY_IN = 50_000n;
 // Animation cadence: in manual mode the dealer/betting auto-steps are paced to this so they're
 // watchable between the player's decisions.
@@ -196,18 +196,18 @@ const POLL_BALANCES_MS = 1500;
 const POLL_BALANCES_TRIES = 8;
 // Safety bound: the protocol caps rounds, but never spin forever on a logic bug. Each v2 round
 // co-signs ~25 updates (every card is a 2-party commit-reveal: commit×2 + reveal×2), so this must
-// clear maxRounds × ~25 with margin — at 2600 rounds (~65k updates) 80k is comfortable.
-const MAX_STEPS = 80_000;
+// clear maxRounds × ~25 with margin — at 4000 rounds (~100k updates) 120k is comfortable.
+const MAX_STEPS = 120_000;
 // Default rounds to play off-chain in one tunnel before auto-settling. Each update is 250 B on the
-// /settle body, and that route is hard-capped at 16 MB (≈67k updates) by the backend — past it the
+// /settle body, and that route is hard-capped at 32 MB (≈134k updates) by the backend — past it the
 // settle 413s and falls back to a no-proof close (transcript not archived). ~24.9 updates/round
-// (measured), so 2600 rounds ≈ 64.7k updates ≈ 15.4 MB — the most we can run and stay verifiable.
-const DEFAULT_MAX_ROUNDS = 2600;
+// (measured), so 4000 rounds ≈ 99.6k updates ≈ 23.8 MB — ~100k moves/tunnel, well under the cap.
+const DEFAULT_MAX_ROUNDS = 4000;
 // User-selectable range for the "rounds per tunnel" control. The ceiling also drives the protocol's
-// roundCap (see the kit construction below) AND must keep the /settle body under 16 MB (see above),
+// roundCap (see the kit construction below) AND must keep the /settle body under 32 MB (see above),
 // so isTerminal won't cut a tunnel short and the settle won't fall back to no-proof.
 export const MIN_ROUNDS_PER_TUNNEL = 1;
-export const MAX_ROUNDS_PER_TUNNEL = 2600;
+export const MAX_ROUNDS_PER_TUNNEL = 4000;
 
 function viewFromState(state: State): BlackjackBotView {
   const round = Number(state.round);
@@ -243,7 +243,7 @@ export function useBlackjackBot(): BlackjackBotGame {
   // second copy. Pin the player to seat A (no role rotation) so "Play vs Bot" stays one human vs
   // the dealer bot and the table never inverts. The bet stays user-driven (see the loop below).
   // Raise the protocol's roundCap to the UI ceiling so isTerminal never cuts a tunnel short of the
-  // requested rounds (the default 1000 would cap one tunnel at ~25k updates; we want ~65k).
+  // requested rounds (the default 1000 would cap one tunnel at ~25k updates; we want ~100k).
   const kit = useMemo(
     () =>
       createBlackjackKit(BUY_IN, FIXED_PLAYER_A, BigInt(MAX_ROUNDS_PER_TUNNEL)),
