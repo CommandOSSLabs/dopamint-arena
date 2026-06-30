@@ -12,6 +12,7 @@ publish = false
 tunnel-core = { path = "../../engine/tunnel-core" }
 tunnel-harness = { path = "../../engine/tunnel-harness" }
 tunnel-blackjack = { path = "../../protocols/blackjack" }
+tunnel-quantum-poker = { path = "../../protocols/quantum-poker" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

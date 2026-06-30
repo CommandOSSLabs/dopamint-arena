@@ -11,7 +11,7 @@ export function PaymentsShopBody({ session }: PaymentsShopBodyProps) {
   return (
     <div
       className={cn(
-        "min-h-0 flex-1 space-y-5 overflow-y-auto",
+        "min-h-24 flex-1 space-y-5 overflow-y-auto",
         "p-[clamp(8px,2.4cqmin,14px)]",
       )}
     >

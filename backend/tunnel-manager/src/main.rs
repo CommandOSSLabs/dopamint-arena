@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
         config.agent_allowance_package_id.as_deref(),
         config.streaming_payment_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
+        config.mtps_admin_cap_id.as_deref(),
     )?;
     // Enoki is the primary gas sponsor when configured; the settler above is the fallback (ADR-0014).
     // The settler's close/fallback path pins a hard-coded testnet genesis digest (`sui.rs`), so guard
@@ -134,13 +135,18 @@ async fn main() -> anyhow::Result<()> {
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
         fleet: crate::fleet::BotPool::default(),
-        // Noop until SuiAnchor (ADR-0025): the arena 1a open seam is wired but does no chain work.
+        // Noop until SuiAnchor (ADR-0028): the arena 1a open seam is wired but does no chain work.
         arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
         arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+        faucet_user_amount: config.faucet_user_amount,
+        faucet_internal_amount: config.faucet_internal_amount,
+        faucet_cooldown_secs: config.faucet_cooldown_secs,
+        faucet_max_per_window: config.faucet_max_per_window,
+        faucet_admin_token: config.faucet_admin_token.clone(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
-    // Co-located fleet (ADR-0024): in-process bots served over the relay bus. Inert unless
+    // Co-located fleet (ADR-0027): in-process bots served over the relay bus. Inert unless
     // FLEET_COLOCATED_COUNT > 0, so the deployed relay starts nothing by default.
     crate::fleet::colocated::spawn(
         state.clone(),
@@ -160,11 +166,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
-        // Settlement carries the off-chain transcript as a v2 binary body (one fixed ~248 B entry
+        // Settlement carries the off-chain transcript as a v2 binary body (one fixed 250 B entry
         // per co-signed move), archived to Walrus verbatim. Maximizing moves/tunnel amortizes the
         // on-chain close and Walrus per-blob cost, so a long self-play game ships tens of thousands
-        // of moves. 16 MB for /settle only (≈67k moves) caps tunnel length; the body is raw bytes,
-        // so it stays ~1× in memory (the canonical MAX_MOVES_PER_TUNNEL=50k sits well inside this).
+        // of moves. 32 MB for /settle only (≈134k moves) caps tunnel length; the body streams to
+        // Walrus by reference (Bytes), so it stays 1× in memory (canonical MAX_MOVES_PER_TUNNEL=100k
+        // ≈ 25 MB sits well inside this).
         .route(
             "/v1/tunnels/:tunnel_id/settle",
             // One ServiceBuilder (not two chained `.layer()`s, which leaves axum's error type
@@ -175,10 +182,14 @@ async fn main() -> anyhow::Result<()> {
                     .layer(GlobalConcurrencyLimitLayer::new(
                         config.settle_max_concurrency,
                     ))
-                    .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+                    .layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
+        // MTPS faucet (ADR-0023): the public route is per-address rate limited; the internal route
+        // is unlimited and bearer-gated (fails closed when FAUCET_ADMIN_TOKEN is unset).
+        .route("/v1/faucet", post(routes::faucet))
+        .route("/v1/faucet/internal", post(routes::faucet_admin))
         .route("/v1/chat", post(routes::chat))
         .route("/v1/chat/topic", get(routes::chat_topic))
         .route("/v1/chat/live/publish", post(routes::chat_publish))
@@ -186,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
-        // Arena one-signature flow (ADR-0023): reserve warm bots, then map opened tunnels back to
+        // Arena one-signature flow (ADR-0026): reserve warm bots, then map opened tunnels back to
         // each bot so it deposits its seat. `/v1/fleet` is the bot's control socket into the pool.
         .route("/v1/arena/allocate", post(routes::arena_allocate))
         .route("/v1/arena/opened", post(routes::arena_opened))

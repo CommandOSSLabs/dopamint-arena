@@ -5,13 +5,17 @@ import {
   proof,
   bytesToHex,
   hexToBytes,
+  generateSalt,
   type protocols,
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { settleViaBackend } from "@/backend/settle";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
+  tttMoveCodec,
+  caroMoveCodec,
   optimalMoves,
   CELL_EMPTY,
   CELL_SERVER,
@@ -71,10 +75,14 @@ const MP_URL =
       ? location.origin
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
-const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
+// Per-seat deposit and per-game stake, mode-scaled. In MTPS mode (production path) both are
+// 1 MTPS (9 decimals), so an abandoner forfeits exactly one deposit. In the SUI dev fallback
+// the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
+const MTPS_PER_SEAT = 1_000_000_000n;
+const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
-// MTPS mode (ADR-0010): bankroll deposited per seat (1 MTPS, 9 decimals).
-const MTPS_BANKROLL = 1_000_000_000n;
+// MTPS mode (ADR-0023): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
+const MTPS_BANKROLL = 1n;
 // One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
@@ -114,7 +122,7 @@ type InnerState = {
   lastMove?: number;
 };
 type AnyState = { inner: InnerState; gamesPlayed: number; maxGames: number };
-type CellMove = { cell: number };
+type CellMove = { cell: number; salt: Uint8Array };
 
 export interface PvpTttView {
   phase: PvpPhase;
@@ -171,14 +179,19 @@ export function usePvpTicTacToe(
   const sponsored = useSponsoredSignExec();
   const sponsoredRef = useRef(sponsored);
   sponsoredRef.current = sponsored;
+  // Stake magnitude matches the per-seat deposit: one loss = one deposit shift.
+  const scaledStake = isMtpsConfigured ? MTPS_PER_SEAT : SUI_PER_SEAT;
   const proto = useMemo(
     () =>
       (variant === "caro"
-        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize)
+        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize, scaledStake)
         : new MultiGameTicTacToeProtocol(
             MAX_GAMES,
-            STAKE,
+            scaledStake,
           )) as unknown as protocols.Protocol<AnyState, CellMove>,
+    // isMtpsConfigured is a build-time constant (evaluated once at bundle load), so scaledStake
+    // is fixed for the lifetime of the app and never changes across renders — safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [variant, boardSize],
   );
 
@@ -190,9 +203,9 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  // Default OFF: PvP is human-vs-human, so you make your own moves; tick Auto to let the bot
-  // play for you.
-  const [auto, setAutoState] = useState(false);
+  // Auto is ON for your first match this session (watch a bot play), then sticky to your last
+  // toggle — tick it off and new games stay human-vs-human. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto(variant));
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
     create?: string;
@@ -206,7 +219,7 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(defaultAuto(variant));
   const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
@@ -433,7 +446,10 @@ export function usePvpTicTacToe(
           if (info.role === "A" && autoRef.current)
             setTimeout(() => {
               try {
-                t.propose({ cell: 0 }, BigInt(Date.now()));
+                t.propose(
+                  { cell: 0, salt: generateSalt(16) },
+                  BigInt(Date.now()),
+                );
               } catch {
                 /* raced */
               }
@@ -447,7 +463,7 @@ export function usePvpTicTacToe(
           })();
           setTimeout(() => {
             try {
-              t.propose({ cell }, BigInt(Date.now()));
+              t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
             } catch {
               /* not my turn / in flight */
             }
@@ -508,11 +524,11 @@ export function usePvpTicTacToe(
         setGames([]);
         setScore({ x: 0, o: 0, draws: 0 });
         autoKickedRef.current = false;
-        // Default-off on a fresh queue; auto-requeue passes keepAuto so the Auto loop survives
-        // across per-game matches.
+        // Fresh queue resets Auto to the session default (ON the first time, else your last
+        // toggle); auto-requeue passes keepAuto so the Auto loop survives across per-game matches.
         if (!opts?.keepAuto) {
-          autoRef.current = false;
-          setAutoState(false);
+          autoRef.current = defaultAuto(variant);
+          setAutoState(autoRef.current);
         }
         bufferedSettleRef.current = null;
         bufferedHelloRef.current = null;
@@ -535,6 +551,13 @@ export function usePvpTicTacToe(
             {
               proto,
               adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+              // Mirror onMatch: without the variant codec the resumed tunnel falls back to
+              // identityMoveCodec, which cannot encode the Uint8Array salt — a reloaded
+              // staked match would then stall on the first move.
+              moveCodec:
+                variant === "caro"
+                  ? (caroMoveCodec as never)
+                  : (tttMoveCodec as never),
             },
             { selfWallet: w.address },
           );
@@ -634,9 +657,10 @@ export function usePvpTicTacToe(
             buildCreateAndShareTx(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
-              // penalty = per-match stake (blackjack model): an abandoner forfeits it at force-close (F1).
-              // caro's protocol forces a 0 settlement, so keep it penalty-free to stay money-neutral.
-              variant === "caro" ? 0n : STAKE,
+              // Abandonment penalty = scaledStake (mode-scaled). In MTPS mode this equals the
+              // per-seat deposit, so an abandoner forfeits exactly one deposit at force-close (F1).
+              // In the SUI dev fallback the stake (1 MIST) is nominal, not deposit-sized.
+              scaledStake,
               coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );
           const res = mtpsOn
@@ -759,6 +783,11 @@ export function usePvpTicTacToe(
               false,
             ),
             selfParty: m.role,
+            // Encode salt (Uint8Array) as hex so it survives JSON frame round-trip.
+            moveCodec:
+              variant === "caro"
+                ? (caroMoveCodec as never)
+                : (tttMoveCodec as never),
           },
           channel.transport,
           { a: bankroll, b: bankroll },
@@ -796,7 +825,7 @@ export function usePvpTicTacToe(
     const st = t.state;
     if (st.inner.winner !== 0 || st.inner.turn !== roleRef.current) return; // not my turn / between games
     try {
-      t.propose({ cell }, BigInt(Date.now()));
+      t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -812,7 +841,7 @@ export function usePvpTicTacToe(
     )
       return; // X advances between games
     try {
-      t.propose({ cell: 0 }, BigInt(Date.now()));
+      t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -832,6 +861,7 @@ export function usePvpTicTacToe(
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
+      rememberAuto(variant, on);
       const t = tunnelRef.current;
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       const st = t.state;
@@ -839,7 +869,10 @@ export function usePvpTicTacToe(
         if (roleRef.current === "A")
           setTimeout(() => {
             try {
-              t.propose({ cell: 0 }, BigInt(Date.now()));
+              t.propose(
+                { cell: 0, salt: generateSalt(16) },
+                BigInt(Date.now()),
+              );
             } catch {
               /* ignore */
             }
@@ -853,7 +886,7 @@ export function usePvpTicTacToe(
         })();
         setTimeout(() => {
           try {
-            t.propose({ cell }, BigInt(Date.now()));
+            t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
           } catch {
             /* ignore */
           }
@@ -864,8 +897,9 @@ export function usePvpTicTacToe(
   );
 
   // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
-  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto is ON
+  // by default on the first match, so this fires the opening bot move; it also covers ticking Auto
+  // pre-play.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -878,33 +912,36 @@ export function usePvpTicTacToe(
   // must never be restored — it would hijack the next match), close the transport, and clear
   // match state. keepAuto preserves the Auto toggle so an auto loop survives a per-game requeue;
   // a full leave clears it.
-  const teardownMatch = useCallback((keepAuto: boolean) => {
-    detachResumeRef.current?.();
-    detachResumeRef.current = null;
-    const tid = tunnelRef.current?.tunnelId;
-    if (tid) clearResumeRecord(tid);
-    mpRef.current?.close();
-    mpRef.current = null;
-    channelRef.current = null;
-    tunnelRef.current = null;
-    setState(null);
-    setRole(null);
-    setDigests({});
-    setGames([]);
-    setScore({ x: 0, o: 0, draws: 0 });
-    settledRef.current = false;
-    stoppingRef.current = false;
-    autoKickedRef.current = false;
-    if (!keepAuto) {
-      autoRef.current = false;
-      setAutoState(false);
-    }
-    openedResolveRef.current = null;
-    settleResolveRef.current = null;
-    bufferedSettleRef.current = null;
-    helloResolveRef.current = null;
-    bufferedHelloRef.current = null;
-  }, []);
+  const teardownMatch = useCallback(
+    (keepAuto: boolean) => {
+      detachResumeRef.current?.();
+      detachResumeRef.current = null;
+      const tid = tunnelRef.current?.tunnelId;
+      if (tid) clearResumeRecord(tid);
+      mpRef.current?.close();
+      mpRef.current = null;
+      channelRef.current = null;
+      tunnelRef.current = null;
+      setState(null);
+      setRole(null);
+      setDigests({});
+      setGames([]);
+      setScore({ x: 0, o: 0, draws: 0 });
+      settledRef.current = false;
+      stoppingRef.current = false;
+      autoKickedRef.current = false;
+      if (!keepAuto) {
+        autoRef.current = defaultAuto(variant);
+        setAutoState(autoRef.current);
+      }
+      openedResolveRef.current = null;
+      settleResolveRef.current = null;
+      bufferedSettleRef.current = null;
+      helloResolveRef.current = null;
+      bufferedHelloRef.current = null;
+    },
+    [variant],
+  );
 
   const leave = useCallback(() => {
     teardownMatch(false);

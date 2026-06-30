@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
 
 use fleet_core::match_channel::MatchChannel;
-use fleet_core::play_match::play_blackjack;
+use fleet_core::play_match::{play_blackjack, play_quantum_poker};
 use fleet_core::signer_durable::DurableSigner;
 use fleet_core::Role;
 
@@ -188,6 +188,17 @@ async fn play_game(
     let outcome = match game {
         "blackjack" => {
             play_blackjack(
+                channel,
+                anchor,
+                match_key,
+                Role::B,
+                opponent_wallet,
+                InMemoryTranscriptRecorder::new(),
+            )
+            .await?
+        }
+        "quantum_poker" => {
+            play_quantum_poker(
                 channel,
                 anchor,
                 match_key,

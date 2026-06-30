@@ -44,7 +44,7 @@ pub(crate) fn play_series(
 ) -> MatchResult {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
-        CaroSeries::new(3, 15).expect("valid caro series"),
+        CaroSeries::new(3, 15, 0).expect("valid caro series"),
         CaroSeriesStrategy::with_seed(3, 15, CaroStrength::Strong, seed ^ 0xA5A5_5A5A_D0D0_1CE5)
             .expect("valid caro series strategy"),
         CaroSeriesStrategy::with_seed(3, 15, CaroStrength::Strong, seed ^ 0x5A5A_A5A5_CAFE_BABE)

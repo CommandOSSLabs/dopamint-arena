@@ -1,6 +1,14 @@
 import { ConnectModal, useSuiClientContext } from "@mysten/dapp-kit";
 import { isEnokiWallet } from "@mysten/enoki";
-import { Copy, ExternalLink, LogOut, Wallet } from "lucide-react";
+import {
+  Coins,
+  Copy,
+  ExternalLink,
+  Loader2,
+  LogOut,
+  Wallet,
+} from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +20,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MTPS_ICON_URL, faucetMtps, isMtpsConfigured } from "@/onchain/mtps";
 import { suivisionAccountUrl } from "@/lib/suivision";
 import { useWalletSession } from "@/wallet/useWalletSession";
 
@@ -25,6 +34,31 @@ export function WalletButton({
 }) {
   const session = useWalletSession();
   const { network } = useSuiClientContext();
+  const [fauceting, setFauceting] = useState(false);
+
+  // Faucet MTPS into the connected address (server-side admin_mint → address balance). The new
+  // balance settles a beat later (next balance poll), so we just confirm the request landed.
+  const handleFaucet = async () => {
+    if (!session.address || fauceting) return;
+    setFauceting(true);
+    try {
+      await faucetMtps({ recipient: session.address });
+      toast.success("Faucet sent — MTPS incoming");
+      // Reflect the new balance: refetch now, then again after the SIP-58 deposit settles (next
+      // checkpoint, a beat later).
+      session.refetchBalance();
+      setTimeout(() => session.refetchBalance(), 2500);
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      toast.error(
+        err.status === 429
+          ? "Faucet limit reached — try again in a bit"
+          : err.message || "Faucet failed",
+      );
+    } finally {
+      setFauceting(false);
+    }
+  };
 
   if (!session.connected) {
     // dapp-kit's wallet picker, with our own design-system trigger. The filter keeps the
@@ -64,25 +98,38 @@ export function WalletButton({
               </span>
             )}
           </span>
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="grid size-4 shrink-0 place-items-center rounded-full bg-[#4da2ff]">
+          <span className="flex items-center gap-2 rounded-lg border bg-muted/40 px-2.5 py-1.5">
+            <span className="grid size-7 shrink-0 place-items-center rounded-full border bg-background">
               <img
-                src="/icons/sui.png"
+                src={MTPS_ICON_URL}
                 alt=""
                 aria-hidden
-                className="size-2.5 object-contain"
+                className="size-5 object-contain"
               />
             </span>
-            <span className="tabular-nums">
-              {session.balanceSui != null
-                ? session.balanceSui.toLocaleString("en-US", {
-                    maximumFractionDigits: 2,
-                  })
+            <span className="text-base font-semibold tabular-nums text-foreground">
+              {session.balanceMtps != null
+                ? session.balanceMtps.toLocaleString("en-US")
                 : "—"}{" "}
-              SUI
+              <span className="text-xs font-normal text-muted-foreground">
+                MTPS
+              </span>
             </span>
           </span>
         </DropdownMenuLabel>
+        {!session.isDemo && isMtpsConfigured && (
+          <div className="px-1 pb-1">
+            <Button
+              size="sm"
+              className="w-full"
+              disabled={fauceting}
+              onClick={handleFaucet}
+            >
+              {fauceting ? <Loader2 className="animate-spin" /> : ""}
+              {fauceting ? "Fauceting…" : "Faucet MTPS"}
+            </Button>
+          </div>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => {

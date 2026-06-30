@@ -169,11 +169,30 @@ pub enum PokerMove {
 #[derive(Clone, Copy, Debug)]
 pub struct QuantumPoker {
     hand_cap: u64,
+    /// Fixed per-hand wager unit. Defaults to [`ANTE`] so existing callers/tests are unchanged;
+    /// the fleet bot passes a smaller value to scale the chip economy to whole-token stakes,
+    /// mirroring the TS protocol's configurable `ante` constructor param. Must be ≥ 1 and ≤ each
+    /// seat's initial balance or the match is terminal at the initial state.
+    ante: u64,
 }
 
 impl QuantumPoker {
     pub fn new(hand_cap: u64) -> Self {
-        Self { hand_cap }
+        Self {
+            hand_cap,
+            ante: ANTE,
+        }
+    }
+
+    /// Build with a custom per-hand ante (the chip unit; real MTPS only moves at open/settle,
+    /// off-chain bets draw against the staked bankroll). `ante` must be ≥ 1.
+    pub fn with_ante(hand_cap: u64, ante: u64) -> Self {
+        assert!(ante >= 1, "ante must be ≥ 1");
+        Self { hand_cap, ante }
+    }
+
+    pub fn ante(&self) -> u64 {
+        self.ante
     }
 }
 
@@ -181,6 +200,7 @@ impl Default for QuantumPoker {
     fn default() -> Self {
         Self {
             hand_cap: DEFAULT_HAND_CAP,
+            ante: ANTE,
         }
     }
 }
@@ -368,11 +388,11 @@ impl QuantumPoker {
     }
 
     fn post_antes_and_begin_street(&self, state: &mut PokerState) -> Result<(), String> {
-        if state.balance_a < ANTE || state.balance_b < ANTE {
+        if state.balance_a < self.ante || state.balance_b < self.ante {
             return Err("insufficient balance for ante".into());
         }
-        state.total_bet_a = ANTE;
-        state.total_bet_b = ANTE;
+        state.total_bet_a = self.ante;
+        state.total_bet_b = self.ante;
         self.begin_street(state, PokerPhase::PreflopBet);
         Ok(())
     }
@@ -783,7 +803,7 @@ impl QuantumPoker {
         let mut next = state.clone();
         next.hand_no += 1;
         let can_continue =
-            next.hand_no < next.hand_cap && next.balance_a >= ANTE && next.balance_b >= ANTE;
+            next.hand_no < next.hand_cap && next.balance_a >= self.ante && next.balance_b >= self.ante;
         next.commit_a = None;
         next.commit_b = None;
         next.reveals_a = empty_reveals();
@@ -828,7 +848,7 @@ impl Protocol for QuantumPoker {
 
     fn initial_state(&self, ctx: &TunnelContext) -> Self::State {
         PokerState {
-            phase: if ctx.initial.a >= ANTE && ctx.initial.b >= ANTE {
+            phase: if ctx.initial.a >= self.ante && ctx.initial.b >= self.ante {
                 PokerPhase::Commit
             } else {
                 PokerPhase::Done

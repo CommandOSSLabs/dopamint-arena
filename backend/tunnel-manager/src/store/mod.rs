@@ -40,6 +40,19 @@ pub trait ControlStore: Send + Sync {
     async fn push_recent_event(&self, ev: crate::state::TunnelEvent);
     /// The ring, newest-first, capped at `RECENT_EVENTS_CAP`.
     async fn recent_events(&self) -> Vec<crate::state::TunnelEvent>;
+    /// Claim one faucet slot for `address` in a fixed `window_secs` window that allows up to
+    /// `max_per_window` pulls. Returns `true` when within the limit (a slot is consumed), `false`
+    /// when the window is exhausted. The window starts on the first pull and resets `window_secs`
+    /// later. On a store error returns `false` (fail closed — a cache blip never enables an
+    /// unmetered mint). The caller passes a canonical address; this is the per-recipient rate limit.
+    async fn claim_faucet_slot(&self, address: &str, window_secs: i64, max_per_window: u32)
+        -> bool;
+    /// Seconds until `address`'s current window resets, or `None` if no window is active — feeds
+    /// `Retry-After` when the limit is hit.
+    async fn faucet_window_ttl(&self, address: &str) -> Option<i64>;
+    /// Give back a slot for `address` (a claimed pull whose mint then failed), so a transient error
+    /// does not burn one of the window's allowed pulls.
+    async fn release_faucet_slot(&self, address: &str);
     /// PING the cache cluster (for /health/ready). In-memory is always ready.
     async fn ready(&self) -> bool;
 }

@@ -1,6 +1,6 @@
 # 0005 — Redis-backed, horizontally-scalable control-plane + mp lane
 
-> **⚠️ Latency consequence revised by [ADR-0015](0015-data-plane-local-control-plane-redis.md).**
+> **⚠️ Latency consequence revised by [ADR-0023](0015-data-plane-local-control-plane-redis.md).**
 > This ADR assumed "PvP is ≈0 TPS, so a Redis round-trip per relayed frame is
 > immaterial." Once self-play is dropped ([ADR-0001 §1](0001-arena-baseline-architecture.md))
 > every move flows through the relay, so the per-frame `SPUBLISH` path is demoted

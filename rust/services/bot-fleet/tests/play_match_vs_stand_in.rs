@@ -10,7 +10,7 @@
 //! not just that the move loop ran. Off-chain (InMemoryAnchor) over a `MockTransport` pair.
 
 use bot_fleet::match_channel::MatchChannel;
-use bot_fleet::play_match::play_blackjack;
+use bot_fleet::play_match::{play_blackjack, play_quantum_poker, QUANTUM_POKER};
 use bot_fleet::relay_ws::MockTransport;
 use bot_fleet::signer_durable::DurableSigner;
 use bot_fleet::Role;
@@ -61,4 +61,45 @@ async fn bot_plays_a_full_match_against_a_human_stand_in() {
     // Both returning Ok is the load-bearing assertion: the shared anchor PAIRED the two settle
     // halves (byte-identical co-signed settlement), so the cooperative close verified — not just
     // the move loop. A divergence in final balances/nonce/timestamp would fail the pairing → Err.
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_plays_a_full_poker_match_against_a_human_stand_in() {
+    let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+    let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+
+    let (ta, tb) = MockTransport::pair();
+    let cha = MatchChannel::new(ta);
+    let chb = MatchChannel::new(tb);
+    let anchor = InMemoryAnchor::new();
+
+    let (ra, rb) = tokio::join!(
+        play_quantum_poker(
+            cha,
+            anchor.clone(),
+            DurableSigner::from_secret(&sa),
+            Role::A,
+            "0xbotB",
+            NullTranscriptRecorder,
+        ),
+        play_quantum_poker(
+            chb,
+            anchor.clone(),
+            DurableSigner::from_secret(&sb),
+            Role::B,
+            "0xhumanA",
+            NullTranscriptRecorder,
+        ),
+    );
+
+    let a = ra.expect("role A completes open → play → settle");
+    let b = rb.expect("role B completes open → play → settle");
+
+    let total = 2 * QUANTUM_POKER.stake_each;
+    assert_eq!(a.final_balances.sum(), total, "stakes conserved");
+    assert_eq!(
+        a.final_balances, b.final_balances,
+        "both seats agree on the settled outcome"
+    );
+    assert!(a.moves > 0, "poker match progressed over the demuxed transport");
 }

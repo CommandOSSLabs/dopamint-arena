@@ -1,11 +1,9 @@
 import { register } from "../registry";
 import { QuantumPokerModeWindow } from "./QuantumPokerModeWindow";
 
-// Quantum Poker lanes (all local/relay — no game server):
-// - Bot: human plays party A; a random-persona bot plays party B over a
-//   wallet-funded self-play tunnel, settled gas-free via /settle.
-// - PvP: two real wallets over DistributedTunnel + quickMatch (like Tic-Tac-Toe).
-// - Auto: two persistent persona bots open/play/settle and loop real tunnels.
+// Quantum Poker: heads-up PvP — two real wallets over DistributedTunnel +
+// quickMatch (like Tic-Tac-Toe). Auto toggle (default off) lets a random-persona
+// bot play your seat.
 register({
   id: "quantum-poker",
   name: "Quantum Poker",

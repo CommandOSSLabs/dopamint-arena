@@ -27,6 +27,9 @@ pub struct InMemoryControlStore {
     per_game_tunnels: RwLock<HashMap<String, u64>>,
     recent_ring: RwLock<VecDeque<TunnelEvent>>,
     seen_digests: RwLock<HashSet<String>>,
+    // Per-address faucet rate-limit window: address -> (pulls so far, window deadline). Lazily reset
+    // on read/claim (single-process dev/test; the Redis impl uses a TTL'd counter in prod).
+    faucet_windows: RwLock<HashMap<String, (u32, std::time::Instant)>>,
 }
 
 #[async_trait]
@@ -143,6 +146,44 @@ impl ControlStore for InMemoryControlStore {
 
     async fn recent_events(&self) -> Vec<TunnelEvent> {
         self.recent_ring.read().unwrap().iter().cloned().collect()
+    }
+
+    async fn claim_faucet_slot(
+        &self,
+        address: &str,
+        window_secs: i64,
+        max_per_window: u32,
+    ) -> bool {
+        let now = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(window_secs.max(0) as u64);
+        let mut map = self.faucet_windows.write().unwrap();
+        let entry = map.entry(address.to_owned()).or_insert((0, now + window));
+        if entry.1 <= now {
+            *entry = (0, now + window); // window elapsed — start a fresh one
+        }
+        if entry.0 < max_per_window {
+            entry.0 += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn faucet_window_ttl(&self, address: &str) -> Option<i64> {
+        let now = std::time::Instant::now();
+        self.faucet_windows
+            .read()
+            .unwrap()
+            .get(address)
+            .filter(|(count, deadline)| *count > 0 && *deadline > now)
+            .and_then(|(_, deadline)| deadline.checked_duration_since(now))
+            .map(|d| d.as_secs() as i64)
+    }
+
+    async fn release_faucet_slot(&self, address: &str) {
+        if let Some(entry) = self.faucet_windows.write().unwrap().get_mut(address) {
+            entry.0 = entry.0.saturating_sub(1);
+        }
     }
 
     async fn ready(&self) -> bool {
@@ -366,6 +407,35 @@ mod tests {
             timestamp_ms: 1,
             proof_url: None,
         }
+    }
+
+    // The faucet allows up to N pulls per window: the first N succeed, the (N+1)th is refused, and
+    // releasing a slot (a failed mint) frees one so it doesn't burn an allowed pull.
+    #[tokio::test]
+    async fn faucet_slot_allows_n_per_window_then_refuses() {
+        let s = InMemoryControlStore::default();
+        for i in 0..5 {
+            assert!(
+                s.claim_faucet_slot("0xabc", 1800, 5).await,
+                "pull {i} within the limit must succeed"
+            );
+        }
+        assert!(
+            !s.claim_faucet_slot("0xabc", 1800, 5).await,
+            "the 6th pull in the window is refused"
+        );
+        assert!(
+            s.faucet_window_ttl("0xabc").await.is_some(),
+            "ttl reported while the window is active"
+        );
+        // A different address has its own window.
+        assert!(s.claim_faucet_slot("0xdef", 1800, 5).await);
+        // Releasing a slot (failed mint) frees one pull within the window.
+        s.release_faucet_slot("0xabc").await;
+        assert!(
+            s.claim_faucet_slot("0xabc", 1800, 5).await,
+            "a freed slot can be re-claimed"
+        );
     }
 
     // A pushed event must appear in the broadcast snapshot — that is how the dashboard receives

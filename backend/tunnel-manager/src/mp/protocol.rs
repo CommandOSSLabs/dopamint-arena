@@ -61,7 +61,7 @@ pub enum ClientMsg {
     /// Authorization is the seat-ownership check server-side.
     #[serde(rename = "resume")]
     Resume { match_id: String },
-    /// Join a pre-allocated arena match by its id (ADR-0024/0025). Unlike `queue.join` (matchmaking),
+    /// Join a pre-allocated arena match by its id (ADR-0027/0028). Unlike `queue.join` (matchmaking),
     /// this binds the user's connection to the SPECIFIC co-located bot + tunnel reserved at allocate;
     /// the server completes the `MatchRecord` and replies `MatchFound` (always party A). Valid only
     /// after `Connect`; authorized by wallet == the match's allocator.
@@ -69,7 +69,7 @@ pub enum ClientMsg {
     ArenaJoin { match_id: String },
 }
 
-/// Messages the server sends to the client. `Deserialize` is for the co-located fleet (ADR-0024):
+/// Messages the server sends to the client. `Deserialize` is for the co-located fleet (ADR-0027):
 /// an in-process bot reads its own bus-delivered frames back into typed form (the bus carries only
 /// strings). The browser still only ever deserializes these — same wire either way.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

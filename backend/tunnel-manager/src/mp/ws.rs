@@ -586,7 +586,7 @@ async fn notify_peers_dropped(
 /// Removes both per-move Redis GETs (counting + forwarding). conn_a/conn_b are fixed at
 /// match creation, so the cached copy is valid for the life of the connection.
 ///
-/// `pub(crate)` so the co-located fleet's `BusRelayTransport` (ADR-0024) routes a bot's outbound
+/// `pub(crate)` so the co-located fleet's `BusRelayTransport` (ADR-0027) routes a bot's outbound
 /// frames through this SAME path — keeping move-counting and seat routing in exact parity with the
 /// human WS path instead of duplicating either.
 pub(crate) async fn relay_to_other(
@@ -1289,6 +1289,11 @@ mod tests {
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
             arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+            faucet_user_amount: 10_000,
+            faucet_internal_amount: 1_000_000,
+            faucet_cooldown_secs: 1_800,
+            faucet_max_per_window: 5,
+            faucet_admin_token: None,
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1446,6 +1451,11 @@ mod tests {
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
             arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+            faucet_user_amount: 10_000,
+            faucet_internal_amount: 1_000_000,
+            faucet_cooldown_secs: 1_800,
+            faucet_max_per_window: 5,
+            faucet_admin_token: None,
         })
     }
 

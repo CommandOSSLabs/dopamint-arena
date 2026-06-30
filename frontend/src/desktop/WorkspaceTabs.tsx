@@ -42,12 +42,13 @@ const WORKSPACE_TABS: {
   label: string;
   icon: LucideIcon;
 }[] = [
+  // The aggregate "All" floor — every workspace's live windows at once — is the default
+  // landing (the bare `/` with no `section` param). It has no floor tools of its own (the
+  // right-side cluster hides below).
+  { section: "all", label: "All", icon: LayoutDashboard },
   { section: "games", label: "Game", icon: Gamepad2 },
   { section: "payment", label: "Payment", icon: Wallet },
   { section: "chat", label: "Chat", icon: MessagesSquare },
-  // The aggregate "All" floor — every workspace's live windows at once, for one-shot
-  // screenshots. It has no floor tools of its own (the right-side cluster hides below).
-  { section: "all", label: "All", icon: LayoutDashboard },
 ];
 
 const tab =
@@ -117,7 +118,7 @@ export function WorkspaceTabs({
             <Link
               key={t.section}
               to="/"
-              search={t.section === "games" ? {} : { section: t.section }}
+              search={t.section === "all" ? {} : { section: t.section }}
               className={cn(tab, active === t.section && tabActive)}
             >
               <Icon className="size-4" />

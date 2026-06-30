@@ -89,16 +89,20 @@ _why_ survives after the people involved have moved on.
   snake_case segments separated by dots and an explicit `.vN` suffix; `.series`
   replaces new `.multi` wrapper IDs, with legacy aliases recorded in the port
   inventory.
-- [0023](0023-arena-enter-one-sig-genuine-two-party.md) — Arena enter: one
+- [0023](0023-mtps-token-hardening.md) — Harden the MTPS stake token: admin-only
+  `admin_mint` via an owned `AdminCap` (no public mint → no brick/griefing), a
+  0-decimal whole-token currency via `coin_registry`; the faucet moves to the
+  backend admin endpoint. Builds on 0010.
+- [0026](0026-arena-enter-one-sig-genuine-two-party.md) — Arena enter: one
   sponsored PTB opens + funds-own-seat every game vs warm fleet bots; direct
   allocation (not FIFO), user=A/bot=B, bot drives settle, genuine auto-play.
-  _(Open mechanics — who creates the tunnel — superseded by 0025.)_
-- [0024](0024-serving-fleet-topology-wsclient-then-colocated.md) — Serving-fleet
+  _(Open mechanics — who creates the tunnel — superseded by 0028.)_
+- [0027](0027-serving-fleet-topology-wsclient-then-colocated.md) — Serving-fleet
   topology: WS-client for the demo → co-located game-server at 5000 CCU; the
   `RelayTransport` seam is the swap point (capacity win, latency user-invisible).
-- [0025](0025-arena-bot-preopens-user-deposit-only.md) — Arena open: the bot
+- [0028](0028-arena-bot-preopens-user-deposit-only.md) — Arena open: the bot
   pre-creates + funds seat B at allocate; the user joins with a deposit-only PTB
-  (Active on one signature). Supersedes the open mechanics of 0023; makes
+  (Active on one signature). Supersedes the open mechanics of 0026; makes
   `allocate` on-chain-bound, so it **must** be authenticated + rate-limited.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004

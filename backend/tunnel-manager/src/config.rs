@@ -28,6 +28,22 @@ pub struct Config {
     pub agent_allowance_package_id: Option<String>,
     pub streaming_payment_package_id: Option<String>,
     pub settler_key: Option<String>, // base64 ed25519 secret of the gas/settler account
+    /// The MTPS `AdminCap` object id (ADR-0023), owned by the settler/deploy address. Required by
+    /// the faucet endpoints: `admin_mint` takes it as a `&mut` owned input. Unset = faucet disabled
+    /// (the endpoints 503), which is correct against the older permissionless package.
+    pub mtps_admin_cap_id: Option<String>,
+    /// Whole-token MTPS one public-faucet pull mints (0 decimals; ADR-0023).
+    pub faucet_user_amount: u64,
+    /// Whole-token MTPS the internal faucet mints by default (caps at the contract's
+    /// `MAX_MINT_PER_CALL`). The internal endpoint may request less, never more.
+    pub faucet_internal_amount: u64,
+    /// Public-faucet rate-limit window, seconds (the period `faucet_max_per_window` is counted over).
+    pub faucet_cooldown_secs: i64,
+    /// Max public-faucet pulls allowed per address within one window. Default 5 (per 30 min).
+    pub faucet_max_per_window: u32,
+    /// Shared bearer secret gating the internal faucet. Unset = internal endpoint disabled (503) —
+    /// fails closed so an unlimited mint can never be accidentally open.
+    pub faucet_admin_token: Option<String>,
     pub walrus_publisher_url: Option<String>,
     pub walrus_aggregator_url: Option<String>,
     pub redis_cache_url: Option<String>,
@@ -61,6 +77,26 @@ impl Config {
             agent_allowance_package_id: opt("AGENT_ALLOWANCE_PACKAGE_ID"),
             streaming_payment_package_id: opt("STREAMING_PAYMENT_PACKAGE_ID"),
             settler_key: opt("SUI_SETTLER_KEY"),
+            mtps_admin_cap_id: opt("MTPS_ADMIN_CAP_ID"),
+            faucet_user_amount: std::env::var("FAUCET_USER_AMOUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10_000),
+            faucet_internal_amount: std::env::var("FAUCET_INTERNAL_AMOUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1_000_000),
+            faucet_cooldown_secs: std::env::var("FAUCET_COOLDOWN_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(1_800),
+            faucet_max_per_window: std::env::var("FAUCET_MAX_PER_WINDOW")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(5),
+            faucet_admin_token: opt("FAUCET_ADMIN_TOKEN"),
             walrus_publisher_url: opt("WALRUS_PUBLISHER_URL"),
             walrus_aggregator_url: opt("WALRUS_AGGREGATOR_URL"),
             redis_cache_url: opt("REDIS_CACHE_URL"),
@@ -179,6 +215,29 @@ mod tests {
         let on = Config::from_env().unwrap();
         assert_eq!(on.colocated_fleet_count, 3);
         assert_eq!(on.colocated_fleet_games, vec!["blackjack", "caro"]);
+    }
+
+    // Faucet amounts/cooldown have sensible defaults so a deploy that only sets the AdminCap id
+    // works; FAUCET_COOLDOWN_SECS=0 is rejected (would disable the rate limit) and falls back.
+    #[test]
+    fn from_env_defaults_faucet_params() {
+        for k in [
+            "FAUCET_USER_AMOUNT",
+            "FAUCET_INTERNAL_AMOUNT",
+            "FAUCET_COOLDOWN_SECS",
+            "FAUCET_MAX_PER_WINDOW",
+            "FAUCET_ADMIN_TOKEN",
+            "MTPS_ADMIN_CAP_ID",
+        ] {
+            std::env::remove_var(k);
+        }
+        let c = Config::from_env().unwrap();
+        assert_eq!(c.faucet_user_amount, 10_000);
+        assert_eq!(c.faucet_internal_amount, 1_000_000);
+        assert_eq!(c.faucet_cooldown_secs, 1_800);
+        assert_eq!(c.faucet_max_per_window, 5);
+        assert!(c.faucet_admin_token.is_none());
+        assert!(c.mtps_admin_cap_id.is_none());
     }
 
     #[test]

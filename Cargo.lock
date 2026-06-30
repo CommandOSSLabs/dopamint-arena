@@ -2528,6 +2528,7 @@ dependencies = [
  "tunnel-blackjack",
  "tunnel-core",
  "tunnel-harness",
+ "tunnel-quantum-poker",
 ]
 
 [[package]]
@@ -7602,6 +7603,7 @@ dependencies = [
 name = "tunnel-caro"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "tokio",
  "tunnel-core",
@@ -7720,6 +7722,7 @@ version = "0.1.0"
 name = "tunnel-tic-tac-toe"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
  "tokio",

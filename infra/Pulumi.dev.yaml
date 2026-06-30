@@ -18,3 +18,5 @@ config:
   dopamint:ollama-enabled: "true"
   dopamint:ollama-model: qwen2.5:1.5b
   dopamint:ollama-image-tag: "0.6.2"
+  dopamint:faucet-admin-token:
+    secure: AAABALSp5dVUwyAzKkW/6HTn0oMRLUrElfHtuhuCeX7CC3FVIKZW0FgoT+b2sQ+ikEWhaUiW0ROUIUXg2PyF0asVqm9jio3pTvT4A8RoZ/sgAyybMhZnAuMs5+/NMmql4doM+g==

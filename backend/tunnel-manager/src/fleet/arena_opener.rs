@@ -1,4 +1,4 @@
-//! The arena's on-chain tunnel-open seam (ADR-0025).
+//! The arena's on-chain tunnel-open seam (ADR-0028).
 //!
 //! In the 1a flow the FLEET (not the user) creates the tunnel + funds seat B at allocate time, so
 //! the user's open is a deposit-only PTB and the tunnel activates on a single signature. This trait
@@ -6,7 +6,7 @@
 //! contract and the FE deposit path can be built and tested without chain access; the real
 //! `create_and_share` (naming `party_a = user`) + `deposit_party_b` is the boss's `SuiAnchor` impl.
 //!
-//! Per ADR-0025 this makes `allocate` commit the house before the user — so the endpoint that drives
+//! Per ADR-0028 this makes `allocate` commit the house before the user — so the endpoint that drives
 //! it must be authenticated + rate-limited before this ships at scale.
 
 use async_trait::async_trait;
@@ -26,12 +26,12 @@ pub struct ArenaOpenRequest<'a> {
 pub trait ArenaTunnelOpener: Send + Sync {
     /// Create the shared tunnel (party A = user, party B = bot) and fund seat B, returning the
     /// on-chain tunnel id the user will `deposit_party_a` into. On-chain-bound and may fail per
-    /// game; the caller omits a game whose open errors (ADR-0025).
+    /// game; the caller omits a game whose open errors (ADR-0028).
     async fn open_and_fund_seat_b(&self, req: ArenaOpenRequest<'_>) -> anyhow::Result<String>;
 }
 
 /// Placeholder opener: a deterministic id derived from the request, no chain access. Lets the 1a
-/// contract + FE deposit path land ahead of the real `SuiAnchor` (ADR-0025 scaffold). The id is NOT
+/// contract + FE deposit path land ahead of the real `SuiAnchor` (ADR-0028 scaffold). The id is NOT
 /// a real object id — it only needs to be stable and distinct per (user, bot, game) for the wiring.
 #[derive(Default)]
 pub struct NoopArenaOpener;

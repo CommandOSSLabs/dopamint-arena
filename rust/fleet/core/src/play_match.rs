@@ -15,6 +15,7 @@ use tunnel_harness::{
     Balances, DriverOutcome, MoveStrategy, PartyDriver, Protocol, SeatParts, Signer,
     TranscriptRecorder, TunnelAnchor,
 };
+use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
 
 use crate::match_channel::MatchChannel;
 use crate::peer::PeerMsg;
@@ -35,15 +36,33 @@ pub struct GameProfile {
     pub stake_each: u64,
 }
 
-/// Blackjack profile: stake 1 MTPS each (10^9 smallest units, 9 decimals), the per-seat stake every
-/// arena game uses. The FE arena tile must stake the same so the off-chain initial balances match
-/// (a divergent stake would break co-signing). Match length is bounded by the protocol's `ROUND_CAP`,
-/// not the bankroll, so a large stake stays well under the per-tunnel move budget. (No host — see
-/// [`GameProfile`].)
+/// Blackjack profile: stake 1000 MTPS each (0 decimals → integer `1000`), matching the FE PvP
+/// hook's `DEFAULT_STAKE` so the bot's pre-created tunnel and the user's deposit agree on the
+/// initial off-chain balances (a divergent stake would break co-signing). Must be ≥ `MIN_BET` (25)
+/// or `is_terminal` fires at the initial state and the match settles with zero moves. Match length
+/// is bounded by the protocol's `ROUND_CAP`, not the bankroll. (No host — see [`GameProfile`].)
 pub const BLACKJACK: GameProfile = GameProfile {
     game_id: "blackjack",
-    stake_each: 1_000_000_000,
+    stake_each: 1000,
 };
+
+/// Quantum Poker profile: stake 5000 MTPS per seat (the bankroll), ante 50 per hand, 50-hand cap —
+/// matching the FE PvP hook (`POKER_BUYIN = 5000`, `HAND_CAP = 50`, default `ANTE = 50`) so the
+/// bot's pre-created tunnel and the user's deposit agree on the initial off-chain balances and the
+/// per-hand wager unit. Real MTPS only moves at open/settle; intra-match bets draw against the
+/// staked bankroll off-chain, exactly as the tunnel protocol already does.
+pub const QUANTUM_POKER: GameProfile = GameProfile {
+    game_id: "quantum_poker",
+    stake_each: 5000,
+};
+
+/// Per-hand ante for the fleet bot's quantum poker. Matches the TS protocol's default `ANTE` (50n),
+/// which every FE caller uses (no FE caller passes a custom ante). Kept separate from
+/// [`QUANTUM_POKER`] because the ante is a protocol-construction param, not a stake.
+const QUANTUM_POKER_ANTE: u64 = 50;
+
+/// Hand cap for the fleet bot's quantum poker, matching the FE `HAND_CAP = 50n`.
+const QUANTUM_POKER_HAND_CAP: u64 = 50;
 
 /// Drive one match of ANY game to completion over the relay, on the merged `PartyDriver`.
 /// `signer` is this bot's fresh per-match ephemeral key; `match_info.role` is its seat; the
@@ -137,6 +156,49 @@ where
         recorder,
     )
     .await
+}
+
+/// Quantum Poker: a thin wrapper over [`play_match`] driving [`QuantumPokerStrategy`] over the
+/// commit-reveal v2 protocol. The ante scales the chip economy to the whole-token bankroll; it
+/// defaults to the FE's `ANTE` (50) so the bot co-signs against the unchanged FE.
+pub async fn play_quantum_poker<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<<QuantumPoker as Protocol>::Move> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        QuantumPoker::with_ante(QUANTUM_POKER_HAND_CAP, QUANTUM_POKER_ANTE),
+        QuantumPokerStrategy::new(fleet_seed(role)),
+        &QUANTUM_POKER,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
+    )
+    .await
+}
+
+/// A stable-per-role seed for the poker strategy, so a bot's play is deterministic per match seat
+/// but distinct across seats. Not cryptographic — the per-match co-signing key is the secret.
+fn fleet_seed(role: Role) -> u64 {
+    match role {
+        Role::A => 0xa11ce,
+        Role::B => 0xb0b_5eed,
+    }
 }
 
 async fn recv_hello<T: RelayTransport>(ch: &MatchChannel<T>) -> Result<[u8; 32]> {
