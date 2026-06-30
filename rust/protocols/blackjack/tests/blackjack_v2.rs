@@ -103,3 +103,38 @@ fn two_reveals_apply_one_card_and_advance_to_next_draw() {
         .encode_state(&state)
         .starts_with(b"sui_tunnel::proto::blackjack.v2"));
 }
+
+#[test]
+fn opening_deal_exposes_only_the_dealer_up_card() {
+    // Each card is dealt by a two-party commit-reveal (commit_a, commit_b, reveal_a, reveal_b).
+    // The fix lays down only the dealer's up-card before the player acts — the hole card is drawn
+    // later in the post-stand run-out — so at the player's turn the dealer shows exactly one card.
+    let protocol = BlackjackV2;
+    let mut state = protocol.initial_state(&ctx());
+    let mut seed = 0u8;
+    while state.phase == Phase::DrawCommit {
+        let a = secret(seed, 1);
+        seed = seed.wrapping_add(1);
+        let b = secret(seed, 2);
+        seed = seed.wrapping_add(1);
+        state = protocol
+            .apply_move(&state, &commit(a.clone()), Seat::A)
+            .unwrap();
+        state = protocol
+            .apply_move(&state, &commit(b.clone()), Seat::B)
+            .unwrap();
+        state = protocol.apply_move(&state, &reveal(a), Seat::A).unwrap();
+        state = protocol.apply_move(&state, &reveal(b), Seat::B).unwrap();
+    }
+    assert_eq!(
+        state.phase,
+        Phase::Player,
+        "opening deal should hand control to the player"
+    );
+    assert_eq!(state.player_hand.len(), 2);
+    assert_eq!(
+        state.dealer_hand.len(),
+        1,
+        "the dealer hole card must stay hidden until the player stands"
+    );
+}

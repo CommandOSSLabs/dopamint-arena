@@ -300,6 +300,17 @@ fn same_number_set(a: &[u8], b: &[u8]) -> bool {
         && a.len() == b.len()
 }
 
+/// First seat to act in a hand. Heads-up here is dealerless, so position is rotated by
+/// hand index: A opens even hands, B opens odd ones. Without this A would act first every
+/// street of every hand, a permanent positional edge for the tunnel opener.
+fn first_actor_for(hand_no: u64) -> Seat {
+    if hand_no % 2 == 0 {
+        Seat::A
+    } else {
+        Seat::B
+    }
+}
+
 fn street_bet(state: &PokerState, by: Seat) -> u64 {
     if by == Seat::A {
         state.street_bet_a
@@ -362,7 +373,7 @@ impl QuantumPoker {
         state.phase = phase;
         state.street_bet_a = 0;
         state.street_bet_b = 0;
-        state.to_act = Seat::A;
+        state.to_act = first_actor_for(state.hand_no);
         state.acted_a = false;
         state.acted_b = false;
     }
@@ -556,14 +567,13 @@ impl QuantumPoker {
         }
 
         match next.phase {
-            PokerPhase::OpenPrivateHoles => {
+            PokerPhase::OpenPrivateHoles
                 if has_revealed(&next, Seat::A, &B_HOLE_SLOTS)
-                    && has_revealed(&next, Seat::B, &A_HOLE_SLOTS)
-                {
-                    next.hole_a = self.derive_hole_cards(&next, Seat::A, true);
-                    next.hole_b = self.derive_hole_cards(&next, Seat::B, true);
-                    self.post_antes_and_begin_street(&mut next)?;
-                }
+                    && has_revealed(&next, Seat::B, &A_HOLE_SLOTS) =>
+            {
+                next.hole_a = self.derive_hole_cards(&next, Seat::A, true);
+                next.hole_b = self.derive_hole_cards(&next, Seat::B, true);
+                self.post_antes_and_begin_street(&mut next)?;
             }
             PokerPhase::RevealFlop => {
                 self.try_reveal_board_then_bet(&mut next, &FLOP_SLOTS, PokerPhase::FlopBet)?;
@@ -678,7 +688,7 @@ impl QuantumPoker {
             PokerPhase::RiverBet => PokerPhase::Showdown,
             _ => return Err(format!("cannot advance from {:?}", state.phase)),
         };
-        state.to_act = Seat::A;
+        state.to_act = first_actor_for(state.hand_no);
         state.acted_a = false;
         state.acted_b = false;
         state.street_bet_a = 0;
@@ -799,7 +809,7 @@ impl QuantumPoker {
         next.total_bet_b = 0;
         next.street_bet_a = 0;
         next.street_bet_b = 0;
-        next.to_act = Seat::A;
+        next.to_act = first_actor_for(next.hand_no);
         next.acted_a = false;
         next.acted_b = false;
         next.folded_by = None;
@@ -850,7 +860,7 @@ impl Protocol for QuantumPoker {
             total_bet_b: 0,
             street_bet_a: 0,
             street_bet_b: 0,
-            to_act: Seat::A,
+            to_act: first_actor_for(0),
             acted_a: false,
             acted_b: false,
             folded_by: None,
@@ -1175,8 +1185,14 @@ pub fn evaluate5(cards: &[u8]) -> Result<u64, String> {
     } else {
         0
     };
+    // A flush (incl. one made with virtual-deck duplicates) is compared by its five card
+    // ranks high-to-low, NOT by group-count order — otherwise a low duplicate pair would
+    // outrank a higher solo card. Paired non-flush hands still tiebreak by group (pair/trips
+    // rank first, then kickers).
     let tiebreakers: Vec<u8> = if straight {
         vec![straight_high]
+    } else if flush {
+        ranks.clone()
     } else {
         groups.iter().map(|g| g.1).collect()
     };
@@ -1217,6 +1233,28 @@ pub fn best_poker_hand(cards: &[u8]) -> Result<BestHand, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_actor_alternates_by_hand_number() {
+        // Heads-up first-actor rotates per hand so the tunnel opener has no permanent edge.
+        assert_eq!(first_actor_for(0), Seat::A);
+        assert_eq!(first_actor_for(1), Seat::B);
+        assert_eq!(first_actor_for(2), Seat::A);
+        assert_eq!(first_actor_for(3), Seat::B);
+    }
+
+    #[test]
+    fn flush_tiebreaks_by_high_card_not_pair_group() {
+        // Virtual-deck duplicates can make a flush that also holds a rank pair. It must rank by
+        // its five card ranks high-to-low, NOT by pair-group order — else a low pair would
+        // outrank a higher solo card. Suit 0 => card index == rank.
+        let high_flush_with_low_pair = evaluate5(&[12, 2, 2, 1, 0]).unwrap(); // top rank 12, pair of 2s
+        let lower_flush = evaluate5(&[11, 9, 8, 6, 4]).unwrap(); // top rank 11, no pair/straight
+        assert!(
+            high_flush_with_low_pair > lower_flush,
+            "the higher top-card flush must win regardless of a low pair"
+        );
+    }
 
     fn ctx() -> TunnelContext {
         TunnelContext {

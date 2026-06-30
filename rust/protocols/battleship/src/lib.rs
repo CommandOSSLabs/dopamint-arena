@@ -11,6 +11,15 @@ pub const BOARD_SIZE: usize = 10;
 pub const CELL_COUNT: usize = BOARD_SIZE * BOARD_SIZE;
 pub const FLEET_CELLS: u8 = 17;
 pub const SALT_BYTES: usize = 32;
+
+// `encode_state` packs each cell index into a single byte (the `cell: u8` fields and the wire
+// layout). Exact at 10x10 (indices 0..99), but a larger board would overflow u8 and silently
+// collide co-signed state hashes. Fail at compile time — widen the wire format (and the u8 cell
+// fields) before growing the board.
+const _: () = assert!(
+    CELL_COUNT <= 256,
+    "battleship wire format assumes <=256 cells; widen encode_state and the u8 cell fields first"
+);
 const TREE_LEAVES: usize = 128;
 const COMMIT_BYTES: usize = 32;
 const DOMAIN: &[u8] = b"sui_tunnel::proto::battleship.v1";

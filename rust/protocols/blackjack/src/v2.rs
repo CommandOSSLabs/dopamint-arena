@@ -267,6 +267,27 @@ fn resolve_showdown(s: &BlackjackV2State) -> BlackjackV2State {
     settle(s, winner)
 }
 
+/// Hand control to the player — unless they are already pat at 21, where any hit can only
+/// bust. There we auto-stand straight into the dealer's turn (identical to the `stand` move).
+fn player_turn_or_dealer(s: &BlackjackV2State) -> BlackjackV2State {
+    if blackjack_hand_value(&s.player_hand) >= BUST_AT {
+        if blackjack_hand_value(&s.dealer_hand) >= DEALER_STANDS_AT {
+            return resolve_showdown(s);
+        }
+        return begin_draw(
+            s,
+            DrawContext {
+                for_hand: DrawHand::Dealer,
+                reason: DrawReason::DealerAuto,
+            },
+        );
+    }
+    BlackjackV2State {
+        phase: Phase::Player,
+        ..s.clone()
+    }
+}
+
 fn after_draw(s: &BlackjackV2State, rank: u8) -> BlackjackV2State {
     let draw = s.draw.expect("draw exists during reveal");
     let value = rank_value(rank);
@@ -302,7 +323,11 @@ fn after_draw(s: &BlackjackV2State, rank: u8) -> BlackjackV2State {
                     },
                 );
             }
-            if base.dealer_hand.len() < 2 {
+            // Deal ONLY the dealer's up-card now; the hole card stays hidden until the player
+            // stands (drawn in the dealer_auto run-out). Otherwise the player would see the
+            // dealer's full hand before acting — a large information edge, and impossible to
+            // hide in two-party commit-reveal if drawn during the deal.
+            if base.dealer_hand.is_empty() {
                 return begin_draw(
                     &base,
                     DrawContext {
@@ -311,19 +336,13 @@ fn after_draw(s: &BlackjackV2State, rank: u8) -> BlackjackV2State {
                     },
                 );
             }
-            BlackjackV2State {
-                phase: Phase::Player,
-                ..base
-            }
+            player_turn_or_dealer(&base)
         }
         DrawReason::Hit => {
             if is_bust(&base.player_hand) {
                 settle(&base, Some(dealer_party(base.round)))
             } else {
-                BlackjackV2State {
-                    phase: Phase::Player,
-                    ..base
-                }
+                player_turn_or_dealer(&base)
             }
         }
         DrawReason::DealerAuto => {
