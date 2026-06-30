@@ -36,6 +36,13 @@ pub struct AppState {
     /// Binds the user's WS conn to its co-located bot's bus conn for an allocated arena match
     /// (ADR-0027/0028), completing the `MatchRecord` so the relay can route between them.
     pub arena: crate::fleet::arena_rendezvous::ArenaRendezvous,
+    /// Max co-located bots spawned on demand per game (config `FLEET_COLOCATED_COUNT`). The arena
+    /// admission ceiling: `reserve_or_spawn` spawns up to this many concurrent matches per game, then
+    /// returns nothing. `0` (default) serves no co-located bots — only pre-registered warm ones.
+    pub arena_fleet_count: u32,
+    /// Games the co-located fleet serves (config `FLEET_COLOCATED_GAMES`). A game not in this set has
+    /// an effective cap of 0 — the trusted-subset gate (a `play_game` arm may exist before it's live).
+    pub arena_fleet_games: std::collections::HashSet<String>,
     /// Whole-token MTPS one public-faucet pull mints (config `FAUCET_USER_AMOUNT`).
     pub faucet_user_amount: u64,
     /// Whole-token MTPS the internal faucet mints by default (config `FAUCET_INTERNAL_AMOUNT`);
@@ -57,6 +64,12 @@ impl AppState {
     /// `main.rs`: `InMemoryControlStore`, `InMemoryMpStore`, `LocalBus`. No network I/O; always
     /// synchronous and deterministic.
     pub fn in_memory_for_test() -> SharedState {
+        Self::in_memory_with_arena_fleet(0, Vec::new())
+    }
+
+    /// Like [`in_memory_for_test`] but with the co-located arena fleet configured, so tests can
+    /// exercise on-demand seat-fill (`reserve_or_spawn`) through `arena_allocate`.
+    pub fn in_memory_with_arena_fleet(count: u32, games: Vec<String>) -> SharedState {
         use std::sync::Arc;
 
         use crate::store::memory::{InMemoryControlStore, InMemoryMpStore, LocalBus};
@@ -82,6 +95,8 @@ impl AppState {
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
             arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+            arena_fleet_count: count,
+            arena_fleet_games: games.into_iter().collect(),
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,

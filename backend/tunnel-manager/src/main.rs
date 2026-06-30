@@ -161,6 +161,8 @@ async fn main() -> anyhow::Result<()> {
         fleet: crate::fleet::BotPool::default(),
         arena_opener,
         arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+        arena_fleet_count: config.colocated_fleet_count,
+        arena_fleet_games: config.colocated_fleet_games.iter().cloned().collect(),
         faucet_user_amount: config.faucet_user_amount,
         faucet_internal_amount: config.faucet_internal_amount,
         faucet_cooldown_secs: config.faucet_cooldown_secs,
@@ -169,13 +171,9 @@ async fn main() -> anyhow::Result<()> {
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
-    // Co-located fleet (ADR-0027): in-process bots served over the relay bus. Inert unless
-    // FLEET_COLOCATED_COUNT > 0, so the deployed relay starts nothing by default.
-    crate::fleet::colocated::spawn(
-        state.clone(),
-        config.colocated_fleet_count,
-        &config.colocated_fleet_games,
-    );
+    // Co-located fleet (ADR-0027): bots are spawned on demand by `arena_allocate`
+    // (`reserve_or_spawn`), bounded by `arena_fleet_count`/`arena_fleet_games` on `AppState` — no
+    // startup pre-spawn. Inert unless `FLEET_COLOCATED_COUNT > 0`.
     // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
     // live feed reflects real settlements; without this the stats SSE never emits any.
     sui::spawn_event_indexer(state.clone());

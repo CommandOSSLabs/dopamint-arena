@@ -3,11 +3,12 @@
 //! Removing the per-bot socket is the capacity swap at 5000 CCU.
 //!
 //! **Inert by default** (`FLEET_COLOCATED_COUNT=0`) — the deployed relay spawns nothing unless
-//! explicitly enabled. Each bot loops: register a warm bot (so `arena_allocate` reserves it exactly
-//! like a WS bot) → await `Reserved` then `Opened` on its pool ctrl channel → [`play_arena_match`]
-//! (bind to the [`crate::fleet::arena_rendezvous`], wait for the human to join, then drive
-//! `fleet_core::play_blackjack` over a [`BusRelayTransport`] with the
-//! [`crate::fleet::arena_anchor::RelayBridgedAnchor`] to settlement) → re-register.
+//! explicitly enabled. Bots are spawned **purely on demand** by `arena_allocate` via
+//! [`reserve_or_spawn`]: a co-located bot is spawned per allocated seat, up to the per-game cap.
+//! Each bot is one-shot: await `Opened` → [`play_arena_match`] (bind to the
+//! [`crate::fleet::arena_rendezvous`], wait for the human to join, then drive the game over a
+//! [`BusRelayTransport`] with the [`crate::fleet::arena_anchor::RelayBridgedAnchor`] to settlement) →
+//! unregister (freeing its in-flight slot).
 //!
 //! The remaining on-chain dependency is the funded bot account pool: [`bot_address`] is a
 //! deterministic placeholder until a durable/KMS key store lands, and the real seat-B funding lives
@@ -21,7 +22,9 @@ use tokio::sync::mpsc;
 use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
 
 use fleet_core::match_channel::MatchChannel;
-use fleet_core::play_match::{play_blackjack, play_quantum_poker};
+use fleet_core::play_match::{
+    play_blackjack, play_bomb_it, play_chicken_cross, play_quantum_poker, play_world_canvas,
+};
 use fleet_core::signer_durable::DurableSigner;
 use fleet_core::Role;
 
@@ -30,44 +33,66 @@ use crate::fleet::bus_transport::{BusRelayConnection, BusRelayTransport};
 use crate::fleet::{BotHandle, FleetServerMsg};
 use crate::state::SharedState;
 
-/// Backoff before a bot re-registers after a match, so a tight failure loop can't spin the pool.
-const REQUEUE_BACKOFF: Duration = Duration::from_secs(1);
-
 /// How long the bot waits for the user's browser to connect + `arena.join` after the tunnel opens,
-/// before giving up and re-registering. Generous: the user may sign the open then take a moment to
-/// land on the relay. The pool TTL is the backstop for a user who never opens at all.
+/// before giving up. Generous: the user may sign the open then take a moment to land on the relay.
+/// The pool TTL is the backstop for a user who never opens at all.
 const ARENA_JOIN_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Spawn the co-located fleet if enabled. A no-op when `count == 0` or no games are listed, so the
-/// deployed relay stays inert unless explicitly turned on. Each (game × index) is one looping bot.
-pub fn spawn(state: SharedState, count: u32, games: &[String]) {
-    if count == 0 || games.is_empty() {
-        return;
-    }
-    tracing::info!(count, ?games, "co-located fleet enabled");
-    for game in games {
-        for idx in 0..count {
-            tokio::spawn(run_bot(state.clone(), game.clone(), idx));
-        }
-    }
+/// Per-spawn sequence for distinct on-demand bot identities — a fixed index would make every
+/// concurrent match of a game share one seat-B address. A placeholder until the wallet-pool checkout.
+static ONDEMAND_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// On-demand seat-fill: spawn a bot for `game` and reserve it, if the per-game in-flight count is
+/// below `cap`. `arena_allocate` calls this so seat-fill scales with real demand, not a pre-spawned
+/// pool. Returns `None` when `cap` concurrent matches are already in flight (the admission ceiling —
+/// wallets aren't the limiter at a 1M pool, so the in-flight count is). `cap == 0` spawns nothing
+/// (inert-by-default).
+pub async fn reserve_or_spawn(
+    state: &SharedState,
+    game: &str,
+    now_ms: u64,
+    cap: u32,
+) -> Option<crate::fleet::Reservation> {
+    // Pure on-demand: build the bot's handle and atomically reserve it under the cap (cap 0 ⇒ always
+    // None, the inert default). The bot's `ctrl` lands in the pool, so the allocate handler's
+    // `notify(Reserved/Opened)` reaches it; its lifecycle runs in a one-shot task.
+    let match_key = DurableSigner::from_secret(&random_secret());
+    let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel();
+    let bot = BotHandle {
+        eph_pubkey: hex::encode(match_key.public_key()),
+        // Distinct placeholder seat-B identity per spawn (a fixed index would collide across
+        // concurrent matches). Replaced by a wallet-pool checkout (`get_member_key(Ordinal)`) once
+        // the funded 1M-pool crate is in this branch — see ADR-0028 / wallet-pool (PR #124).
+        address: bot_address(game, ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        ctrl: ctrl_tx,
+    };
+    let (reservation, bot_id) = state.fleet.reserve_under_cap(game, cap, now_ms, bot)?;
+    tokio::spawn(run_on_demand(
+        state.clone(),
+        game.to_owned(),
+        ctrl_rx,
+        match_key,
+        bot_id,
+    ));
+    Some(reservation)
 }
 
-/// One bot: a stable on-chain identity, looping register → await reservation+open → play →
-/// re-register with a fresh per-match key.
-async fn run_bot(state: SharedState, game: String, idx: u32) {
-    let address = bot_address(&game, idx);
-    loop {
-        let (bot_id, match_key, mut ctrl_rx) = register_bot(&state, &game, &address);
-        if let Some(opened) = await_open(&mut ctrl_rx).await {
-            if let Err(e) = play_arena_match(&state, &game, &opened, match_key).await {
-                tracing::debug!(%game, match_id = %opened.match_id, "co-located match ended: {e:#}");
-            }
+/// One on-demand bot: it's already registered + reserved, so it just awaits the user's `Opened`,
+/// plays the match, and unregisters. It does not loop — on-demand spawns one bot per seat, so the
+/// task ends with the match, freeing its in-flight slot.
+async fn run_on_demand(
+    state: SharedState,
+    game: String,
+    mut ctrl_rx: mpsc::UnboundedReceiver<FleetServerMsg>,
+    match_key: DurableSigner,
+    bot_id: u64,
+) {
+    if let Some(opened) = await_open(&mut ctrl_rx).await {
+        if let Err(e) = play_arena_match(&state, &game, &opened, match_key).await {
+            tracing::debug!(%game, match_id = %opened.match_id, "on-demand match ended: {e:#}");
         }
-        // The registration is consumed (played out, or its ctrl channel closed) — drop it and
-        // re-register fresh for the next match.
-        state.fleet.unregister(bot_id);
-        tokio::time::sleep(REQUEUE_BACKOFF).await;
     }
+    state.fleet.unregister(bot_id);
 }
 
 /// The arena identity handed to a reserved bot once the user opens its tunnel.
@@ -79,9 +104,10 @@ struct OpenedMatch {
     tunnel_id: String,
 }
 
-/// Register one warm bot into the pool with a fresh per-match ephemeral key. Returns the pool id
-/// (for `unregister`), the match co-signing key, and the ctrl channel the pool pushes onto.
-/// Separated from the run loop so the registration contract is deterministically testable.
+/// Register one warm bot into the pool with a fresh per-match ephemeral key — the WS-client (warm)
+/// registration path, exercised by the tests that pin the `reserve`/`notify` contract on-demand
+/// seat-fill also relies on. Returns the pool id, the match co-signing key, and the ctrl receiver.
+#[cfg(test)]
 fn register_bot(
     state: &SharedState,
     game: &str,
@@ -160,10 +186,17 @@ async fn play_arena_match(
         }
     }
 
+    tracing::info!(match_id = %opened.match_id, game = %game, "arena: user joined; bot driving co-signed play");
     let transport = BusRelayTransport::new(conn.clone(), opened.match_id.clone());
     let channel = MatchChannel::new(transport);
     let anchor = RelayBridgedAnchor::new(opened.tunnel_id.clone(), conn, opened.match_id.clone());
-    let moves = play_game(game, channel, anchor, match_key, &opened.opponent_wallet).await?;
+    let moves = match play_game(game, channel, anchor, match_key, &opened.opponent_wallet).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(match_id = %opened.match_id, game = %game, "arena: bot play errored: {e:#}");
+            return Err(e);
+        }
+    };
     tracing::info!(
         match_id = %opened.match_id,
         game = %game,
@@ -199,6 +232,39 @@ async fn play_game(
         }
         "quantum_poker" => {
             play_quantum_poker(
+                channel,
+                anchor,
+                match_key,
+                Role::B,
+                opponent_wallet,
+                InMemoryTranscriptRecorder::new(),
+            )
+            .await?
+        }
+        "bomb_it" => {
+            play_bomb_it(
+                channel,
+                anchor,
+                match_key,
+                Role::B,
+                opponent_wallet,
+                InMemoryTranscriptRecorder::new(),
+            )
+            .await?
+        }
+        "chicken_cross" => {
+            play_chicken_cross(
+                channel,
+                anchor,
+                match_key,
+                Role::B,
+                opponent_wallet,
+                InMemoryTranscriptRecorder::new(),
+            )
+            .await?
+        }
+        "world_canvas" => {
+            play_world_canvas(
                 channel,
                 anchor,
                 match_key,
@@ -245,16 +311,95 @@ mod tests {
     use super::*;
     use crate::state::AppState;
 
-    // The supervisor stays inert unless explicitly enabled: count 0 (the default) registers no bot,
-    // so `arena_allocate` finds nothing — the guarantee that a deployed relay does not silently
-    // start serving bots.
+    // Inert by default: with `cap == 0` (the `FLEET_COLOCATED_COUNT=0` default) and no warm bot,
+    // reserve_or_spawn spawns nothing — the guarantee that a deployed relay does not silently start
+    // serving bots. The on-demand equivalent of the old static-pool "count 0 registers no bots".
     #[tokio::test]
-    async fn spawn_is_inert_when_count_zero() {
+    async fn reserve_or_spawn_is_inert_at_cap_zero() {
         let state = AppState::in_memory_for_test();
-        spawn(state.clone(), 0, &["blackjack".to_owned()]);
+        assert!(
+            reserve_or_spawn(&state, "blackjack", 0, 0).await.is_none(),
+            "cap 0 must spawn no bot"
+        );
         assert!(
             state.fleet.reserve("blackjack", 0).is_none(),
-            "count 0 must register no bots"
+            "and register nothing in the pool"
+        );
+    }
+
+    // On-demand seat-fill: with free capacity and NO warm bot pre-registered, `reserve_or_spawn`
+    // spawns a bot, registers it, and returns a usable reservation. Seat-fill depends on the per-game
+    // cap (the concurrency ceiling), not on a pre-spawned warm pool — at a 1M-wallet pool, wallets
+    // aren't the limiter, so the in-flight count is what bounds admission.
+    #[tokio::test]
+    async fn reserve_or_spawn_fills_a_seat_on_demand() {
+        let state = AppState::in_memory_for_test();
+        let r = reserve_or_spawn(&state, "blackjack", 0, 2)
+            .await
+            .expect("free capacity fills a seat with no warm bot");
+        assert!(!r.address.is_empty(), "reservation carries a bot address");
+        assert!(!r.eph_pubkey.is_empty(), "and a per-match ephemeral pubkey");
+        // The spawned bot wired its ctrl channel into the pool: a Reserved notify reaches it.
+        assert!(
+            state.fleet.notify(
+                &r.match_id,
+                FleetServerMsg::Reserved {
+                    match_id: r.match_id.clone(),
+                    opponent_wallet: "0xuser".into(),
+                },
+            ),
+            "the on-demand bot is reachable for Reserved/Opened",
+        );
+    }
+
+    // Each on-demand spawn gets a DISTINCT identity: two concurrent bots for the same game must not
+    // share a seat-B address. A fixed index would collide (the bug a per-spawn sequence fixes); the
+    // wallet pool's `get_member_key(Ordinal)` replaces this placeholder later.
+    #[tokio::test]
+    async fn reserve_or_spawn_gives_each_bot_a_distinct_identity() {
+        let state = AppState::in_memory_for_test();
+        let a = reserve_or_spawn(&state, "blackjack", 0, 2)
+            .await
+            .expect("first");
+        let b = reserve_or_spawn(&state, "blackjack", 0, 2)
+            .await
+            .expect("second within cap");
+        assert_ne!(
+            a.address, b.address,
+            "concurrent on-demand bots must have distinct addresses"
+        );
+    }
+
+    // Admission is bounded by the per-game cap: once `cap` bots are in flight, the next call gets
+    // nothing until one finishes. This is the ceiling that replaces static pool depth — the limiter
+    // is the in-flight count, not the (1M) wallet pool.
+    #[tokio::test]
+    async fn reserve_or_spawn_is_bounded_by_the_cap() {
+        let state = AppState::in_memory_for_test();
+        assert!(
+            reserve_or_spawn(&state, "blackjack", 0, 1).await.is_some(),
+            "first reservation is within cap=1"
+        );
+        assert!(
+            reserve_or_spawn(&state, "blackjack", 0, 1).await.is_none(),
+            "second exceeds cap=1 — admission is bounded"
+        );
+    }
+
+    // The cap is per game: a second game's seat-fill is unaffected by the first game being at cap.
+    #[tokio::test]
+    async fn reserve_or_spawn_cap_is_per_game() {
+        let state = AppState::in_memory_for_test();
+        assert!(reserve_or_spawn(&state, "blackjack", 0, 1).await.is_some());
+        assert!(
+            reserve_or_spawn(&state, "blackjack", 0, 1).await.is_none(),
+            "blackjack is at cap"
+        );
+        assert!(
+            reserve_or_spawn(&state, "quantum_poker", 0, 1)
+                .await
+                .is_some(),
+            "a different game has its own cap"
         );
     }
 

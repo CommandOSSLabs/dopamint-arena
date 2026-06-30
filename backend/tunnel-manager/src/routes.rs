@@ -57,6 +57,8 @@ pub(crate) mod test_support {
             fleet: crate::fleet::BotPool::default(),
             arena_opener: std::sync::Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
             arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
+            arena_fleet_count: 0,
+            arena_fleet_games: std::collections::HashSet::new(),
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,
@@ -266,6 +268,11 @@ pub(crate) struct ArenaAllocation {
     /// The reserved bot's on-chain address — tunnel party B's `address` (funds/receives seat B).
     /// Distinct from the ephemeral pubkey; the frontend needs both to build the open PTB's party B.
     bot_address: String,
+    /// Per-seat stake (smallest MTPS unit) from the game's `GameProfile`. The fleet funded seat B
+    /// with exactly this; the user's batched deposit must fund seat A with the SAME amount, or the
+    /// off-chain initial balances diverge and co-signing fails. Single source of truth so the FE
+    /// never hardcodes a per-game stake.
+    stake_each: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -284,8 +291,17 @@ pub(crate) async fn arena_allocate(
     state.fleet.reclaim_expired(now);
     let mut allocations = Vec::new();
     for game in &req.games {
-        let Some(r) = state.fleet.reserve(&game.id, now) else {
-            tracing::debug!(game = %game.id, "arena allocate: no free bot");
+        // On-demand seat-fill (ADR-0027): reserve a warm bot if one is registered (a `/v1/fleet`
+        // WS-client bot), else spawn a co-located bot up to the per-game cap. A game outside the
+        // served set gets cap 0 — the `FLEET_COLOCATED_GAMES` trusted-subset gate.
+        let cap = if state.arena_fleet_games.contains(&game.id) {
+            state.arena_fleet_count
+        } else {
+            0
+        };
+        let Some(r) = crate::fleet::colocated::reserve_or_spawn(&state, &game.id, now, cap).await
+        else {
+            tracing::debug!(game = %game.id, "arena allocate: no bot (warm pool empty, at/over cap)");
             continue;
         };
         // ADR-0028: the fleet pre-creates the tunnel + funds seat B now, so the user joins with a
@@ -337,6 +353,7 @@ pub(crate) async fn arena_allocate(
             tunnel_id,
             bot_eph_pubkey: r.eph_pubkey,
             bot_address: r.address,
+            stake_each: profile.stake_each,
         });
     }
     tracing::info!(user = %req.user_address, allocated = allocations.len(), "arena allocate");
@@ -1443,23 +1460,6 @@ mod arena_tests {
     use crate::state::AppState;
     use tokio::sync::mpsc;
 
-    fn register_bot(
-        state: &SharedState,
-        game: &str,
-        pk: &str,
-    ) -> mpsc::UnboundedReceiver<FleetServerMsg> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        state.fleet.register(
-            game,
-            BotHandle {
-                eph_pubkey: pk.into(),
-                address: format!("0x{pk}"),
-                ctrl: tx,
-            },
-        );
-        rx
-    }
-
     fn game_req(id: &str) -> ArenaGameRequest {
         ArenaGameRequest {
             id: id.into(),
@@ -1467,62 +1467,26 @@ mod arena_tests {
         }
     }
 
-    // Allocate reserves one bot per game that has one, omits games with none, returns the
-    // fleet-opened tunnel id (ADR-0028), and notifies each reserved bot it's matched to the user.
+    // After the user opens, /v1/arena/opened pushes the tunnel id to the matching bot. We reserve via
+    // the pool directly so the test holds the bot's ctrl receiver (the on-demand spawn path owns it
+    // internally), then assert the handler delivers `Opened`.
     #[tokio::test]
-    async fn allocate_reserves_available_games_and_notifies_bots() {
+    async fn opened_pushes_tunnel_id_to_the_reserved_bot() {
         let state = AppState::in_memory_for_test();
-        let mut rx_bj = register_bot(&state, "blackjack", "aa");
-
-        let resp = arena_allocate(
-            State(state.clone()),
-            Json(ArenaAllocateRequest {
-                user_address: "0xuser".into(),
-                games: vec![game_req("blackjack"), game_req("tictactoe")], // no ttt bot registered
-            }),
-        )
-        .await;
-
-        // Only blackjack is allocated; the pubkey is the registered bot's.
-        assert_eq!(resp.0.allocations.len(), 1, "only games with a free bot");
-        let a = &resp.0.allocations[0];
-        assert_eq!(a.game, "blackjack");
-        assert_eq!(a.bot_eph_pubkey, "aa");
-        assert!(!a.match_id.is_empty());
-        // The fleet pre-opened a tunnel for the user to deposit into (Noop opener id here).
-        assert!(
-            !a.tunnel_id.is_empty(),
-            "allocate returns the pre-opened tunnel id"
-        );
-
-        // The reserved bot was told it's matched to this user.
-        assert_eq!(
-            rx_bj.try_recv().unwrap(),
-            FleetServerMsg::Reserved {
-                match_id: a.match_id.clone(),
-                opponent_wallet: "0xuser".into(),
-            }
-        );
-    }
-
-    // After the user opens, /v1/arena/opened pushes the tunnel id to the matching bot.
-    #[tokio::test]
-    async fn opened_notifies_the_reserved_bot_with_tunnel_id() {
-        let state = AppState::in_memory_for_test();
-        let mut rx = register_bot(&state, "blackjack", "aa");
-        let alloc = arena_allocate(
-            State(state.clone()),
-            Json(ArenaAllocateRequest {
-                user_address: "0xuser".into(),
-                games: vec![game_req("blackjack")],
-            }),
-        )
-        .await;
-        let match_id = alloc.0.allocations[0].match_id.clone();
-        let _ = rx.try_recv(); // drop the Reserved
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bot = BotHandle {
+            eph_pubkey: "bb".into(),
+            address: "0xbot".into(),
+            ctrl: tx,
+        };
+        let (reservation, _bot_id) = state
+            .fleet
+            .reserve_under_cap("blackjack", 1, 0, bot)
+            .expect("reserved within cap");
+        let match_id = reservation.match_id;
 
         let status = arena_opened(
-            State(state.clone()),
+            State(state),
             Json(ArenaOpenedRequest {
                 allocations: vec![ArenaOpenedEntry {
                     match_id: match_id.clone(),
@@ -1554,5 +1518,49 @@ mod arena_tests {
         )
         .await;
         assert!(resp.0.allocations.is_empty());
+    }
+
+    // On-demand seat-fill through the handler: with the co-located fleet configured (cap + game) and
+    // NO warm bot, arena_allocate spawns a bot and allocates. Seat-fill no longer needs a warm pool,
+    // only free capacity — this is the static-pool → on-demand cutover at the route boundary.
+    #[tokio::test]
+    async fn allocate_fills_a_seat_on_demand_when_fleet_configured() {
+        let state = AppState::in_memory_with_arena_fleet(1, vec!["blackjack".into()]);
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec![game_req("blackjack")],
+            }),
+        )
+        .await;
+        assert_eq!(
+            resp.0.allocations.len(),
+            1,
+            "a configured game fills on demand with no warm bot"
+        );
+        assert!(
+            !resp.0.allocations[0].bot_eph_pubkey.is_empty(),
+            "the on-demand bot has a fresh ephemeral key"
+        );
+    }
+
+    // The `FLEET_COLOCATED_GAMES` gate: a game NOT in the served set has an effective cap of 0, so
+    // even with the fleet enabled it is omitted — no bot is spawned for an untrusted/unlisted game.
+    #[tokio::test]
+    async fn allocate_omits_a_game_outside_the_served_set() {
+        let state = AppState::in_memory_with_arena_fleet(1, vec!["blackjack".into()]);
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec![game_req("quantum_poker")], // enabled fleet, but not in the served set
+            }),
+        )
+        .await;
+        assert!(
+            resp.0.allocations.is_empty(),
+            "a game outside FLEET_COLOCATED_GAMES is not served"
+        );
     }
 }

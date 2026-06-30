@@ -150,6 +150,10 @@ impl BotPool {
     }
 
     /// Reserve one free bot for `game`, minting a match id. `None` if no bot is free.
+    // Warm-pool reserve: its prod caller was removed with the warm path (pure on-demand uses
+    // `reserve_under_cap`). Retained for the `/v1/fleet` contract tests; the WS-fleet teardown is
+    // deferred to the post-dev-raid-merge cleanup.
+    #[allow(dead_code)]
     pub fn reserve(&self, game: &str, now_ms: u64) -> Option<Reservation> {
         let mut inner = self.inner.lock().unwrap();
         let (bot_id, bot) = inner.free.get_mut(game)?.pop()?;
@@ -173,6 +177,52 @@ impl BotPool {
             eph_pubkey,
             address,
         })
+    }
+
+    /// Register `bot` for `game` and immediately reserve it — but only if fewer than `cap` bots are
+    /// already in flight for `game` (free + reserved). The count-and-reserve is atomic under the pool
+    /// lock, so concurrent on-demand allocates can't both slip past the cap. `None` at cap.
+    ///
+    /// This is the on-demand seat-fill path (no warm pool): the in-flight count is the admission
+    /// ceiling. Distinct from [`reserve`], which pops a pre-registered warm bot.
+    pub fn reserve_under_cap(
+        &self,
+        game: &str,
+        cap: u32,
+        now_ms: u64,
+        bot: BotHandle,
+    ) -> Option<(Reservation, u64)> {
+        let mut inner = self.inner.lock().unwrap();
+        let in_flight = inner.free.get(game).map_or(0, |v| v.len())
+            + inner.reserved.values().filter(|r| r.game == game).count();
+        if in_flight as u32 >= cap {
+            return None;
+        }
+        inner.next_bot_id += 1;
+        let bot_id = inner.next_bot_id;
+        inner.next_match += 1;
+        let match_id = format!("arena_{}", inner.next_match);
+        let eph_pubkey = bot.eph_pubkey.clone();
+        let address = bot.address.clone();
+        inner.reserved.insert(
+            match_id.clone(),
+            Reserved {
+                bot_id,
+                game: game.to_owned(),
+                bot,
+                reserved_at_ms: now_ms,
+                opened: false,
+            },
+        );
+        Some((
+            Reservation {
+                match_id,
+                game: game.to_owned(),
+                eph_pubkey,
+                address,
+            },
+            bot_id,
+        ))
     }
 
     /// Push a control message to the bot holding `match_id`. Delivering `Opened` also marks the
