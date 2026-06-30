@@ -3,13 +3,14 @@ export const QUANTUM_POKER_HAND_CAP = 180n;
 
 /**
  * Hands per tunnel for the in-app Bot/Auto lanes before a cooperative close. The transcript carries
- * one entry per off-chain update (~547 bytes/entry, ~19 entries/hand ≈ 10.4 KB/hand). The backend
- * `/settle` body cap is now 16 MB (RawValue, ~1× in memory), so a tunnel fits up to ~1500 hands
- * before the body overflows (→ 413, silent fallback to a direct close with no Walrus proof). A
- * higher cap means fewer settle gaps and higher self-play TPS, traded against a bigger settle body
- * and a longer cooperative close — the value below is being tuned by benchmark (180 → 800 → 1500).
+ * one fixed 250 B entry per off-chain update (~19 updates/hand ≈ 4.75 KB/hand; the hand state is
+ * hashed into the 32-byte stateHash, never in the message). The backend `/settle` body cap is 32 MB,
+ * so a tunnel fits ~7000 hands before overflow (→ 413, silent fallback to a direct close with no
+ * Walrus proof); 2500 leaves a wide margin (~12 MB, ~35%). A higher cap means fewer settle gaps and
+ * higher self-play TPS, traded against a bigger settle body and a longer cooperative close — being
+ * tuned by benchmark (180 → 800 → 1500 → 2500).
  */
-export const QUANTUM_POKER_HANDS_PER_TUNNEL = 1500n;
+export const QUANTUM_POKER_HANDS_PER_TUNNEL = 2500n;
 
 /** Locked per seat for the PvP/agent tunnel lane. 5000 (was 2500) gives the bots room to bet across
  *  several streets without an early all-in — longer hands, more off-chain actions, and tunnels that
