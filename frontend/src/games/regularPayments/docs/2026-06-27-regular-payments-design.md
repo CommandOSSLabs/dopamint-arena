@@ -2,7 +2,7 @@
 
 > **Status:** Approved (design) — **pivot in progress** (bot + WS migration pending server WIP)  
 > **Date:** 2026-06-27  
-> **Last updated:** 2026-06-29  
+> **Last updated:** 2026-06-30
 > **Scope:** **Regular Payments** — a consumer checkout app in the arena payment workspace.  
 > **Package:** `frontend/src/games/regularPayments/`  
 > **Register id:** `regular-payments` (retire `micro-payments`)  
@@ -24,6 +24,7 @@ retired sections** (marked below).
 | Lobby CTA | **Go shop** (user opens tunnel) | **Find shop** (matchmaking → bot joins WS) |
 | TPS peak | During Pay now stream | During **shopping** (item picks; auto mode batches steps) |
 | Who opens tunnel | User wallet at Go shop (self-play) | **Shop bot (seat B) opens** — *provisional; confirm when bot WIP lands* |
+| UI / styling | — | **Walrus Memory design system** — `frontend/src/designSystem/`, shadcn/ui, `/design-system` |
 
 **Interim shipped code (today):** self-play grocery shop on `feat/regular-payments-grocery` —
 useful for UI/catalog/TPS experiments; **not** the long-term architecture.
@@ -50,7 +51,7 @@ checkout), not NFT vending or arcade games. Regular Payments demonstrates:
 |------|--------|
 | Product truth | VinMart / GoPay: connect wallet → find shop → pick items → pay → receipt |
 | TPS metering | 1 verified `tunnel.step` / `onConfirmed` = 1 action (heartbeat contract, ADR-0002) |
-| Arena consistency | Shared arena sketch skin (`games/sketch/`, Gochi Hand) |
+| Arena consistency | Walrus Memory design system (`frontend/src/designSystem/`, shadcn/ui, `/design-system` showcase) |
 | Clean codebase | `regularPayments` package; **do not extend** `microrPayments` (NFT, machine grid) |
 | Honest counterparty | Real two-party tunnel vs shop bot over relay (ADR-0020 direction) |
 
@@ -414,7 +415,7 @@ tunnel.propose({ from: "A", amount: priceMtps }, ...)
 | TPS window | During **shopping** |
 | Auto throughput | Time-budget batch + `sleep(0)` — not rAF |
 | Migration gate | Wait for bot + WS WIP before FIND SHOP coding |
-| Theme / components | Per coding-patterns doc |
+| Theme / components | Walrus Memory design system — per [coding-patterns doc](./2026-06-28-coding-patterns.md) §3 |
 | Thank you | 3s auto-return + Go lobby |
 
 ### Retired (2026-06-29)
@@ -430,7 +431,9 @@ tunnel.propose({ from: "A", amount: priceMtps }, ...)
 
 ## 13. Related docs
 
-- [2026-06-28-coding-patterns.md](./2026-06-28-coding-patterns.md) — FE coding standards
+- [2026-06-28-coding-patterns.md](./2026-06-28-coding-patterns.md) — FE coding standards (design system §3)
+- `frontend/src/designSystem/` — token tables (`tokens.ts`), live gallery (`DesignSystemPage.tsx` at `/design-system`)
+- `frontend/src/styles/index.css` — global `--wal-*` tokens and `.wal-*` helper classes
 - `docs/guide/frontend-integration.md` — `/v1/mp` relay contract
 - `docs/decisions/0020-bot-fleet-topology-shared-core.md` — bot fleet direction
 - `docs/design/frontend-tunnel-client-worker.md` — browser worker (remote branch; optional later)
