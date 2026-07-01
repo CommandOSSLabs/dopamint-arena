@@ -1,17 +1,17 @@
 import { cn } from "@/lib/utils";
 import { useRef } from "react";
 import type { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
-import { PaymentsShopCartFlyLayer } from "./PaymentsShopCartFlyLayer";
-import { PaymentsShopBody } from "./PaymentsShopBody";
-import { PaymentsShopHeader } from "./PaymentsShopHeader";
+import { RegularPaymentsShopCartFlyLayer } from "./RegularPaymentsShopCartFlyLayer";
+import { RegularPaymentsShopBody } from "./RegularPaymentsShopBody";
+import { RegularPaymentsShopHeader } from "./RegularPaymentsShopHeader";
 import { useCartFly } from "../../hooks/useCartFly";
-import { PaymentsShopCart } from "./PaymentsShopCart";
+import { RegularPaymentsShopCart } from "./RegularPaymentsShopCart";
 
-interface PaymentsShopProps {
+interface RegularPaymentsShopProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
 }
 
-export function PaymentsShop({ session }: PaymentsShopProps) {
+export function RegularPaymentsShop({ session }: RegularPaymentsShopProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cartTargetRef = useRef<HTMLSpanElement>(null);
 
@@ -25,18 +25,21 @@ export function PaymentsShop({ session }: PaymentsShopProps) {
       ref={containerRef}
       className={cn("relative flex h-full min-h-0 flex-col")}
     >
-      <PaymentsShopCartFlyLayer
+      <RegularPaymentsShopCartFlyLayer
         session={session}
         flies={flies}
         spawnFlyForProduct={spawnFlyForProduct}
         onFlyEnd={removeFly}
       />
 
-      <PaymentsShopHeader session={session} />
+      <RegularPaymentsShopHeader session={session} />
 
-      <PaymentsShopBody session={session} />
+      <RegularPaymentsShopBody session={session} />
 
-      <PaymentsShopCart session={session} cartTargetRef={cartTargetRef} />
+      <RegularPaymentsShopCart
+        session={session}
+        cartTargetRef={cartTargetRef}
+      />
     </div>
   );
 }
