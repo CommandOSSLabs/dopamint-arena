@@ -35,16 +35,12 @@ export interface PokerPvpView {
 }
 
 /** Derive the `PokerPvpLegal` from public state for `self`. */
-export function derivePokerLegal(
-  s: PokerState,
-  self: Party,
-): PokerPvpLegal {
+export function derivePokerLegal(s: PokerState, self: Party): PokerPvpLegal {
   const other: Party = self === "A" ? "B" : "A";
   const myStreet = self === "A" ? s.streetBetA : s.streetBetB;
   const oppStreet = other === "A" ? s.streetBetA : s.streetBetB;
   const diff = oppStreet > myStreet ? oppStreet - myStreet : 0n;
-  const effStack =
-    s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
+  const effStack = s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
   const myTotal = self === "A" ? s.totalBetA : s.totalBetB;
   const available = effStack - myTotal > 0n ? effStack - myTotal : 0n;
   const minBet = (diff > 0n ? diff : 0n) + 1n;

@@ -23,5 +23,7 @@ export function emark(scope: string, label: string): () => void {
   if (!ENGINE_DEBUG) return noop;
   const t0 = performance.now();
   return () =>
-    console.log(`[engine:${scope}] ${label} — ${(performance.now() - t0).toFixed(1)}ms`);
+    console.log(
+      `[engine:${scope}] ${label} — ${(performance.now() - t0).toFixed(1)}ms`,
+    );
 }

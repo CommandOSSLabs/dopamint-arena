@@ -262,4 +262,3 @@ export interface GameSessionSpec<
     io: MatchIo<State, Move>,
   ): MatchController<State, Move, Setup, Input, View>;
 }
-

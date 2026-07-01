@@ -14,10 +14,7 @@ import type { GameId, GameSessionSpec } from "./engineApi";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 
-export interface CommitRevealConfig<
-  State extends { winner: unknown },
-  Move,
-> {
+export interface CommitRevealConfig<State extends { winner: unknown }, Move> {
   game: GameId;
   /** Per-seat stake locked on-chain (MIST). */
   stake: bigint;

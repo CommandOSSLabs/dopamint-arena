@@ -1294,7 +1294,10 @@ async function settle(
 /** Map the worker hub's PvP snapshot into the legacy `PvpQuantumPoker` shape the
  *  `QuantumPokerPvpWindow` already renders. Selected at module load by `engineEnabled()`. */
 function useWorkerPvpPoker(windowId: string): PvpQuantumPoker {
-  const snap = useGameMatch(windowId, "quantum-poker") as MatchSnapshot<PokerPvpView>;
+  const snap = useGameMatch(
+    windowId,
+    "quantum-poker",
+  ) as MatchSnapshot<PokerPvpView>;
   const v = snap.view;
   const s = v?.state ?? null;
   const self: Party | null = snap.role;
@@ -1331,8 +1334,7 @@ function useWorkerPvpPoker(windowId: string): PvpQuantumPoker {
     bet: (amount: bigint) =>
       engineClient.submitInput(windowId, { type: "bet", amount }),
     endRequested: v?.endRequested ?? false,
-    requestSettle: () =>
-      engineClient.submitInput(windowId, { type: "settle" }),
+    requestSettle: () => engineClient.submitInput(windowId, { type: "settle" }),
     backOut: () => {
       // In worker mode, settle request handles both graceful end and bail-out
       engineClient.submitInput(windowId, { type: "settle" });
@@ -1348,17 +1350,12 @@ function useWorkerPvpPoker(windowId: string): PvpQuantumPoker {
 }
 
 /** Legacy path wraps the bespoke hook (windowId unused). */
-function useLegacyPvpPokerAdapter(
-  _windowId: string,
-): PvpQuantumPoker {
+function useLegacyPvpPokerAdapter(_windowId: string): PvpQuantumPoker {
   // eslint-disable-next-line react-hooks/rules-of-hooks
   return usePvpQuantumPoker();
 }
 
 /** The worker path routes poker PvP through the shared hub; `?engine=legacy` keeps the
  *  bespoke hook. Selected once at module load (rules-of-hooks: a stable hook per session). */
-export const useRoutedPvpPoker: (
-  windowId: string,
-) => PvpQuantumPoker = engineEnabled()
-  ? useWorkerPvpPoker
-  : useLegacyPvpPokerAdapter;
+export const useRoutedPvpPoker: (windowId: string) => PvpQuantumPoker =
+  engineEnabled() ? useWorkerPvpPoker : useLegacyPvpPokerAdapter;

@@ -39,9 +39,12 @@ function turn(nonce: bigint): "A" | "B" {
   return nonce % 2n === 0n ? "A" : "B";
 }
 
-class PublicStateController<State extends { winner: unknown }, Move, Intent, View>
-  implements MatchController<State, Move, void, Intent, View>
-{
+class PublicStateController<
+  State extends { winner: unknown },
+  Move,
+  Intent,
+  View,
+> implements MatchController<State, Move, void, Intent, View> {
   private intent: Intent;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -116,7 +119,8 @@ class PublicStateController<State extends { winner: unknown }, Move, Intent, Vie
       if (d.displayState !== d.state) return; // a proposal is mid-flight
       let intent: Intent;
       if (this.io.auto()) {
-        const botMove = d.protocol.randomMove?.(d.state, role, Math.random) ?? null;
+        const botMove =
+          d.protocol.randomMove?.(d.state, role, Math.random) ?? null;
         intent = this.cfg.readIntent(role, botMove) ?? this.cfg.idleIntent;
       } else {
         intent = this.intent;

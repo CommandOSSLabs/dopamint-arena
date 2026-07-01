@@ -218,10 +218,13 @@ function ensureGameWorker(
   if (existing) return existing.api;
   if (!config || !bridge) return null; // not configured yet — don't spawn an un-init'd worker
   const sw = ensureSocketWorker();
-  const worker = new Worker(new URL("./engine.game.worker.ts", import.meta.url), {
-    type: "module",
-    name: `[pvp-game] ${windowId}`,
-  });
+  const worker = new Worker(
+    new URL("./engine.game.worker.ts", import.meta.url),
+    {
+      type: "module",
+      name: `[pvp-game] ${windowId}`,
+    },
+  );
   const api = Comlink.wrap<GameWorkerApi>(worker);
   gameWorkers.set(windowId, { worker, api });
   // Private channel game worker ↔ socket worker: transfer one end to each side.

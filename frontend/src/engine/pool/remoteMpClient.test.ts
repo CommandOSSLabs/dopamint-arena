@@ -10,7 +10,10 @@ import type { MpClient } from "@/pvp/mpClient";
 /** Adapt a Node worker_threads MessagePort (`.on("message", data)`) to the browser-style BridgePort
  *  (`onmessage = ev => ev.data`) the classes expect, so the SAME implementation runs here and in prod. */
 function adapt(port: MessagePort): BridgePort {
-  const p: BridgePort = { postMessage: (m) => port.postMessage(m), onmessage: null };
+  const p: BridgePort = {
+    postMessage: (m) => port.postMessage(m),
+    onmessage: null,
+  };
   port.on("message", (data) => p.onmessage?.({ data }));
   return p;
 }
@@ -27,7 +30,10 @@ function makeFakeMp() {
   const resumed: string[] = [];
   const chans = new Map<
     string,
-    { onFrame: ((b: Uint8Array) => void) | null; peers: Set<(m: unknown) => void> }
+    {
+      onFrame: ((b: Uint8Array) => void) | null;
+      peers: Set<(m: unknown) => void>;
+    }
   >();
   const markedActive: string[] = [];
   const resumeOkCbs = new Set<(e: unknown) => void>();

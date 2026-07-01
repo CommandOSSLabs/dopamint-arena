@@ -24,16 +24,14 @@ function fakeFetch(captured: Captured): typeof fetch {
     const body = init?.body ? JSON.parse(init.body) : undefined;
     if (String(url).endsWith("/v1/arena/allocate")) {
       captured.allocate = body;
-      const allocations = body.games.map(
-        (g: { id: string }, i: number) => ({
-          game: g.id,
-          matchId: `m${i + 1}`,
-          tunnelId: `0xtunnel${i + 1}`,
-          botEphPubkey: BOT_EPH,
-          botAddress: BOT_ADDR,
-          stakeEach: 100,
-        }),
-      );
+      const allocations = body.games.map((g: { id: string }, i: number) => ({
+        game: g.id,
+        matchId: `m${i + 1}`,
+        tunnelId: `0xtunnel${i + 1}`,
+        botEphPubkey: BOT_EPH,
+        botAddress: BOT_ADDR,
+        stakeEach: 100,
+      }));
       return { ok: true, json: async () => ({ allocations }) };
     }
     if (String(url).endsWith("/v1/arena/opened")) {

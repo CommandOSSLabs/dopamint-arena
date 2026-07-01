@@ -1337,7 +1337,10 @@ export function usePvpBlackjack(): PvpView {
 /** Map the worker hub's PvP snapshot into the legacy `PvpView` shape the
  *  `PvpBlackjack` page already renders. */
 function useWorkerBlackjackPvp(windowId: string): PvpView {
-  const snap = useGameMatch(windowId, "blackjack") as MatchSnapshot<BlackjackPvpView>;
+  const snap = useGameMatch(
+    windowId,
+    "blackjack",
+  ) as MatchSnapshot<BlackjackPvpView>;
   const v = snap.view;
   const s = v?.state ?? null;
 
@@ -1374,14 +1377,19 @@ function useWorkerBlackjackPvp(windowId: string): PvpView {
     playerHand,
     dealerHand,
     playerSum: bjCardsHandValue(playerHand),
-    dealerSum: s && s.phase !== "player"
-      ? bjCardsHandValue(s.dealerHand)
-      : bjCardsHandValue(dealerHand),
+    dealerSum:
+      s && s.phase !== "player"
+        ? bjCardsHandValue(s.dealerHand)
+        : bjCardsHandValue(dealerHand),
     balancePlayer: s
-      ? getPlayerParty(s.round || 1n) === "A" ? s.balanceA : s.balanceB
+      ? getPlayerParty(s.round || 1n) === "A"
+        ? s.balanceA
+        : s.balanceB
       : 0n,
     balanceDealer: s
-      ? getDealerParty(s.round || 1n) === "A" ? s.balanceA : s.balanceB
+      ? getDealerParty(s.round || 1n) === "A"
+        ? s.balanceA
+        : s.balanceB
       : 0n,
     myBalance: s ? (snap.role === "A" ? s.balanceA : s.balanceB) : 0n,
     oppBalance: s ? (snap.role === "A" ? s.balanceB : s.balanceA) : 0n,
@@ -1422,8 +1430,5 @@ function useLegacyBlackjackAdapter(_windowId: string): PvpView {
 
 /** Worker path routes blackjack PvP through the shared hub; `?engine=legacy` keeps the
  *  bespoke hook. Selected once at module load. */
-export const useRoutedPvpBlackjack: (
-  windowId: string,
-) => PvpView = engineEnabled()
-  ? useWorkerBlackjackPvp
-  : useLegacyBlackjackAdapter;
+export const useRoutedPvpBlackjack: (windowId: string) => PvpView =
+  engineEnabled() ? useWorkerBlackjackPvp : useLegacyBlackjackAdapter;

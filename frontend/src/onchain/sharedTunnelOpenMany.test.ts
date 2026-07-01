@@ -20,7 +20,10 @@ const created = (objectId: string) => ({
 /** Reads stub: getTransactionBlock yields the created tunnels (in the given order), and getObject
  *  returns each tunnel's on-chain `party_b.public_key` as the RPC number[] form (32 bytes of one
  *  value) so the opener can demux by party-B pubkey. */
-const readsWith = (partyBByteById: Record<string, number>, objectChanges: unknown[]) =>
+const readsWith = (
+  partyBByteById: Record<string, number>,
+  objectChanges: unknown[],
+) =>
   ({
     waitForTransaction: async () => {},
     getTransactionBlock: async () => ({ objectChanges }),
@@ -28,7 +31,9 @@ const readsWith = (partyBByteById: Record<string, number>, objectChanges: unknow
       data: {
         content: {
           fields: {
-            party_b: { fields: { public_key: Array(32).fill(partyBByteById[id]) } },
+            party_b: {
+              fields: { public_key: Array(32).fill(partyBByteById[id]) },
+            },
           },
         },
       },
@@ -39,10 +44,10 @@ test("openManySharedSeatA builds ONE PTB and demuxes by party-B pubkey, NOT obje
   let signExecCalls = 0;
   let built: Transaction | null = null;
   // objectChanges deliberately REVERSED vs spec order — a correct demux keys on party-B, not order.
-  const reads = readsWith(
-    { "0xtunnel0": 0xb0, "0xtunnel1": 0xb1 },
-    [created("0xtunnel1"), created("0xtunnel0")],
-  );
+  const reads = readsWith({ "0xtunnel0": 0xb0, "0xtunnel1": 0xb1 }, [
+    created("0xtunnel1"),
+    created("0xtunnel0"),
+  ]);
 
   const ids = await openManySharedSeatA({
     reads,
@@ -54,12 +59,24 @@ test("openManySharedSeatA builds ONE PTB and demuxes by party-B pubkey, NOT obje
     coinType: COIN,
     stakeFromBalance: { amount: 30n, coinType: COIN },
     specs: [
-      { partyA: party("0xa11ce", 0xa0), partyB: party("0xb0b0", 0xb0), amount: 10n },
-      { partyA: party("0xa11ce", 0xa0), partyB: party("0xb1b1", 0xb1), amount: 20n },
+      {
+        partyA: party("0xa11ce", 0xa0),
+        partyB: party("0xb0b0", 0xb0),
+        amount: 10n,
+      },
+      {
+        partyA: party("0xa11ce", 0xa0),
+        partyB: party("0xb1b1", 0xb1),
+        amount: 20n,
+      },
     ],
   });
 
-  assert.equal(signExecCalls, 1, "exactly one signExec (one PTB) for two opens");
+  assert.equal(
+    signExecCalls,
+    1,
+    "exactly one signExec (one PTB) for two opens",
+  );
   assert.deepEqual(
     ids,
     ["0xtunnel0", "0xtunnel1"],
@@ -75,7 +92,13 @@ test("openManySharedSeatA single-spec flush returns the one id", async () => {
     signExec: async () => ({ digest: "0xd" }),
     coinType: COIN,
     stakeCoinId: "0xstake",
-    specs: [{ partyA: party("0xa11ce", 0xa0), partyB: party("0xb0b0", 0xb0), amount: 10n }],
+    specs: [
+      {
+        partyA: party("0xa11ce", 0xa0),
+        partyB: party("0xb0b0", 0xb0),
+        amount: 10n,
+      },
+    ],
   });
   assert.deepEqual(ids, ["0xsolo"]);
 });
@@ -93,8 +116,16 @@ test("openManySharedSeatA rejects BatchCommittedError when the created count mis
       coinType: COIN,
       stakeFromBalance: { amount: 30n, coinType: COIN },
       specs: [
-        { partyA: party("0xa11ce", 0xa0), partyB: party("0xb0b0", 0xb0), amount: 10n },
-        { partyA: party("0xa11ce", 0xa0), partyB: party("0xb1b1", 0xb1), amount: 20n },
+        {
+          partyA: party("0xa11ce", 0xa0),
+          partyB: party("0xb0b0", 0xb0),
+          amount: 10n,
+        },
+        {
+          partyA: party("0xa11ce", 0xa0),
+          partyB: party("0xb1b1", 0xb1),
+          amount: 20n,
+        },
       ],
     });
     assert.fail("expected openManySharedSeatA to throw");
@@ -113,10 +144,10 @@ test("openManySharedSeatA rejects duplicate party-B pubkeys across created tunne
   // Both created tunnels report the SAME party-B pubkey (e.g. an opponent reusing one ephemeral key
   // across two coincident matches in this flush). The count matches, but the positional demux would
   // collapse them to one id — the guard must fail loud (committed: never retry), not mis-route stake.
-  const reads = readsWith(
-    { "0xtunnelX": 0xb0, "0xtunnelY": 0xb0 },
-    [created("0xtunnelX"), created("0xtunnelY")],
-  );
+  const reads = readsWith({ "0xtunnelX": 0xb0, "0xtunnelY": 0xb0 }, [
+    created("0xtunnelX"),
+    created("0xtunnelY"),
+  ]);
 
   let caught: unknown;
   try {
@@ -126,11 +157,21 @@ test("openManySharedSeatA rejects duplicate party-B pubkeys across created tunne
       coinType: COIN,
       stakeFromBalance: { amount: 30n, coinType: COIN },
       specs: [
-        { partyA: party("0xa11ce", 0xa0), partyB: party("0xb0b0", 0xb0), amount: 10n },
-        { partyA: party("0xa11ce", 0xa0), partyB: party("0xb1b1", 0xb1), amount: 20n },
+        {
+          partyA: party("0xa11ce", 0xa0),
+          partyB: party("0xb0b0", 0xb0),
+          amount: 10n,
+        },
+        {
+          partyA: party("0xa11ce", 0xa0),
+          partyB: party("0xb1b1", 0xb1),
+          amount: 20n,
+        },
       ],
     });
-    assert.fail("expected openManySharedSeatA to throw on duplicate party-B pubkey");
+    assert.fail(
+      "expected openManySharedSeatA to throw on duplicate party-B pubkey",
+    );
   } catch (e) {
     caught = e;
   }

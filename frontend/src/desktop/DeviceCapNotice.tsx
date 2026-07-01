@@ -51,9 +51,7 @@ export function DeviceCapNotice() {
         <p
           className={cn(
             "flex items-start gap-1.5",
-            overCap
-              ? "text-destructive"
-              : "text-amber-600 dark:text-amber-400",
+            overCap ? "text-destructive" : "text-amber-600 dark:text-amber-400",
           )}
         >
           <TriangleAlert className="mt-px size-3.5 shrink-0" />

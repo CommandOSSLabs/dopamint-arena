@@ -41,10 +41,7 @@ import {
   QUANTUM_POKER_HAND_CAP,
 } from "./constants";
 import type { BotContext } from "@/agent/gameKit";
-import {
-  derivePokerLegal,
-  type PokerPvpView,
-} from "./quantumPokerPvpView";
+import { derivePokerLegal, type PokerPvpView } from "./quantumPokerPvpView";
 
 // --- Constants (match the legacy hook) -----------------------------------------------
 
@@ -101,9 +98,13 @@ type PokerInput =
   | { type: "bet"; amount: bigint }
   | { type: "settle" };
 
-class PokerPvpController
-  implements MatchController<PokerState, PokerMove, void, PokerInput, PokerPvpView>
-{
+class PokerPvpController implements MatchController<
+  PokerState,
+  PokerMove,
+  void,
+  PokerInput,
+  PokerPvpView
+> {
   private driver: QuantumPokerSeatDriver | null = null;
   private autoBot: PokerSeatBot | null = null;
   /** Dedupe: at most one scheduled plumbing move per target nonce. */
@@ -115,9 +116,7 @@ class PokerPvpController
   /** Pending plumbing timer (watchable pacing for reveals/hand-over). */
   private timer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(
-    private readonly io: MatchIo<PokerState, PokerMove>,
-  ) {}
+  constructor(private readonly io: MatchIo<PokerState, PokerMove>) {}
 
   initSetup(): void {
     const role = this.io.role;
@@ -174,7 +173,13 @@ class PokerPvpController
     return makePokerResumeAdapter({
       getSecret: () => {
         const dt = io.tunnel();
-        if (!dt) return { localSecretsA: null, localSecretsB: null, holeA: null, holeB: null };
+        if (!dt)
+          return {
+            localSecretsA: null,
+            localSecretsB: null,
+            holeA: null,
+            holeB: null,
+          };
         const s = dt.state;
         return {
           localSecretsA: s.localSecretsA,
@@ -285,7 +290,9 @@ class PokerPvpController
     }
   }
 
-  private inputToMove(input: Exclude<PokerInput, { type: "settle" }>): PokerMove | null {
+  private inputToMove(
+    input: Exclude<PokerInput, { type: "settle" }>,
+  ): PokerMove | null {
     switch (input.type) {
       case "fold":
         return { kind: "fold" };
@@ -312,8 +319,7 @@ export const quantumPokerPvpSpec: GameSessionSpec<
 > = defineGame({
   game: GAME_ID,
   stake: POKER_BUYIN,
-  makeProtocol: () =>
-    new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE),
+  makeProtocol: () => new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE),
   moveCodec: pokerMoveCodec,
   createMatch: (io) => new PokerPvpController(io),
 });

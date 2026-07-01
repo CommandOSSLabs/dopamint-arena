@@ -47,7 +47,11 @@ function AppContent({
         ref={containerRef}
         className="w-full h-full flex items-center justify-center z-10"
       >
-        <PvpScene windowId={windowId} onBack={onClose} isPortrait={isPortrait} />
+        <PvpScene
+          windowId={windowId}
+          onBack={onClose}
+          isPortrait={isPortrait}
+        />
       </div>
     </div>
   );

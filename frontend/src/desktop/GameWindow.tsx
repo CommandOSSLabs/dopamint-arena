@@ -87,7 +87,8 @@ export function GameWindow({
     if (!domId || !el || typeof IntersectionObserver === "undefined") return;
     const obs = new IntersectionObserver(
       (entries) => {
-        for (const e of entries) engineClient.setWindowVisible(domId, e.isIntersecting);
+        for (const e of entries)
+          engineClient.setWindowVisible(domId, e.isIntersecting);
       },
       { threshold: 0 },
     );

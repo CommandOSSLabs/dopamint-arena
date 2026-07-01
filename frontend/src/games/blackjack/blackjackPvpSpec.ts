@@ -61,16 +61,13 @@ type BlackjackInput =
   | { type: "bet"; amount: number }
   | { type: "stop" };
 
-class BlackjackPvpController
-  implements
-    MatchController<
-      BlackjackState,
-      BlackjackMove,
-      void,
-      BlackjackInput,
-      BlackjackPvpView
-    >
-{
+class BlackjackPvpController implements MatchController<
+  BlackjackState,
+  BlackjackMove,
+  void,
+  BlackjackInput,
+  BlackjackPvpView
+> {
   private readonly proto = new BlackjackProtocol();
   /** Accumulated per-round results for the UI scoreboard. */
   private rounds: BlackjackRoundResult[] = [];
@@ -85,9 +82,7 @@ class BlackjackPvpController
   /** Pending plumbing timer. */
   private timer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(
-    private readonly io: MatchIo<BlackjackState, BlackjackMove>,
-  ) {}
+  constructor(private readonly io: MatchIo<BlackjackState, BlackjackMove>) {}
 
   initSetup(): void {
     const dt = this.io.tunnel();
@@ -295,10 +290,7 @@ class BlackjackPvpController
     }
   }
 
-  private clampBetMove(
-    amount: number,
-    st: BlackjackState,
-  ): BlackjackMove {
+  private clampBetMove(amount: number, st: BlackjackState): BlackjackMove {
     const cap = tableMaxBet(st);
     const clamped =
       BigInt(amount) > cap
@@ -330,4 +322,3 @@ export const blackjackPvpSpec: GameSessionSpec<
   moveCodec: blackjackMoveCodec as never,
   createMatch: (io) => new BlackjackPvpController(io as never) as never,
 });
-

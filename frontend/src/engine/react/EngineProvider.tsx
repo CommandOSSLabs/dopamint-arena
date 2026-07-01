@@ -53,7 +53,11 @@ export function useConfigureEngine(): void {
   }, [account?.address, client, signAndExecute, sponsored]);
 }
 
-export function EngineProvider({ children }: { children: ReactNode }): ReactNode {
+export function EngineProvider({
+  children,
+}: {
+  children: ReactNode;
+}): ReactNode {
   useConfigureEngine();
   return children;
 }
