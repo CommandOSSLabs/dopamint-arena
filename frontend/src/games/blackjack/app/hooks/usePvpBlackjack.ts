@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
+import { core, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
 import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
+import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -214,8 +215,6 @@ export function usePvpBlackjack(): PvpView {
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
 
-  const transcriptRef = useRef<proof.Transcript | null>(null);
-
   const refreshBalance = useCallback(async () => {
     try {
       const b = await client.getBalance({ owner: walletAddress });
@@ -303,34 +302,18 @@ export function usePvpBlackjack(): PvpView {
       if (settledRef.current) return;
       settledRef.current = true;
       setPhase("settling");
-      const root = transcriptRef.current
-        ? transcriptRef.current.root()
-        : new Uint8Array(32);
-      const half = t.buildSettlementHalfWithRoot(
-        createdAtRef.current,
-        root,
-        0n,
-      );
-      channel.sendPeer({
-        t: "settleHalf",
-        partyABalance: half.settlement.partyABalance.toString(),
-        partyBBalance: half.settlement.partyBBalance.toString(),
-        finalNonce: half.settlement.finalNonce.toString(),
-        timestamp: half.settlement.timestamp.toString(),
-        transcriptRoot: bytesToHex(root),
-        sig: bytesToHex(half.sigSelf),
-      });
+      // Wait for the co-located bot's settlement half; the FE keeps NO transcript, so we sign seat A's
+      // half over the ROOT the bot supplied and submit a header-only body (the bot owns the canonical
+      // transcript, archived to S3). Funds ride on the co-signed balances, not the root.
       const other =
         bufferedSettleRef.current ??
         (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
           settleResolveRef.current = res;
         }));
-      if (bytesToHex(other.root) !== bytesToHex(root)) {
-        throw new Error("Transcript root mismatch between players");
-      }
-      const coSigned = t.combineSettlementWithRoot(
-        half.settlement,
-        half.sigSelf,
+      const coSigned = coSignCloseFromPeerRoot(
+        t,
+        createdAtRef.current,
+        other.root,
         other.sig,
       );
       // Single submitter = seat A — unified with every other game and the fleet bot, which co-signs
@@ -340,9 +323,7 @@ export function usePvpBlackjack(): PvpView {
         const closeDigest = await settleViaBackend({
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
-          transcript: transcriptRef.current
-            ? transcriptRef.current.rawEntries()
-            : [],
+          transcript: [],
           label: "blackjack",
           fallbackClose: async () => {
             // Wallet-close fallback needs the tunnel's coin type (MTPS when configured); the
@@ -473,8 +454,7 @@ export function usePvpBlackjack(): PvpView {
             );
         }
       };
-      t.onConfirmed = (u) => {
-        transcriptRef.current?.append(u);
+      t.onConfirmed = () => {
         onAdvance();
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
@@ -798,7 +778,6 @@ export function usePvpBlackjack(): PvpView {
           { a: stakeA, b: stakeB },
         );
         tunnelRef.current = t;
-        transcriptRef.current = new proof.Transcript(tunnelId);
 
         activateSession(mp, channel, t, {
           matchId: m.matchId,
@@ -940,7 +919,6 @@ export function usePvpBlackjack(): PvpView {
             { a: stake, b: stake },
           );
           tunnelRef.current = t;
-          transcriptRef.current = new proof.Transcript(allocation.tunnelId);
 
           activateSession(mp, channel, t, {
             matchId: m.matchId,
@@ -1123,34 +1101,9 @@ export function usePvpBlackjack(): PvpView {
   }, [phase, state, proto, finishSettle]);
 
   const leave = useCallback(() => {
-    // Back: publish our settlement half before abandoning, so leaving SETTLES (the staying seat / 1h
-    // grace path submits the close) instead of stranding the staked tunnel. Sync + best-effort, so the
-    // half is on the wire before the transport closes; no live/unsettled match ⇒ just abandon.
-    const lt = tunnelRef.current;
-    const lch = channelRef.current;
-    if (lt && lch && !settledRef.current) {
-      try {
-        const root = transcriptRef.current
-          ? transcriptRef.current.root()
-          : new Uint8Array(32);
-        const half = lt.buildSettlementHalfWithRoot(
-          createdAtRef.current,
-          root,
-          0n,
-        );
-        lch.sendPeer({
-          t: "settleHalf",
-          partyABalance: half.settlement.partyABalance.toString(),
-          partyBBalance: half.settlement.partyBBalance.toString(),
-          finalNonce: half.settlement.finalNonce.toString(),
-          timestamp: half.settlement.timestamp.toString(),
-          transcriptRoot: bytesToHex(root),
-          sig: bytesToHex(half.sigSelf),
-        });
-      } catch (e) {
-        console.error("[blackjack pvp] leave publish failed:", e);
-      }
-    }
+    // Back: abandon this match and return to the lobby. The FE has no half to publish (the bot owns
+    // the transcript and only settles at its own terminal), so leaving relies on the bot's terminal /
+    // the 1h on-chain grace as the settlement floor rather than pushing a co-signed half.
     detachResumeRef.current?.();
     detachResumeRef.current = null;
     // Explicit leave = abandon this match: drop its resume record so it can't hijack the next
