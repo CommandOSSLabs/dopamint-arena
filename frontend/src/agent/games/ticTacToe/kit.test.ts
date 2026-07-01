@@ -81,6 +81,7 @@ describe("ticTacToe kit", () => {
       inner,
       gamesPlayed: 0,
       maxGames: 5,
+      totalMoves: 0,
     };
     const kit = createTicTacToeKit(5, 5n);
     const botA = kit.createBot("A", { rngForSeat: () => mulberry32(1) });

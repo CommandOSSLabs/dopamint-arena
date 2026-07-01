@@ -46,6 +46,10 @@
  */
 
 import { core, protocols, bytesToHex, hexToBytes } from "sui-tunnel-ts";
+import { canSafelyPlayNextEpisode } from "sui-tunnel-ts/proof/limits";
+
+/** Very safe upper bound for Tic-Tac-Toe moves per game (9 cells max) */
+const TTT_MAX_MOVES_PER_GAME = 20;
 
 type Protocol<State, Move> = protocols.Protocol<State, Move>;
 type Party = protocols.Party;
@@ -76,6 +80,8 @@ export interface MultiGameTicTacToeState {
   gamesPlayed: number;
   /** Total games to play in this tunnel before settling once. */
   maxGames: number;
+  /** Total moves made across all games in this tunnel */
+  totalMoves: number;
 }
 
 /** A move is either an inner cell move, or (when a game just ended) an advance trigger. */
@@ -124,6 +130,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
       inner: { ...this.inner.initialState(ctx), turn: seriesOpener(0) },
       gamesPlayed: 0,
       maxGames: this.maxGames,
+      totalMoves: 0,
     };
   }
 
@@ -138,6 +145,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
       return {
         ...state,
         inner: this.inner.applyMove(state.inner, move, by),
+        totalMoves: state.totalMoves + 1,
       };
     }
 
@@ -160,6 +168,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
       inner: { ...carried, turn: seriesOpener(nextGame) },
       gamesPlayed: nextGame,
       maxGames: state.maxGames,
+      totalMoves: state.totalMoves + 1,
     };
   }
 
@@ -170,6 +179,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
       protocols.lengthPrefixedConcat([
         this.inner.encodeState(state.inner),
         core.u64ToBeBytes(state.gamesPlayed),
+        core.u64ToBeBytes(state.totalMoves),
       ]),
     ]);
   }
@@ -184,7 +194,8 @@ export class MultiGameTicTacToeProtocol implements Protocol<
     // The game that just finished is number `gamesPlayed + 1`.
     if (state.gamesPlayed + 1 >= state.maxGames) return true;
     // Stop early if the next game's stake can no longer be funded by both sides.
-    return !this.canFundNextGame(state.inner);
+    if (!this.canFundNextGame(state.inner)) return true;
+    return !canSafelyPlayNextEpisode(state.totalMoves, TTT_MAX_MOVES_PER_GAME);
   }
 
   randomMove(

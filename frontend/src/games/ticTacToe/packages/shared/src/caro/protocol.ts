@@ -16,6 +16,10 @@
 import { core, protocols, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { winnerAround, applyMark } from "./board";
+import { canSafelyPlayNextEpisode } from "sui-tunnel-ts/proof/limits";
+
+/** Safe upper bound for Caro: 19x19 = 361 max cells */
+const CARO_MAX_MOVES_PER_GAME = 400;
 
 type Protocol<State, Move> = protocols.Protocol<State, Move>;
 type Party = protocols.Party;
@@ -230,6 +234,7 @@ export interface MultiGameCaroState {
   inner: CaroState;
   gamesPlayed: number;
   maxGames: number;
+  totalMoves: number;
 }
 
 export type MultiGameCaroMove = CaroMove;
@@ -272,6 +277,7 @@ export class MultiGameCaroProtocol implements Protocol<
       inner: { ...this.inner.initialState(ctx), turn: seriesOpener(0) },
       gamesPlayed: 0,
       maxGames: this.maxGames,
+      totalMoves: 0,
     };
   }
 
@@ -281,7 +287,11 @@ export class MultiGameCaroProtocol implements Protocol<
     by: Party,
   ): MultiGameCaroState {
     if (!this.inner.isTerminal(state.inner)) {
-      return { ...state, inner: this.inner.applyMove(state.inner, move, by) };
+      return {
+        ...state,
+        inner: this.inner.applyMove(state.inner, move, by),
+        totalMoves: state.totalMoves + 1,
+      };
     }
     if (this.isTerminal(state)) {
       throw new Error("caro session over: no more games can be played");
@@ -297,6 +307,7 @@ export class MultiGameCaroProtocol implements Protocol<
       inner: { ...carried, turn: seriesOpener(nextGame) },
       gamesPlayed: nextGame,
       maxGames: state.maxGames,
+      totalMoves: state.totalMoves + 1,
     };
   }
 
@@ -313,6 +324,7 @@ export class MultiGameCaroProtocol implements Protocol<
       protocols.lengthPrefixedConcat([
         this.inner.encodeState(state.inner),
         core.u64ToBeBytes(state.gamesPlayed),
+        core.u64ToBeBytes(state.totalMoves),
       ]),
     ]);
   }
@@ -324,9 +336,9 @@ export class MultiGameCaroProtocol implements Protocol<
   isTerminal(state: MultiGameCaroState): boolean {
     if (!this.inner.isTerminal(state.inner)) return false;
     // Terminal when the max games count is reached OR neither side can fund the next stake.
-    return (
-      state.gamesPlayed + 1 >= state.maxGames || !this.canFundNextGame(state)
-    );
+    if (state.gamesPlayed + 1 >= state.maxGames || !this.canFundNextGame(state))
+      return true;
+    return !canSafelyPlayNextEpisode(state.totalMoves, CARO_MAX_MOVES_PER_GAME);
   }
 
   randomMove(

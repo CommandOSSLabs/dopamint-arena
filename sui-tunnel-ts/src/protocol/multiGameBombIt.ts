@@ -26,12 +26,17 @@ import {
   type BombItState,
   type BombItMove,
 } from "./bombIt";
+import { canSafelyPlayNextEpisode } from "../proof/limits";
+
+/** A very conservative upper bound on moves per Bomb It game */
+const BOMB_IT_MAX_MOVES_PER_GAME = 1000;
 
 export interface MultiGameBombItState {
   inner: BombItState;
   gamesPlayed: number;
   balanceA: bigint;
   balanceB: bigint;
+  totalMoves: number;
 }
 
 export type MultiGameBombItMove = BombItMove;
@@ -62,6 +67,7 @@ export class MultiGameBombItProtocol
       gamesPlayed: 0,
       balanceA: ctx.initialBalances.a,
       balanceB: ctx.initialBalances.b,
+      totalMoves: 0,
     };
   }
 
@@ -87,9 +93,10 @@ export class MultiGameBombItProtocol
           gamesPlayed: state.gamesPlayed,
           balanceA: swapped.a,
           balanceB: swapped.b,
+          totalMoves: state.totalMoves + 1,
         };
       }
-      return { ...state, inner: nextInner };
+      return { ...state, inner: nextInner, totalMoves: state.totalMoves + 1 };
     }
     if (this.isTerminal(state)) {
       throw new Error("session over: insufficient balance for another game");
@@ -100,6 +107,7 @@ export class MultiGameBombItProtocol
       gamesPlayed: state.gamesPlayed + 1,
       balanceA: state.balanceA,
       balanceB: state.balanceB,
+      totalMoves: state.totalMoves + 1,
     };
   }
 
@@ -124,6 +132,7 @@ export class MultiGameBombItProtocol
         u64ToBeBytes(BigInt(state.gamesPlayed)),
         u64ToBeBytes(state.balanceA),
         u64ToBeBytes(state.balanceB),
+        u64ToBeBytes(BigInt(state.totalMoves)),
       ]),
     ]);
   }
@@ -134,7 +143,8 @@ export class MultiGameBombItProtocol
 
   isTerminal(state: MultiGameBombItState): boolean {
     if (!this.inner.isTerminal(state.inner)) return false;
-    return !this.canFundNextGame(state);
+    if (!this.canFundNextGame(state)) return true;
+    return !canSafelyPlayNextEpisode(state.totalMoves, BOMB_IT_MAX_MOVES_PER_GAME);
   }
 
   randomMove(

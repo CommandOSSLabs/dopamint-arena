@@ -26,6 +26,10 @@ import {
   type CrossState,
   type CrossMove,
 } from "./cross";
+import { canSafelyPlayNextEpisode } from "../proof/limits";
+
+/** A very conservative upper bound on moves per Cross game */
+const CROSS_MAX_MOVES_PER_GAME = 500;
 
 export interface MultiGameCrossState {
   /** The current single race (positions, scores). Its balances are symbolic per-game. */
@@ -36,6 +40,8 @@ export interface MultiGameCrossState {
   balanceA: bigint;
   /** REAL carried balance for seat B. */
   balanceB: bigint;
+  /** Total moves made across all games in this tunnel. */
+  totalMoves: number;
 }
 
 /** A move is a normal inner move; the first one after a game ends starts the next. */
@@ -73,6 +79,7 @@ export class MultiGameCrossProtocol
       gamesPlayed: 0,
       balanceA: ctx.initialBalances.a,
       balanceB: ctx.initialBalances.b,
+      totalMoves: 0,
     };
   }
 
@@ -101,9 +108,10 @@ export class MultiGameCrossProtocol
           gamesPlayed: state.gamesPlayed,
           balanceA: swapped.a,
           balanceB: swapped.b,
+          totalMoves: state.totalMoves + 1,
         };
       }
-      return { ...state, inner: nextInner };
+      return { ...state, inner: nextInner, totalMoves: state.totalMoves + 1 };
     }
     // The race finished. If neither side can fund the next stake, only settlement remains.
     if (this.isTerminal(state)) {
@@ -118,6 +126,7 @@ export class MultiGameCrossProtocol
       gamesPlayed: state.gamesPlayed + 1,
       balanceA: state.balanceA,
       balanceB: state.balanceB,
+      totalMoves: state.totalMoves + 1,
     };
   }
 
@@ -142,6 +151,7 @@ export class MultiGameCrossProtocol
         u64ToBeBytes(BigInt(state.gamesPlayed)),
         u64ToBeBytes(state.balanceA),
         u64ToBeBytes(state.balanceB),
+        u64ToBeBytes(BigInt(state.totalMoves)),
       ]),
     ]);
   }
@@ -152,7 +162,8 @@ export class MultiGameCrossProtocol
 
   isTerminal(state: MultiGameCrossState): boolean {
     if (!this.inner.isTerminal(state.inner)) return false; // settlement is player-driven mid-game
-    return !this.canFundNextGame(state); // between games: terminal only at exhaustion
+    if (!this.canFundNextGame(state)) return true; // between games: terminal only at exhaustion
+    return !canSafelyPlayNextEpisode(state.totalMoves, CROSS_MAX_MOVES_PER_GAME);
   }
 
   randomMove(

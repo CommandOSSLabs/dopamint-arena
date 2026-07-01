@@ -4,7 +4,7 @@ import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { SketchDefs } from "@/games/blackjack/app/App";
 import "./index.css";
 
-function AppContent({ onClose }: { onClose: () => void }) {
+function AppContent() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1024, height: 768 });
 
@@ -41,16 +41,16 @@ function AppContent({ onClose }: { onClose: () => void }) {
         ref={containerRef}
         className="w-full h-full flex items-center justify-center z-10"
       >
-        <PvpScene onBack={onClose} isPortrait={isPortrait} />
+        <PvpScene isPortrait={isPortrait} />
       </div>
     </div>
   );
 }
 
-export default function App({ onClose }: { onClose: () => void }) {
+export default function App() {
   return (
     <CustomWalletProvider>
-      <AppContent onClose={onClose} />
+      <AppContent />
     </CustomWalletProvider>
   );
 }

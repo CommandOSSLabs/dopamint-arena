@@ -128,6 +128,7 @@ test("a finished game is not terminal while both sides can fund the next", () =>
     gamesPlayed: 0,
     balanceA: 1000n,
     balanceB: 1000n,
+    totalMoves: 0,
   };
   assert.equal(proto.isGameOver(state), true, "inner game over (tick cap)");
   assert.equal(
@@ -150,6 +151,7 @@ test("session IS terminal once a side cannot fund the next stake", () => {
     gamesPlayed: 0,
     balanceA: 1950n,
     balanceB: 50n,
+    totalMoves: 0,
   };
   assert.equal(proto.isTerminal(broke), true, "B (50) cannot fund a 100 stake");
   // Still fundable after a decided game → session continues.
@@ -158,6 +160,7 @@ test("session IS terminal once a side cannot fund the next stake", () => {
     gamesPlayed: 0,
     balanceA: 1100n,
     balanceB: 900n,
+    totalMoves: 0,
   };
   assert.equal(
     proto.isTerminal(funded),

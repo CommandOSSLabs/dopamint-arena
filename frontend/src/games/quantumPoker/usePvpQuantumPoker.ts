@@ -38,6 +38,7 @@ import {
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { canSafelyPlayNextEpisode } from "sui-tunnel-ts/proof/limits";
 import {
   openSharedTunnelStaked,
   depositStakeStaked,
@@ -89,6 +90,14 @@ const GAME_ID = "quantum-poker";
 const ARENA_GAME_ID = "quantum_poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
 const TURN_SECONDS = 10;
+
+/**
+ * Conservative upper bound on the tunnel updates one poker hand costs (betting rounds
+ * plus deal/commit/reveal plumbing). Feeds canSafelyPlayNextEpisode so a series settles
+ * at a hand boundary while there is still room under MAX_MOVES_PER_TUNNEL, rather than
+ * overrunning the cap mid-hand. Must exceed the true worst case.
+ */
+const POKER_MAX_MOVES_PER_HAND = 100;
 
 export type PvpPokerStatus =
   | "idle"
@@ -593,10 +602,16 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           });
         }
         prevHandPhase = dt.state.phase;
-        // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
+        // Settle at match end (done), or early at this clean hand boundary once a seat asked to end,
+        // or if we are too close to the tunnel's move limit to safely play another hand.
         if (
           proto.isTerminal(dt.state) ||
-          (endRef.current && dt.state.phase === "hand_over")
+          (dt.state.phase === "hand_over" &&
+            (endRef.current ||
+              !canSafelyPlayNextEpisode(
+                Number(dt.nonce),
+                POKER_MAX_MOVES_PER_HAND,
+              )))
         ) {
           // Bailing out → publish our half and leave; staying/natural end → full settle + submit.
           triggerSettle(foldOutRef.current);

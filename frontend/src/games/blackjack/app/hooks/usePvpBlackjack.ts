@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
 import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
+import { canSafelyPlayNextEpisode } from "sui-tunnel-ts/proof/limits";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -96,6 +97,14 @@ const PLUMBING_MS = 120;
 // still uses BOT_MOVE_MS / NEXT_MS / PLUMBING_MS above.
 const AUTO_MOVE_MS = 0;
 const AUTO_REQUEUE_MS = 150;
+
+/**
+ * Conservative upper bound on the tunnel updates one blackjack round costs (bets, hits,
+ * dealer play, plus commit/reveal plumbing). Feeds canSafelyPlayNextEpisode so a series
+ * settles at a round boundary while there is still room under MAX_MOVES_PER_TUNNEL,
+ * rather than overrunning the cap mid-round. Must exceed the true worst case.
+ */
+const BLACKJACK_MAX_MOVES_PER_ROUND = 30;
 
 export type PvpPhase =
   | "idle"
@@ -409,10 +418,20 @@ export function usePvpBlackjack(): PvpView {
           lastBalanceA = balA;
         }
         if (stoppingRef.current) return; // a stop/settle is in progress
-        if (proto.isTerminal(st)) {
+        // Settle at match end, or early at a clean round boundary when the tunnel is too
+        // close to its move ceiling to safely play another round.
+        if (
+          proto.isTerminal(st) ||
+          (st.phase === "round_over" &&
+            !canSafelyPlayNextEpisode(
+              Number(t.nonce),
+              BLACKJACK_MAX_MOVES_PER_ROUND,
+            ))
+        ) {
           void finishSettle(t, channel, info.matchId);
           return;
         }
+
         const owed = actorFor(st, getPlayerParty); // PvP: default rotation
         if (!owed) return;
         // Plumbing (commit/reveal) is ALWAYS auto-driven by this seat when it owes it.
