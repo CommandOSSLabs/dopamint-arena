@@ -450,6 +450,6 @@ Regular Payments is **app #1** of three planned payment-category apps:
 |-----|----------|-------------------|
 | **Regular Payments** (this) | `payments.v1` | Yes (shopper + shop bot) |
 | Agent micropayments | `example_agent_micropayments` | Yes (M2M) |
-| Agent allowance | `example_agent_allowance` | No (pull / cap) |
+| Agent allowance | `agent_allowance` | No (pull / cap) |
 
 Do not merge these into one UI.

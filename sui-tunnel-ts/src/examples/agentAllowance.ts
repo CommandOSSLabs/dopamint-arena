@@ -1,7 +1,7 @@
 /**
  * Agent Spending Allowance Example
  *
- * Wraps the `example_agent_allowance` Move module: a delegated, capped,
+ * Wraps the `agent_allowance` Move module: a delegated, capped,
  * rate-limited, pull-based payment mandate for autonomous agents — the
  * "OAuth for money" analog to Stripe Tempo Sessions and Cloudflare x402/MPP.
  *
@@ -103,7 +103,7 @@ export async function createAndShareAllowance(
   //   rate_per_second, spend_cap, expiry_ms, clock, ctx)
   tx.moveCall({
     target: buildTarget(
-      MODULES.EXAMPLE_AGENT_ALLOWANCE,
+      MODULES.agent_allowance,
       "create_and_share_allowance"
     ),
     typeArguments: [coinType],
@@ -156,7 +156,7 @@ export async function claim(
   const tx = new Transaction();
   // public fun claim(allowance, amount, clock, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "claim"),
+    target: buildTarget(MODULES.agent_allowance, "claim"),
     typeArguments: [coinType],
     arguments: [
       tx.object(allowanceId),
@@ -204,7 +204,7 @@ export async function authorizeSpend(
   const tx = new Transaction();
   // public fun authorize_spend(allowance, authorized_total, voucher_signature)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "authorize_spend"),
+    target: buildTarget(MODULES.agent_allowance, "authorize_spend"),
     typeArguments: [coinType],
     arguments: [
       tx.object(allowanceId),
@@ -236,7 +236,7 @@ export async function claimWithVoucher(
   const tx = new Transaction();
   // public fun claim_with_voucher(allowance, authorized_total, voucher_signature, amount, clock, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "claim_with_voucher"),
+    target: buildTarget(MODULES.agent_allowance, "claim_with_voucher"),
     typeArguments: [coinType],
     arguments: [
       tx.object(allowanceId),
@@ -270,7 +270,7 @@ export async function topUp(
   const tx = new Transaction();
   // public fun top_up(allowance, funds, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "top_up"),
+    target: buildTarget(MODULES.agent_allowance, "top_up"),
     typeArguments: [coinType],
     arguments: [tx.object(allowanceId), tx.object(fundsCoinId)],
   });
@@ -294,7 +294,7 @@ export async function setRate(
   const tx = new Transaction();
   // public fun set_rate(allowance, new_rate_per_second, clock, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "set_rate"),
+    target: buildTarget(MODULES.agent_allowance, "set_rate"),
     typeArguments: [coinType],
     arguments: [
       tx.object(allowanceId),
@@ -322,7 +322,7 @@ export async function increaseCap(
   const tx = new Transaction();
   // public fun increase_cap(allowance, new_spend_cap, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "increase_cap"),
+    target: buildTarget(MODULES.agent_allowance, "increase_cap"),
     typeArguments: [coinType],
     arguments: [tx.object(allowanceId), tx.pure.u64(newSpendCap)],
   });
@@ -345,7 +345,7 @@ export async function pauseAllowance(
   const tx = new Transaction();
   // public fun pause(allowance, clock, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "pause"),
+    target: buildTarget(MODULES.agent_allowance, "pause"),
     typeArguments: [coinType],
     arguments: [tx.object(allowanceId), tx.object(SUI_CLOCK_OBJECT_ID)],
   });
@@ -368,7 +368,7 @@ export async function resumeAllowance(
   const tx = new Transaction();
   // public fun resume(allowance, clock, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "resume"),
+    target: buildTarget(MODULES.agent_allowance, "resume"),
     typeArguments: [coinType],
     arguments: [tx.object(allowanceId), tx.object(SUI_CLOCK_OBJECT_ID)],
   });
@@ -392,7 +392,7 @@ export async function setDelegate(
   const tx = new Transaction();
   // public fun set_delegate(allowance, delegate, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "set_delegate"),
+    target: buildTarget(MODULES.agent_allowance, "set_delegate"),
     typeArguments: [coinType],
     arguments: [
       tx.object(allowanceId),
@@ -421,7 +421,7 @@ export async function revokeAllowance(
   const tx = new Transaction();
   // public fun revoke(allowance, clock, ctx)
   tx.moveCall({
-    target: buildTarget(MODULES.EXAMPLE_AGENT_ALLOWANCE, "revoke"),
+    target: buildTarget(MODULES.agent_allowance, "revoke"),
     typeArguments: [coinType],
     arguments: [tx.object(allowanceId), tx.object(SUI_CLOCK_OBJECT_ID)],
   });
@@ -464,7 +464,7 @@ function rateVested(s: AccrualState, nowMs: bigint): bigint {
 
 /**
  * Total entitlement at `nowMs`: `min(spendCap, max(rateVested, authorizedTotal))`.
- * Mirrors `example_agent_allowance::entitled_at`.
+ * Mirrors `agent_allowance::entitled_at`.
  */
 export function computeEntitled(s: AccrualState, nowMs: bigint): bigint {
   const byRate = rateVested(s, nowMs);

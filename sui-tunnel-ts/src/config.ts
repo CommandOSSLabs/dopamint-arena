@@ -40,7 +40,7 @@ export const MODULES = {
   EXAMPLE_TUNNEL_LIFECYCLE: "example_tunnel_lifecycle",
   EXAMPLE_DISPUTE_RESOLUTION: "example_dispute_resolution",
   EXAMPLE_ZK_PRIVATE_TRANSFER: "example_zk_private_transfer",
-  EXAMPLE_AGENT_ALLOWANCE: "example_agent_allowance",
+  agent_allowance: "agent_allowance",
 } as const;
 
 // ============================================
@@ -159,7 +159,7 @@ export const StreamStatus = {
 } as const;
 
 /**
- * Agent allowance status values (matching example_agent_allowance Move constants)
+ * Agent allowance status values (matching agent_allowance Move constants)
  */
 export const AllowanceStatus = {
   ACTIVE: 0,

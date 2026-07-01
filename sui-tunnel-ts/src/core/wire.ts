@@ -241,7 +241,7 @@ export interface SpendAuthorization {
 
 /**
  * Serialize a cumulative spend voucher for signing by the principal. Mirrors
- * `example_agent_allowance::serialize_spend_authorization`. The principal signs
+ * `agent_allowance::serialize_spend_authorization`. The principal signs
  * the RAW bytes (ed25519, no pre-hash); domain separation + the allowance id
  * prevent cross-allowance replay, and the monotonic `authorizedTotal` supersedes
  * any lower voucher on-chain.

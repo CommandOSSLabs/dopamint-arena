@@ -132,7 +132,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           {
             name: "AGENT_ALLOWANCE_PACKAGE_ID",
             value:
-              "0x36d982ffdcf89c709829650bd6b07128f505f41d8953f48658746291d5bfb679",
+              "0x62cde3ae17b0b2a2b77a7c350186b986e0d41dbef171d6afec2ac5beacb55d3c",
           },
           {
             name: "STREAMING_PAYMENT_PACKAGE_ID",
