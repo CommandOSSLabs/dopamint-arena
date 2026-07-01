@@ -43,9 +43,10 @@ pub struct GameProfile {
     pub stake_each: u64,
 }
 
-/// Blackjack profile: stake 1000 MTPS each (0 decimals → integer `1000`), matching the FE PvP
-/// hook's `DEFAULT_STAKE` so the bot's pre-created tunnel and the user's deposit agree on the
-/// initial off-chain balances (a divergent stake would break co-signing). Must be ≥ `MIN_BET` (25)
+/// Blackjack profile: stake 1000 MTPS each (0 decimals → integer `1000`). The arena FE co-signs
+/// `allocation.stakeEach` (this value, echoed by the backend) — NOT the FE `DEFAULT_STAKE` (100,
+/// which is the human-vs-human buy-in default) — so bot and browser agree on the initial off-chain
+/// balances (a divergent stake would break co-signing). Must be ≥ `MIN_BET` (25)
 /// or `is_terminal` fires at the initial state and the match settles with zero moves. Match length
 /// is bounded by the protocol's `ROUND_CAP`, not the bankroll. (No host — see [`GameProfile`].)
 pub const BLACKJACK: GameProfile = GameProfile {
@@ -53,14 +54,15 @@ pub const BLACKJACK: GameProfile = GameProfile {
     stake_each: 1000,
 };
 
-/// Quantum Poker profile: stake 5000 MTPS per seat (the bankroll), ante 50 per hand, 50-hand cap —
-/// matching the FE PvP hook (`POKER_BUYIN = 5000`, `HAND_CAP = 50`, default `ANTE = 50`) so the
-/// bot's pre-created tunnel and the user's deposit agree on the initial off-chain balances and the
-/// per-hand wager unit. Real MTPS only moves at open/settle; intra-match bets draw against the
-/// staked bankroll off-chain, exactly as the tunnel protocol already does.
+/// Quantum Poker profile: stake 100 MTPS per seat (the bankroll), ante 1 per hand, 50-hand cap —
+/// matching the FE PvP hook (`POKER_BUYIN = 100`, `HAND_CAP = 50`, `ANTE = 1`, the "100:1 == old
+/// 5000:50 ratio" in `frontend/.../quantumPoker/constants.ts`) so the bot and the FE agree on the
+/// INITIAL co-signed balances. A divergent stake makes the bot compute different party balances than
+/// the browser and reject its first move (`frame balances mismatch`). Real MTPS only moves at
+/// open/settle; intra-match bets draw against the staked bankroll off-chain.
 pub const QUANTUM_POKER: GameProfile = GameProfile {
     game_id: "quantum_poker",
-    stake_each: 5000,
+    stake_each: 100,
 };
 
 /// Bomb It profile: stake 500 MTPS per seat, matching the FE generic-hook spec (`stake: 500n`) so
@@ -135,10 +137,10 @@ pub fn profile_for(game: &str) -> Option<GameProfile> {
     }
 }
 
-/// Per-hand ante for the fleet bot's quantum poker. Matches the TS protocol's default `ANTE` (50n),
-/// which every FE caller uses (no FE caller passes a custom ante). Kept separate from
-/// [`QUANTUM_POKER`] because the ante is a protocol-construction param, not a stake.
-const QUANTUM_POKER_ANTE: u64 = 50;
+/// Per-hand ante for the fleet bot's quantum poker. Matches the FE arena `ANTE = 1` (paired with
+/// `POKER_BUYIN = 100`). Kept separate from [`QUANTUM_POKER`] because the ante is a
+/// protocol-construction param, not a stake. A divergent ante desyncs the co-signed hand state.
+const QUANTUM_POKER_ANTE: u64 = 1;
 
 /// Hand cap for the fleet bot's quantum poker, matching the FE `HAND_CAP = 50n`.
 const QUANTUM_POKER_HAND_CAP: u64 = 50;
@@ -463,10 +465,11 @@ where
     };
     let protocol = CaroSeries::new(1, CARO_BOARD_SIZE, CARO.stake_each)
         .map_err(|e| anyhow!("caro series: {e:?}"))?;
-    // Weak = the easiest/most-random caro bot (depth-1 lookahead, 0.85 best-move prob vs Strong's
-    // depth-2/0.95) so a human opponent can actually win.
+    // Easy = the easiest caro bot: it ignores threats entirely (never blocks, never builds a line)
+    // and plays a pseudo-random adjacent cell, so a casual human reliably wins. `Weak`/`Strong`
+    // still defend and are too strong for a casual player at gomoku.
     let strategy =
-        CaroSeriesStrategy::with_seed(1, CARO_BOARD_SIZE, CaroStrength::Weak, fleet_seed(role))
+        CaroSeriesStrategy::with_seed(1, CARO_BOARD_SIZE, CaroStrength::Easy, fleet_seed(role))
             .map_err(|e| anyhow!("caro strategy: {e:?}"))?;
     play_match(
         protocol, strategy, &CARO, &info, channel, anchor, signer, recorder,

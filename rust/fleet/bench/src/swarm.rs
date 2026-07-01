@@ -504,6 +504,10 @@ pub fn run_lifecycle_pipeline(
         .enable_all()
         .worker_threads(workers)
         .thread_name("fleet-bench-tunnel")
+        // Protocol drive futures (largest: blackjack_v2's betting+card state, plus the
+        // ack-resend/timeout wrapper) exceed tokio's default 2 MiB worker stack. Match the
+        // 16 MiB used by the module's other tunnel runtimes.
+        .thread_stack_size(16 * 1024 * 1024)
         .build()
         .expect("fleet bench runtime");
     let sui_context = sui_context.cloned();

@@ -275,8 +275,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [error, setError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [endRequested, setEndRequested] = useState(false);
-  // Auto is ON for your first match this session (watch a persona bot play your seat), then sticky
-  // to your last toggle — tick it off and new hands stay human-driven. See autoPreference.
+  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
+  // tick it on and new hands let a persona bot play your seat. See autoPreference.
   const [auto, setAutoState] = useState(() => defaultAuto(GAME_ID));
 
   const mpRef = useRef<MpClient | null>(null);
@@ -886,7 +886,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           // Build the distributed poker engine over the relay transport (mirrors findMatch's
           // startTunnelRound, but the tunnelId is the pre-created one and balances are the
           // per-seat stakes the fleet + the batched deposit just funded).
-          const proto = new QuantumPokerProtocol(HAND_CAP);
+          const proto = new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE);
           const backend = defaultBackend();
           const self = makeEndpoint(backend, wallet, ephemeral, true);
           const opp = makeEndpoint(

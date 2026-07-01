@@ -515,18 +515,12 @@ async fn handle_authed(
             Ok(())
         }
         ClientMsg::ArenaJoin { match_id } => {
-            // Bind this connection to its pre-allocated arena match. The rendezvous completes the
-            // MatchRecord (and delivers `MatchFound` to us as party A) once the co-located bot also
-            // binds. `false` means the id is unknown/expired or we are not its allocator.
-            if state
-                .arena
-                .bind_user(state, &match_id, here(state, conn_id), wallet)
+            // Claim the pre-allocated arena match and spawn its bot HERE — co-located with this WS,
+            // so the match relays in-process (ADR-0005). This delivers `MatchFound` to us (party A)
+            // and starts the bot. An unknown/expired id, a foreign wallet, or a second (already
+            // claimed) join all surface as `unknown_arena_match`.
+            crate::fleet::colocated::join_and_spawn(state, &match_id, here(state, conn_id), wallet)
                 .await
-            {
-                Ok(())
-            } else {
-                Err("unknown_arena_match")
-            }
         }
         ClientMsg::Connect { .. } => Err("already_connected"),
     }
@@ -1273,9 +1267,11 @@ mod tests {
             control: Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: mp.clone(),
             bus: bus.clone(),
-            settler: crate::sui::SuiSettler::noop(),
+            settler: std::sync::Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
+            archiver: None,
+            s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
@@ -1288,7 +1284,6 @@ mod tests {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
-            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: 0,
             arena_fleet_games: std::collections::HashSet::new(),
             wallet_pool: None,
@@ -1438,9 +1433,11 @@ mod tests {
             control: Arc::new(InMemoryControlStore::default()),
             mp,
             bus,
-            settler: crate::sui::SuiSettler::noop(),
+            settler: std::sync::Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
+            archiver: None,
+            s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
@@ -1453,7 +1450,6 @@ mod tests {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
-            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: 0,
             arena_fleet_games: std::collections::HashSet::new(),
             wallet_pool: None,

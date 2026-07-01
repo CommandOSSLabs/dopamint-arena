@@ -168,8 +168,8 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
-  // Auto is ON for your first match this session (watch a bot play), then sticky to your last
-  // toggle — tick it off and new games stay human-vs-human. See autoPreference.
+  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
+  // tick it on and new games keep a bot playing for you. See autoPreference.
   const [auto, setAutoState] = useState(() => defaultAuto("blackjack"));
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
@@ -198,6 +198,10 @@ export function usePvpBlackjack(): PvpView {
   const onMatchRef =
     useRef<(mp: MpClient, m: MatchInfo) => Promise<void>>(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
+  // The bot (party B) has no on-chain create delay, so its `opened` can arrive BEFORE party A arms
+  // its await — buffer it like hello/stake/settle, or the tunnel never builds and every button
+  // (manual bet AND auto) silently no-ops on the `!t` guard. (arena_anchor.rs "T14" note.)
+  const bufferedOpenedRef = useRef<string | null>(null);
   const settleResolveRef = useRef<
     ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
   >(null);
@@ -537,6 +541,7 @@ export function usePvpBlackjack(): PvpView {
       bufferedStakeRef.current = null;
       bufferedHelloRef.current = null;
       openedResolveRef.current = null;
+      bufferedOpenedRef.current = null;
       settleResolveRef.current = null;
       stakeResolveRef.current = null;
       helloResolveRef.current = null;
@@ -602,9 +607,11 @@ export function usePvpBlackjack(): PvpView {
             const pub = String(mm.ephemeralPubkey);
             if (helloResolveRef.current) helloResolveRef.current(pub);
             else bufferedHelloRef.current = pub;
-          } else if (mm.t === "opened")
-            openedResolveRef.current?.(String(mm.tunnelId));
-          else if (mm.t === "settleHalf") {
+          } else if (mm.t === "opened") {
+            const id = String(mm.tunnelId);
+            if (openedResolveRef.current) openedResolveRef.current(id);
+            else bufferedOpenedRef.current = id;
+          } else if (mm.t === "settleHalf") {
             const sig = hexToBytes(String(mm.sig));
             const rt = hexToBytes(String(mm.transcriptRoot));
             if (settleResolveRef.current)
@@ -682,9 +689,11 @@ export function usePvpBlackjack(): PvpView {
           channel.sendPeer({ t: "opened", tunnelId });
         } else {
           setPhase("opening");
-          tunnelId = await new Promise<string>((resolve) => {
-            openedResolveRef.current = resolve;
-          });
+          tunnelId =
+            bufferedOpenedRef.current ??
+            (await new Promise<string>((resolve) => {
+              openedResolveRef.current = resolve;
+            }));
         }
 
         const obj = await client.getObject({
@@ -840,6 +849,7 @@ export function usePvpBlackjack(): PvpView {
       bufferedSettleRef.current = null;
       bufferedHelloRef.current = null;
       openedResolveRef.current = null;
+      bufferedOpenedRef.current = null;
       settleResolveRef.current = null;
       helloResolveRef.current = null;
       void (async () => {
@@ -896,19 +906,11 @@ export function usePvpBlackjack(): PvpView {
           // No create/deposit: the fleet pre-created the tunnel + funded seat B, and seat A was funded
           // by the batched `enterArena` PTB. Both seats stake the fixed arena buy-in (allocation).
           const stake = BigInt(allocation.stakeEach);
-          const obj = await client.getObject({
-            id: allocation.tunnelId,
-            options: { showContent: true },
-          });
-          const fields = (
-            obj.data?.content as
-              | { fields?: Record<string, unknown> }
-              | undefined
-          )?.fields;
-          createdAtRef.current = BigInt(
-            (fields?.created_at as string | undefined) ?? 0,
-          );
-
+          // `created_at` is only needed at settle (see finishSettle / leave). Fetching it HERE blocks
+          // the tunnel build on a Sui RPC, and under RPC load that stalls the whole match — the bet
+          // can never fire because `tunnelRef` never gets set (this is why blackjack "never" started
+          // while poker, which reads it lazily, did). Build the engine now; populate created_at in the
+          // background below so settle still has it.
           const backend = core.defaultBackend();
           const t = new core.DistributedTunnel<BlackjackState, BlackjackMove>(
             proto,
@@ -946,6 +948,25 @@ export function usePvpBlackjack(): PvpView {
             opponentPubkeyHex: oppHello,
             selfEphemeralSecretHex: bytesToHex(eph.secretKey),
           });
+
+          // Fetch created_at for settle WITHOUT blocking play (the game is already live above). Settle
+          // happens seconds later, so this resolves in time; if the RPC is slow the match still plays.
+          void client
+            .getObject({
+              id: allocation.tunnelId,
+              options: { showContent: true },
+            })
+            .then((obj) => {
+              const fields = (
+                obj.data?.content as
+                  | { fields?: Record<string, unknown> }
+                  | undefined
+              )?.fields;
+              createdAtRef.current = BigInt(
+                (fields?.created_at as string | undefined) ?? 0,
+              );
+            })
+            .catch(() => {});
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
           setPhase("error");
@@ -1074,9 +1095,8 @@ export function usePvpBlackjack(): PvpView {
   );
 
   // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto is ON
-  // by default on the first match, so this fires the opening bot move; it also covers ticking Auto
-  // pre-play.
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Covers a
+  // player who ticks Auto on before play; Auto is OFF by default on a fresh load.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -1150,6 +1170,7 @@ export function usePvpBlackjack(): PvpView {
     autoRef.current = defaultAuto("blackjack");
     setAutoState(autoRef.current);
     openedResolveRef.current = null;
+    bufferedOpenedRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
     stakeResolveRef.current = null;
@@ -1183,6 +1204,7 @@ export function usePvpBlackjack(): PvpView {
     stoppingRef.current = false;
     autoKickedRef.current = false;
     openedResolveRef.current = null;
+    bufferedOpenedRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
     stakeResolveRef.current = null;

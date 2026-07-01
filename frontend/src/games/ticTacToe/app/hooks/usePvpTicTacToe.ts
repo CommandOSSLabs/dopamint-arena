@@ -223,8 +223,8 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  // Auto is ON for your first match this session (watch a bot play), then sticky to your last
-  // toggle — tick it off and new games stay human-vs-human. See autoPreference.
+  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
+  // tick it on and new games keep a bot playing for you. See autoPreference.
   const [auto, setAutoState] = useState(() => defaultAuto(variant));
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -1069,9 +1069,8 @@ export function usePvpTicTacToe(
   );
 
   // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto is ON
-  // by default on the first match, so this fires the opening bot move; it also covers ticking Auto
-  // pre-play.
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Covers a
+  // player who ticks Auto on before play; Auto is OFF by default on a fresh load.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {

@@ -588,6 +588,7 @@ impl QuantumPoker {
                 next.hole_b = self.derive_hole_cards(&next, Seat::B, true);
                 self.post_antes_and_begin_street(&mut next)?;
             }
+            PokerPhase::OpenPrivateHoles => {}
             PokerPhase::RevealFlop => {
                 self.try_reveal_board_then_bet(&mut next, &FLOP_SLOTS, PokerPhase::FlopBet)?;
             }

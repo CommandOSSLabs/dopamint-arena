@@ -2,16 +2,22 @@
 
 > **⚠️ Latency consequence revised by [ADR-0023](0015-data-plane-local-control-plane-redis.md).**
 > This ADR assumed "PvP is ≈0 TPS, so a Redis round-trip per relayed frame is
-> immaterial." Once self-play is dropped ([ADR-0001 §1](0001-arena-baseline-architecture.md))
-> every move flows through the relay, so the per-frame `SPUBLISH` path is demoted
-> to a **fallback** and the per-move data plane moves in-process. The Redis-only,
+> immaterial." For the genuine two-party **user layer** every move flows through the
+> relay, so the per-frame `SPUBLISH` path is demoted to a **fallback** and the per-move
+> data plane moves in-process (the self-play bulk never crosses the relay —
+> [ADR-0020](0020-self-play-tps-engine-two-party-on-top.md)). The Redis-only,
 > no-Postgres decision below is unchanged.
 
 - **Status**: Proposed
 - **Date**: 2026-06-17
 - **Refs**: builds on [ADR-0002](0002-backend-client-api-contract.md) (stateless
-  control-plane) and the stateful PvP lane. Driven by the AWS infra design (Max Mai), which runs the
-  backend as ≥2 Fargate tasks behind an ALB. Design rationale is kept in local design notes.
+  control-plane) and [ADR-0006](0006-genuine-two-party-only-drop-self-play.md) (the
+  stateful two-party PvP backend — *superseded by
+  [ADR-0020](0020-self-play-tps-engine-two-party-on-top.md); that backend now serves
+  the genuine two-party **user layer**, which the self-play bulk does not touch, so the
+  HA design below is unchanged*). Driven by the AWS infra design (Max Mai), which runs the
+  backend as ≥2 Fargate tasks behind an ALB. Design spec:
+  `docs/superpowers/specs/2026-06-17-redis-backed-ha-backend-design.md`.
 
 > **Engine amendment (2026-06-22):** The two ElastiCache clusters are provisioned
 > with the **Valkey 7.2** engine rather than Redis OSS. Valkey is a Redis-protocol
@@ -20,7 +26,7 @@
 
 ## Context
 
-An earlier decision made the backend **stateful**: presence, matchmaking queues, invites,
+ADR-0006 made the backend **stateful**: presence, matchmaking queues, invites,
 matches, and per-connection socket handles all live in process memory
 (`AppState`'s `RwLock<HashMap>`s). The control-plane (sessions, stats counters) is
 also per-process. That is correct at **one** instance.
@@ -76,7 +82,7 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
    `REDIS_PUBSUB_URL` / `INSTANCE_ID` config — alongside the `SUI_*` / `WALRUS_*` / `TUNNEL_*`
    vars the binary already requires and `SUI_SETTLER_KEY` as the task secret.
    **Drop the migration task** (no DB).
-8. **Settle for concurrency, never by serializing.** Self-play closes are high-volume and bursty
+8. **Settle for concurrency, never by serializing.** Fleet closes are high-volume and bursty
    (~one per tunnel) — at the 1M-effective-TPS target the on-chain close rate is bounded only by
    tunnel count, so the settle path must submit _concurrently_. A global lock would cap
    finalization at one tx per RPC round-trip and is rejected. Equivocation is purely a **gas-coin**
@@ -93,7 +99,7 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
      an **e2e** confirming node acceptance (the feature is ~1 month old).
    - **Fallback if a gate fails: Redis-leased gas-coin pool** — one distinct coin per in-flight tx,
      returned at its new version (Mysten's own Redis-backed `sui-gas-pool` pattern).
-   - **Optional optimization (either model): batch** self-play closes into one PTB (≤1024 commands)
+   - **Optional optimization (either model): batch** fleet closes into one PTB (≤1024 commands)
      to cut tx/gas count; the PTB is atomic, so pre-validate and bisect-retry, and keep **PvP closes
      single** (untrusted parties). The in-process `gas_lock` mutex stays only a same-process guard.
 
@@ -105,7 +111,7 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
   Redis clusters stay (the Pulumi DB components stay in the repo but dormant). Full hand-off list
   in [§ Infra delta](#infra-delta). Saves ~$1–2k/mo and removes the deploy pipeline's most
   failure-prone step (migration ordering + pre-migration snapshot + DB-restore runbook all go).
-- **Settlement is concurrency-safe, not serialized**: PTB-batched self-play closes + non-shared
+- **Settlement is concurrency-safe, not serialized**: PTB-batched fleet closes + non-shared
   gas (address balance, or a Redis-leased coin pool) keep many closes in flight without sharing a
   gas-coin version — so no equivocation _and_ no throughput cap. PvP closes settle singly.
 - **Readiness scoped to the cache cluster**: a pubsub failover degrades PvP delivery only;
@@ -116,8 +122,9 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
   back to the on-chain dispute/timeout paths — **funds are never at risk** (they live on-chain).
 - **Testability preserved**: the store trait keeps the pairing/routing logic in fast,
   deterministic unit tests; Redis specifics (atomicity, pub/sub) are integration-tested.
-- **Latency**: one Redis round-trip per relayed frame for cross-instance matches. PvP is
-  human-paced (≈0 TPS), so this is immaterial; the 1M-TPS self-play lane never touches it.
+- **Latency**: one Redis round-trip per relayed frame for cross-instance matches. Human
+  matches are human-paced, so this is immaterial; the machine-paced fleet keeps each pair
+  on one instance (or off the relay entirely via P2P), so it never pays the cross-instance hop.
 
 ## Infra delta
 
@@ -166,4 +173,31 @@ root, not `backend/tunnel-manager/`.
   Redis-leased coin pool. Batch size vs gas budget + bisect-retry is an optimization, deferred to
   implementation.
 - **Carryovers from the prior stateful-backend decision** (unchanged by this ADR): server-side pubkey↔wallet binding;
-  on-chain watchtower _submission_ of the captured checkpoint; disconnect queue/presence cleanup.
+  on-chain watchtower *submission* of the captured checkpoint; disconnect queue/presence cleanup.
+
+## Addendum (2026-07-01) — co-located arena bots (the deferred fleet HA, realized)
+
+The "cross-instance HA is deferred" note on the arena fleet (`fleet/mod.rs`) is realized here — but by
+**co-location, not distribution**. A user-vs-bot match has one immovable endpoint (the human's WS) and one
+server-controlled endpoint (the bot), so we spawn the bot where the user already is instead of spanning the
+match across instances (which would pay the per-frame cross-instance hop ADR-0023 works to avoid):
+
+- **`allocate`** (any instance) opens+funds the tunnel and writes a small shared reservation recipe to the
+  cache cluster — `arena:res:<id>` = `{game, seat_a, seat_b, tunnel_id, eph_secret}`, TTL 300s. No bot spawns.
+- **`arena.join`** (the user's instance) atomically claims the reservation (`CLAIM_ARENA` Lua — exactly one
+  caller ever wins, so a reconnect / StrictMode double-mount cannot double-spawn) and spawns the bot's play
+  task **locally**, next to the user's socket. Both relay conns are local ⇒ no per-frame cross-instance hop.
+- **`opened`** is now a `204` no-op: the bot spawns at join (which always follows the deposit in the FE flow),
+  so there is nothing to signal.
+
+Consequences: `unknown_arena_match` (join finding no local rendezvous) and the silent dead-bot (`opened`
+landing on the wrong instance) both disappear — the reservation is shared, and the bot is built wherever the
+user lands. Still pure on-demand (one short-lived task per *real* match; a no-show spawns nothing). Concurrency
+is bounded per-instance at join (`FLEET_COLOCATED_COUNT` × instances total). This deletes the former
+in-memory rendezvous + oneshot wake entirely.
+
+**Tradeoff:** the bot's per-match ephemeral co-signing secret is minted at allocate (its pubkey is bound into
+the tunnel) but the play task runs on a possibly-different instance, so the secret rides the reservation record
+in the cache cluster. Low-sensitivity — fake stake token, honest bot, funds protected on-chain by the tunnel's
+dispute path; it co-signs only off-chain state for that one match. Future hardening: derive it as
+`KDF(server_secret, match_id)` so nothing per-match is stored.

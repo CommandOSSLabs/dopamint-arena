@@ -1,19 +1,29 @@
 //! Shared application state + the stats wire types.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+
+use crate::s3::TranscriptArchiver;
 
 pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
-    pub settler: crate::sui::SuiSettler,
+    /// Shared with the arena opener, which has the settler sponsor each bot open's gas (ADR-0028):
+    /// one settler instance (and one `sponsor_nonce`) backs opens, faucet, `/settle`, and sponsors.
+    pub settler: std::sync::Arc<crate::sui::SuiSettler>,
     /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
     /// `settler` as the fallback. `None` = settler-only.
     pub enoki: Option<crate::enoki::EnokiClient>,
     pub walrus: crate::walrus::WalrusClient,
+    /// S3 transcript archiver (ADR-0023). `None` when S3 is unconfigured (dev/test) —
+    /// archival is then disabled. Concurrent with Walrus; Walrus is untouched.
+    pub archiver: Option<Arc<dyn TranscriptArchiver>>,
+    /// S3 object-key prefix for transcript archival (e.g. "prod/"). Empty when unset.
+    pub s3_prefix: String,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
     pub ollama: crate::ollama::OllamaClient,
     /// Latest aggregate snapshot is computed once per tick and fanned out here to
@@ -35,12 +45,9 @@ pub struct AppState {
     /// allocate so the user's open is deposit-only. `SuiArenaOpener` when the wallet pool + on-chain
     /// config are set, else `Noop` (dev/test).
     pub arena_opener: std::sync::Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener>,
-    /// Binds the user's WS conn to its co-located bot's bus conn for an allocated arena match
-    /// (ADR-0027/0028), completing the `MatchRecord` so the relay can route between them.
-    pub arena: crate::fleet::arena_rendezvous::ArenaRendezvous,
-    /// Max co-located bots spawned on demand per game (config `FLEET_COLOCATED_COUNT`). The arena
-    /// admission ceiling: `reserve_or_spawn` spawns up to this many concurrent matches per game, then
-    /// returns nothing. `0` (default) serves no co-located bots.
+    /// Max co-located arena bot tasks spawned per instance (config `FLEET_COLOCATED_COUNT`). Enforced
+    /// at `arena.join` where the bot is spawned; total fan-out is this × instances. `0` (default)
+    /// serves no co-located bots (`.max(1)` at the join site keeps a single-slot dev default usable).
     pub arena_fleet_count: u32,
     /// Games the co-located fleet serves (config `FLEET_COLOCATED_GAMES`). A game not in this set has
     /// an effective cap of 0 — the trusted-subset gate (a `play_game` arm may exist before it's live).
@@ -85,9 +92,11 @@ impl AppState {
             control: Arc::new(InMemoryControlStore::default()),
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
-            settler: crate::sui::SuiSettler::noop(),
+            settler: Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
+            archiver: None,
+            s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
@@ -100,7 +109,6 @@ impl AppState {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
-            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: count,
             arena_fleet_games: games.into_iter().collect(),
             wallet_pool: None,
@@ -110,6 +118,18 @@ impl AppState {
             faucet_max_per_window: 5,
             faucet_admin_token: None,
         })
+    }
+
+    /// Test builder that wires a recording S3 archiver. Settler stays noop;
+    /// Redis/Postgres/S3 unused otherwise.
+    pub fn with_fake_archiver(
+        archiver: std::sync::Arc<dyn crate::s3::TranscriptArchiver>,
+    ) -> SharedState {
+        let mut s = Self::in_memory_for_test();
+        let inner = std::sync::Arc::get_mut(&mut s).expect("unique test arc");
+        inner.archiver = Some(archiver);
+        inner.s3_prefix = "".into();
+        s
     }
 }
 

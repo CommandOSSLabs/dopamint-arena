@@ -3,6 +3,8 @@
 //! `settle` submits the co-signed close. A `TranscriptRecorder` taps each
 //! committed transition in the loop's effects band, independent of the anchor.
 
+use std::time::Duration;
+
 use crate::{
     Balances, DriverObserver, DriverStart, FrameCodec, FrameTransport, FrameTransportError,
     HarnessError, JsonFrameCodec, MoveCommitted, MoveStrategy, MoveStrategyContext, PartyRuntime,
@@ -17,6 +19,14 @@ use std::time::Instant;
 use tokio::sync::watch;
 use tunnel_core::protocol_id::ProtocolId;
 use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Settlement};
+
+/// Default wait for an ACK before re-sending our co-signed MOVE. Sized well above
+/// relay RTT (the peer ACKs mechanically, not at human pace), so a timeout means the
+/// MOVE or its ACK was actually dropped — e.g. the browser's first frame arriving
+/// before its `onFrame` is wired at match start.
+const DEFAULT_ACK_TIMEOUT: Duration = Duration::from_millis(2000);
+/// Default number of MOVE re-sends before giving up and aborting the match.
+const DEFAULT_MAX_ACK_RESENDS: u32 = 4;
 
 #[derive(Debug)]
 pub struct DriverOutcome {
@@ -261,6 +271,8 @@ where
     observers: Vec<Box<dyn DriverObserver>>,
     codec: C,
     run_control: Option<DriverRunControl>,
+    ack_timeout: Duration,
+    max_ack_resends: u32,
 }
 
 impl<P, Pol, Ch, S, A, R> PartyDriver<P, Pol, Ch, S, A, R, JsonFrameCodec>
@@ -318,6 +330,8 @@ where
             observers: Vec::new(),
             codec,
             run_control: None,
+            ack_timeout: DEFAULT_ACK_TIMEOUT,
+            max_ack_resends: DEFAULT_MAX_ACK_RESENDS,
         }
     }
 
@@ -330,6 +344,15 @@ where
 
     pub fn with_run_control(mut self, run_control: DriverRunControl) -> Self {
         self.run_control = Some(run_control);
+        self
+    }
+
+    /// Override the ACK re-send policy (wait before re-sending an unacked MOVE, and the
+    /// resend cap). Defaults suit relay play; tests inject a tiny timeout to exercise
+    /// the resend path without waiting real seconds.
+    pub fn with_ack_resend_policy(mut self, ack_timeout: Duration, max_ack_resends: u32) -> Self {
+        self.ack_timeout = ack_timeout;
+        self.max_ack_resends = max_ack_resends;
         self
     }
 
@@ -349,6 +372,8 @@ where
             mut observers,
             codec,
             run_control,
+            ack_timeout,
+            max_ack_resends,
         } = self;
 
         let result = Self::drive(
@@ -361,6 +386,8 @@ where
             &mut observers,
             max_moves,
             run_control,
+            ack_timeout,
+            max_ack_resends,
             &mut now,
         )
         .await;
@@ -388,6 +415,8 @@ where
         observers: &mut [Box<dyn DriverObserver>],
         max_moves: u64,
         run_control: Option<DriverRunControl>,
+        ack_timeout: Duration,
+        max_ack_resends: u32,
         now: &mut (impl FnMut() -> u64 + Send),
     ) -> Result<DriverOutcome, HarnessError> {
         let protocol_id = ProtocolId::parse(parts.protocol.name())
@@ -484,35 +513,60 @@ where
                     }
                 }
                 let frame = seat.propose(mv, next_timestamp())?;
-                frame_transport.send(frame).await?;
+                let proposed_nonce = seat.nonce() + 1;
+                frame_transport.send(frame.clone()).await?;
                 // The opponent must ack a move it has seen in flight before it can
                 // honor a stop, so this recv cannot hang on a cooperative shutdown.
-                match frame_transport.recv().await? {
-                    Some(bytes) => {
-                        let out = seat.handle_frame(&bytes)?;
-                        move_strategy.confirm_move(seat.state());
-                        for f in out {
-                            frame_transport.send(f).await?;
-                        }
-                        moves += 1;
-                        let ev = MoveCommitted {
-                            by: our_seat,
-                            nonce: seat.nonce(),
-                            move_index: moves,
-                            timestamp_ms: next_timestamp(),
+                let mut resends = 0u32;
+                loop {
+                    let received =
+                        match tokio::time::timeout(ack_timeout, frame_transport.recv()).await {
+                            Ok(recv_result) => recv_result?,
+                            // No ACK within the window: our MOVE or its ACK was dropped (e.g. the
+                            // browser's first frame arriving before its onFrame is wired). Re-send
+                            // the same co-signed frame; the peer re-applies/re-ACKs idempotently.
+                            Err(_elapsed) => {
+                                if resends >= max_ack_resends {
+                                    return Err(HarnessError::FrameTransport(
+                                        FrameTransportError::Transport(format!(
+                                        "no ack for nonce {proposed_nonce} after {resends} resends"
+                                    )),
+                                    ));
+                                }
+                                resends += 1;
+                                frame_transport.send(frame.clone()).await?;
+                                continue;
+                            }
                         };
-                        for o in observers.iter_mut() {
-                            o.on_move_committed(&ev);
-                        }
-                        if let Some(entry) = seat.take_last_committed() {
-                            last_timestamp = entry.timestamp;
-                            recorder.record(entry)?;
-                        }
-                        if let Some(control) = run_control.as_ref() {
-                            control.record_committed_move(our_seat, our_seat);
-                        }
+                    let Some(bytes) = received else {
+                        return Err(HarnessError::FrameTransport(FrameTransportError::Closed));
+                    };
+                    let out = seat.handle_frame(&bytes)?;
+                    for f in out {
+                        frame_transport.send(f).await?;
                     }
-                    None => return Err(HarnessError::FrameTransport(FrameTransportError::Closed)),
+                    // A stale/duplicate ACK is absorbed as a no-op (no commit); only advance
+                    // once our proposal actually commits, so resends never inflate the count.
+                    let Some(entry) = seat.take_last_committed() else {
+                        continue;
+                    };
+                    move_strategy.confirm_move(seat.state());
+                    moves += 1;
+                    let ev = MoveCommitted {
+                        by: our_seat,
+                        nonce: seat.nonce(),
+                        move_index: moves,
+                        timestamp_ms: next_timestamp(),
+                    };
+                    for o in observers.iter_mut() {
+                        o.on_move_committed(&ev);
+                    }
+                    last_timestamp = entry.timestamp;
+                    recorder.record(entry)?;
+                    if let Some(control) = run_control.as_ref() {
+                        control.record_committed_move(our_seat, our_seat);
+                    }
+                    break;
                 }
                 continue;
             }
@@ -525,22 +579,25 @@ where
                     for f in out {
                         frame_transport.send(f).await?;
                     }
-                    moves += 1;
-                    let ev = MoveCommitted {
-                        by: our_seat.other(),
-                        nonce: seat.nonce(),
-                        move_index: moves,
-                        timestamp_ms: next_timestamp(),
-                    };
-                    for o in observers.iter_mut() {
-                        o.on_move_committed(&ev);
-                    }
+                    // Only count a genuine commit; a re-delivered MOVE (idempotent re-ACK) or a
+                    // stale ACK handled as a no-op must not advance the move count. The per-tunnel
+                    // gate must clear only on a real commit, so drain accounting stays balanced.
                     if let Some(entry) = seat.take_last_committed() {
+                        moves += 1;
+                        let ev = MoveCommitted {
+                            by: our_seat.other(),
+                            nonce: seat.nonce(),
+                            move_index: moves,
+                            timestamp_ms: next_timestamp(),
+                        };
+                        for o in observers.iter_mut() {
+                            o.on_move_committed(&ev);
+                        }
                         last_timestamp = entry.timestamp;
                         recorder.record(entry)?;
-                    }
-                    if let Some(control) = run_control.as_ref() {
-                        control.record_committed_move(our_seat, our_seat.other());
+                        if let Some(control) = run_control.as_ref() {
+                            control.record_committed_move(our_seat, our_seat.other());
+                        }
                     }
                 }
                 DriverRecv::Closed => {
@@ -1577,6 +1634,82 @@ mod tests {
         assert_eq!(planned.load(Ordering::Relaxed), 1);
         assert_eq!(confirmed.load(Ordering::Relaxed), 1);
         assert_eq!(aborted.load(Ordering::Relaxed), 0);
+    }
+
+    // Silently drops the first frame this seat sends, then behaves normally — models
+    // the peer's first frame landing before its receiver is wired at match start.
+    struct DropFirstSend {
+        inner: InMemoryFrameTransport,
+        dropped: std::sync::atomic::AtomicBool,
+    }
+
+    impl DropFirstSend {
+        fn new(inner: InMemoryFrameTransport) -> Self {
+            Self {
+                inner,
+                dropped: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl FrameTransport for DropFirstSend {
+        async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+            if !self.dropped.swap(true, Ordering::Relaxed) {
+                return Ok(());
+            }
+            self.inner.send(bytes).await
+        }
+
+        async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+            self.inner.recv().await
+        }
+    }
+
+    // A dropped MOVE must be recovered by a re-send and commit exactly once — the resend
+    // must not inflate the move count or fire confirm_move per attempt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resends_dropped_move_and_commits_once() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let confirmed = Arc::new(AtomicU64::new(0));
+        let anchor = InMemoryAnchor::with_fixed_id("0x1");
+
+        let driver_a = PartyDriver::new(
+            parts(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::A,
+                Arc::new(AtomicU64::new(0)),
+                Arc::clone(&confirmed),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            DropFirstSend::new(ch_a),
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_ack_resend_policy(Duration::from_millis(50), 5);
+        let driver_b = PartyDriver::new(
+            parts(Seat::B, &secret_b, pk_a),
+            TrackingStrategy::new(
+                Seat::B,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_b,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        );
+
+        let (out_a, out_b) = tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1));
+        let (oa, _) = out_a.unwrap();
+        let (ob, _) = out_b.unwrap();
+        assert_eq!(oa.moves, 1);
+        assert_eq!(ob.moves, 1);
+        assert_eq!(oa.final_balances.sum(), 200);
+        assert_eq!(confirmed.load(Ordering::Relaxed), 1);
     }
 
     struct FailingSendTransport;

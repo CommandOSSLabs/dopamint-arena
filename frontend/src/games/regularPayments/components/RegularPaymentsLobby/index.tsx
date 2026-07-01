@@ -4,11 +4,11 @@ import { Button } from "@/components/ui/button";
 import { formatMtps } from "../../utils";
 import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 
-interface PaymentsLobbyProps {
+interface RegularPaymentsLobbyProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
 }
 
-export function PaymentsLobby({ session }: PaymentsLobbyProps) {
+export function RegularPaymentsLobby({ session }: RegularPaymentsLobbyProps) {
   const disabled = !session.walletConnected || session.phase === "opening";
   const opening = session.phase === "opening";
 
@@ -48,6 +48,7 @@ export function PaymentsLobby({ session }: PaymentsLobbyProps) {
           onClick={session.goShop}
         >
           {opening && <Loader2 className="animate-spin" />}
+
           {opening ? "Opening tunnel" : "Go shop"}
         </Button>
       </div>

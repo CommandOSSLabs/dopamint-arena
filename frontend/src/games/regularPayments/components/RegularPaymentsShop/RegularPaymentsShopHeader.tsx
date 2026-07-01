@@ -5,11 +5,13 @@ import { cn } from "@/lib/utils";
 import { formatMtps } from "../../utils";
 import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 
-interface PaymentsShopHeaderProps {
+interface RegularPaymentsShopHeaderProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
 }
 
-export function PaymentsShopHeader({ session }: PaymentsShopHeaderProps) {
+export function RegularPaymentsShopHeader({
+  session,
+}: RegularPaymentsShopHeaderProps) {
   return (
     <header
       className={cn(
