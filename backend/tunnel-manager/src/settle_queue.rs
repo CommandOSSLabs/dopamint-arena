@@ -175,11 +175,14 @@ impl SettleQueue for RedisSettleQueue {
             .xadd(self.stream.as_str(), false, None::<()>, "*", fields)
             .await
             .map_err(|e| anyhow::anyhow!("xadd: {e}"))?;
+        // Store the body as a bulk string via `RedisValue::Bytes`. Passing `Vec<u8>` here makes fred
+        // encode it as a RESP Array (of integers), which SET rejects ("Invalid argument type:
+        // Array"); `Bytes` maps to a bulk string, which is what we want.
         let _: () = self
             .pool
             .set(
                 self.body_key(&id),
-                body.to_vec(),
+                body,
                 Some(fred::types::Expiration::EX(self.body_ttl_secs)),
                 None,
                 false,
