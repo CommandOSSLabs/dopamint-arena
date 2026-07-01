@@ -5,6 +5,7 @@ import {
   transcriptLeaf,
   transcriptRoot,
   verifyTranscript,
+  verifyTranscriptEntries,
   type TranscriptEntry,
 } from "./transcript";
 import { OffchainTunnel } from "../core/tunnel";
@@ -152,6 +153,39 @@ test("verifyTranscript: valid conserving transcript passes every check", () => {
   assert.equal(v.nonceMonotonic, true);
   assert.equal(v.balancesConserved, true);
   assert.equal(v.stepCount, 3);
+});
+
+// The bot-owned path: the explorer serves reassembled chunks with NO 229-byte header, so the
+// verifier reads the root from the on-chain row. Entries-only bytes == a settle body minus its
+// header, which is exactly what the streamed chunks concatenate to.
+test("verifyTranscriptEntries: header-less chunks verify against the on-chain row root", () => {
+  const entries = [
+    vEntry(1n, 60n, 40n),
+    vEntry(2n, 70n, 30n),
+    vEntry(3n, 50n, 50n),
+  ];
+  const root = transcriptRoot(entries.map(transcriptLeaf));
+  const entriesOnly = vBlob(entries, { root }).slice(229);
+  const v = verifyTranscriptEntries(entriesOnly, {
+    ...VPARTIES,
+    onchainRoot: toHex(root),
+    lockedTotal: 100n,
+  });
+  assert.equal(v.ok, true);
+  assert.equal(v.rootMatches, true);
+  assert.equal(v.allSigsValid, true);
+  assert.equal(v.stepCount, 3);
+});
+
+test("verifyTranscriptEntries: root mismatch vs the on-chain anchor is detected", () => {
+  const entries = [vEntry(1n, 60n, 40n), vEntry(2n, 70n, 30n)];
+  const entriesOnly = vBlob(entries).slice(229);
+  const v = verifyTranscriptEntries(entriesOnly, {
+    ...VPARTIES,
+    onchainRoot: "00".repeat(32), // wrong anchor => must fail, no header root to hide behind
+  });
+  assert.equal(v.rootMatches, false);
+  assert.equal(v.ok, false);
 });
 
 test("verifyTranscript: a forged signature is detected (mutual authorization)", () => {

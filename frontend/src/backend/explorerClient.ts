@@ -71,18 +71,28 @@ export async function getSettlement(digest: string): Promise<SettlementRow> {
   return (await res.json()) as SettlementRow;
 }
 
+/** Transcript bytes plus the api's declared wire format, so the caller picks the right verifier. */
+export type TranscriptFetch = {
+  bytes: Uint8Array;
+  /** "entries" = server-owned chunks (root/balances from the row); "body" = whole settle body. */
+  format: "entries" | "body";
+};
+
 /**
- * The full transcript bytes, via the api's Walrus proxy (same-origin). The proxy returns the
- * raw blob verbatim — v2 blobs are binary (first byte 0x02), legacy blobs are JSON — so this
- * does NOT parse; verifyTranscript dispatches on the bytes. Throws on a non-ok response (404 =>
- * anchored-but-unverifiable), which the caller catches.
+ * The transcript bytes, via the explorer api (same-origin). The api serves the bot's reassembled
+ * S3 chunks when present (entries-only) and falls back to the legacy Walrus blob (a whole settle
+ * body), tagging which via the `x-transcript-format` header — the caller uses it to choose the
+ * verifier. Throws on a non-ok response (404 => anchored-but-unverifiable), which the caller catches.
  */
 export async function getTranscript(
   digest: string,
-): Promise<Uint8Array | null> {
+): Promise<TranscriptFetch | null> {
   const res = await fetch(`${apiRoot()}/v1/settlements/${digest}/transcript`);
   if (!res.ok) throw new Error(`getTranscript ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const format =
+    res.headers.get("x-transcript-format") === "entries" ? "entries" : "body";
+  return { bytes, format };
 }
 
 /** Live new-settlement feed (SSE). Returns an unsubscribe fn. */
