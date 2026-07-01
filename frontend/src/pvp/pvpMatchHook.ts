@@ -122,9 +122,9 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   role: Role | null;
   /** Per-seat stake (MIST); surfaced in the outcome banner as the on-chain payout. */
   stake: number;
-  /** Auto mode for YOUR seat: on = a bot plays it for you; off = you play. On for your FIRST match
-   *  this session, then sticky to your last toggle (see autoPreference). The opponent toggles their
-   *  own seat independently — both off = human-vs-human, both on = bot-vs-bot. */
+  /** Auto mode for YOUR seat: on = a bot plays it for you; off = you play. OFF on a fresh page load,
+   *  then sticky to your last toggle (see autoPreference). The opponent toggles their own seat
+   *  independently — both off = human-vs-human, both on = bot-vs-bot. */
   auto: boolean;
   view: View | null;
   winner: State["winner"];
@@ -205,7 +205,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   private status: PvpStatus = "idle";
   private role: Role | null = null;
-  private auto: boolean; // set from defaultAuto(game) in the constructor (ON first match, then sticky)
+  private auto: boolean; // set from defaultAuto(game) in the constructor (OFF on fresh load, then sticky)
   private view: View | null = null;
   private winner: State["winner"] = null as State["winner"];
   private error: string | null = null;

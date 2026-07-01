@@ -110,6 +110,42 @@ mod tests {
     }
 
     #[test]
+    fn export_bytes_total_counts_only_recorder_export_samples() {
+        let mut s = CollectingSink::with_capacity(3);
+        // Two RecorderExport samples — both bytes should be summed.
+        s.record(StageSample {
+            stage: StageId::RecorderExport,
+            dur_ns: 1,
+            cost: StageCost {
+                gas_mist: 0,
+                paid_by: None,
+                bytes: 1234,
+            },
+        });
+        s.record(StageSample {
+            stage: StageId::RecorderExport,
+            dur_ns: 1,
+            cost: StageCost {
+                gas_mist: 0,
+                paid_by: None,
+                bytes: 766,
+            },
+        });
+        // A non-RecorderExport sample with bytes — must NOT be counted.
+        s.record(StageSample {
+            stage: StageId::FrameSend,
+            dur_ns: 1,
+            cost: StageCost {
+                gas_mist: 0,
+                paid_by: None,
+                bytes: 9999,
+            },
+        });
+        let run = RunTelemetry::from_sinks(vec![s]);
+        assert_eq!(run.export_bytes_total(), 1234 + 766);
+    }
+
+    #[test]
     fn missing_stage_yields_empty_distribution() {
         let run = RunTelemetry::from_sinks(vec![CollectingSink::with_capacity(0)]);
         assert_eq!(run.count(StageId::Settle), 0);

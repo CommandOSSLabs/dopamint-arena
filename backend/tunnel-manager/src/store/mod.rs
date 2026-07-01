@@ -57,6 +57,31 @@ pub trait ControlStore: Send + Sync {
     async fn ready(&self) -> bool;
 }
 
+/// The recipe for one reserved arena match, seeded at `allocate` and consumed at `arena.join` to
+/// spawn the bot on the SAME instance as the user's socket (co-location — no cross-instance relay).
+/// Everything the join-instance needs to reconstruct party B; the running bot is never stored, only
+/// this recipe. `eph_secret_hex` is the bot's per-match co-signing secret — low-sensitivity (fake
+/// stake token, honest bot, funds protected on-chain by the tunnel's dispute path).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ArenaReservation {
+    pub game: String,
+    /// Party A wallet — the user who allocated. Authorizes the join.
+    pub seat_a: String,
+    /// Party B — the bot's on-chain address (funded at allocate).
+    pub seat_b: String,
+    pub tunnel_id: String,
+    pub eph_secret_hex: String,
+}
+
+/// Result of an atomic `claim_arena`. Exactly one caller ever gets `Claimed` for a given match, so
+/// exactly one bot is spawned even under a double-join (reconnect / StrictMode double-mount).
+pub enum ArenaClaim {
+    Claimed(ArenaReservation),
+    NotFound,
+    ForeignWallet,
+    AlreadyClaimed,
+}
+
 #[async_trait]
 pub trait MpStore: Send + Sync {
     async fn set_presence(&self, wallet: &str, at: ConnRef);
@@ -95,6 +120,12 @@ pub trait MpStore: Send + Sync {
         wallet: &str,
         at: ConnRef,
     ) -> Option<crate::mp::Seat>;
+    /// Seed a pending arena match at allocate; TTL-bounded so a user who never joins simply expires.
+    async fn put_arena_reservation(&self, match_id: &str, rec: ArenaReservation);
+    /// Atomically claim a reserved match for play: verify `wallet` is the allocator (seat A) and no
+    /// one has claimed it yet, mark it claimed, and return the recipe. The one `Claimed` caller
+    /// spawns the bot; every other join gets a non-`Claimed` outcome.
+    async fn claim_arena(&self, match_id: &str, wallet: &str) -> ArenaClaim;
 }
 
 /// Per-connection control signal routed over the bus ctrl channel (parallel to the hot-path

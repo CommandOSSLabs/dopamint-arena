@@ -89,6 +89,9 @@ _why_ survives after the people involved have moved on.
   `admin_mint` via an owned `AdminCap` (no public mint → no brick/griefing), a
   0-decimal whole-token currency via `coin_registry`; the faucet moves to the
   backend admin endpoint. Builds on 0010.
+- [0024](0024-control-plane-durable-s3-archive-retry-queue.md) — Control plane gains
+  narrow read/write access to one Postgres work-queue table (`pending_s3_archive`) for
+  durable S3-archive retry; a contained exception to ADR-0005/0015's Redis-only rule.
 - [0026](0026-arena-enter-one-sig-genuine-two-party.md) — Arena enter: one
   sponsored PTB opens + funds-own-seat every game vs warm fleet bots; direct
   allocation (not FIFO), user=A/bot=B, bot drives settle, genuine auto-play.

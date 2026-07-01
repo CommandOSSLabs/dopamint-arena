@@ -97,7 +97,7 @@ truth for FE + shop bot. Moves must match catalog prices (`verifyMove` on FE; mi
 
 | Layer | Responsibility | Target |
 |-------|----------------|--------|
-| **UI** | Lobby / Shop / Thank you | `components/Payments*` |
+| **UI** | Lobby / Shop / Thank you | `components/RegularPayments*` |
 | **Hook** | Session lifecycle, screens, telemetry | `useRegularPaymentsPvpSession` (new; replaces self-play hook) |
 | **Session core** | Cart math, `verifyMove`, pure helpers | `utils/sessionCore.ts` (+ tests) |
 | **Protocol** | Off-chain transitions | `sui-tunnel-ts` **`payments.v1`** |
@@ -167,18 +167,18 @@ lobby ──(Find shop, match+open+fund)──► shop ──(Pay now, settle on
 
 ### 4.3 Shop
 
-**Header (`PaymentsShopHeader`)**
+**Header (`RegularPaymentsShopHeader`)**
 
 - ← **Back** → lobby (**UI only**; no settle)
 - Category chips: Fresh | Snacks | Drinks
 - Budget remaining (`font-mono`)
 - **TPS** chip — rolling 1s window **while picking items** (not Pay now)
 
-**Body (`PaymentsShopBody`)**
+**Body (`RegularPaymentsShopBody`)**
 
 - Product grid; tap → add line + off-chain payment step
 
-**Cart (`PaymentsShopCart`)**
+**Cart (`RegularPaymentsShopCart`)**
 
 - Item count, total, **Pay now** → settle → thank you
 - Progress reflects cart / balance moved during shop (not a pay-stream bar)

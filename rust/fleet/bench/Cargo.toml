@@ -26,11 +26,12 @@ tunnel-payments = { path = "../../protocols/payments" }
 tunnel-quantum-poker = { path = "../../protocols/quantum-poker" }
 tunnel-tic-tac-toe = { path = "../../protocols/tic-tac-toe" }
 tunnel-world-canvas = { path = "../../protocols/world-canvas" }
-rayon.workspace = true
 clap = { workspace = true }
 sysinfo.workspace = true
 getrandom.workspace = true
 tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 hex.workspace = true
