@@ -48,7 +48,6 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
-import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
 import type { ArenaAllocation } from "@/onchain/arenaEnter";
 import {
   consumeArenaEntry,

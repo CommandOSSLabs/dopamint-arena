@@ -43,7 +43,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import { enterArena, type MakeUserParty } from "../../onchain/arenaEnter";
+import { enterArena } from "../../onchain/arenaEnter";
 import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
 import {
   consumeArenaEntry,
@@ -982,13 +982,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       try {
         setError(null);
         setStatus("funding");
-        // One ephemeral key for this game: its pubkey is baked into the tunnel as party A at allocate,
-        // and the SAME key co-signs every move via `enterArenaMatch` (a different key rejects sigs).
-        const eph = generateKeyPair();
-        const makeUserParty: MakeUserParty = async () => ({
-          address: wallet,
-          publicKey: eph.publicKey,
-        });
         // Deposit seat A into the fleet-pre-created tunnel (seat B already funded by the bot). Reuses
         // the SAME staked-deposit primitive `findMatch` uses, so sponsorship + top-up are identical.
         const open = async (req: TunnelOpenRequest): Promise<string> => {
@@ -1002,22 +995,23 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           });
           return tunnelId;
         };
-        const allocations = await enterArena({
+        // `enterArena` mints the ephemeral key (baked into the tunnel as party A + co-signs every
+        // move), allocates the bot, deposits seat A, and returns the {allocation, keypair}.
+        const matches = await enterArena({
           games: [ARENA_GAME_ID],
           userAddress: wallet,
           stakePerGame: POKER_BUYIN,
-          makeUserParty,
           open,
           coinType,
           apiBase: resolveBackendUrl(),
         });
-        const alloc = allocations.find((a) => a.game === ARENA_GAME_ID);
-        if (!alloc) {
+        const match = matches.find((m) => m.allocation.game === ARENA_GAME_ID);
+        if (!match) {
           setError("no opponent available — try again in a moment");
           setStatus("error");
           return;
         }
-        enterArenaMatch(alloc, eph);
+        enterArenaMatch(match.allocation, match.keypair);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");

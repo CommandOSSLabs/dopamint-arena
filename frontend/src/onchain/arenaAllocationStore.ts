@@ -15,21 +15,33 @@ export interface ArenaEntry {
   keypair: KeyPair;
 }
 
-const entries = new Map<string, ArenaEntry>();
+// A QUEUE of pending entries per arena game id, not a single slot: N windows of the SAME game (e.g. 3
+// caro tabs) each get their own bot, so the orchestrator publishes N entries under "caro" and each
+// window consumes one (`consumeArenaEntry` shifts). Each entry's keypair is the one baked into ITS
+// tunnel — entries are interchangeable across same-game windows (any window plays any caro bot).
+const entries = new Map<string, ArenaEntry[]>();
 const subscribers = new Set<() => void>();
 
-/** Publish a game's batched allocation + signing key (called by the orchestrator after the PTB lands). */
+/** Publish one allocation + signing key for a game (called per bot after the batched PTB lands).
+ *  Appends to the game's queue — repeated calls for the same game stack up (one per window). */
 export function setArenaEntry(arenaGameId: string, entry: ArenaEntry): void {
-  entries.set(arenaGameId, entry);
+  const q = entries.get(arenaGameId);
+  if (q) q.push(entry);
+  else entries.set(arenaGameId, [entry]);
   subscribers.forEach((cb) => cb());
 }
 
-/** This game's pending arena entry, if the batched deposit allocated it. */
+/** Peek this game's next pending entry (does not consume) — for the lazy-allocate in-flight check. */
 export function getArenaEntry(arenaGameId: string): ArenaEntry | undefined {
-  return entries.get(arenaGameId);
+  return entries.get(arenaGameId)?.[0];
 }
 
-/** Drop a consumed/finished entry so a window remount doesn't re-enter the same (now-closed) match. */
+/** How many pending entries a game has queued — lets the orchestrator avoid over-allocating. */
+export function arenaEntryCount(arenaGameId: string): number {
+  return entries.get(arenaGameId)?.length ?? 0;
+}
+
+/** Drop ALL of a game's pending entries (e.g. teardown) so a remount can't re-enter a closed match. */
 export function clearArenaEntry(arenaGameId: string): void {
   if (entries.delete(arenaGameId)) subscribers.forEach((cb) => cb());
 }
@@ -55,9 +67,12 @@ export function consumeArenaEntry(
   enter: (allocation: ArenaAllocation, keypair: KeyPair) => void,
 ): void {
   if (entered.current || !isIdle()) return;
-  const entry = entries.get(arenaGameId);
-  if (!entry) return;
+  const q = entries.get(arenaGameId);
+  if (!q || q.length === 0) return;
+  // Take ONE entry off the game's queue so sibling windows of the same game each claim a distinct bot.
+  const entry = q.shift()!;
+  if (q.length === 0) entries.delete(arenaGameId);
   entered.current = true;
-  clearArenaEntry(arenaGameId);
+  subscribers.forEach((cb) => cb());
   enter(entry.allocation, entry.keypair);
 }

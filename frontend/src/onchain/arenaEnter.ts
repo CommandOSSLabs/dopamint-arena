@@ -3,6 +3,7 @@
 // deposit seat A into every pre-opened tunnel in ONE batched PTB (the batcher's deposit mode). The
 // tunnel activates on that single signature; each game then plays genuine two-party over the relay.
 import { fromHex, toHex } from "@mysten/sui/utils";
+import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { requestTunnelOpen } from "./sharedTunnelOpenBatcher";
 import type { TunnelOpenRequest } from "./tunnelOpenBatcher";
 import type { PartyOnchain } from "./tunnelTx";
@@ -37,10 +38,13 @@ export interface ArenaOpened {
   tunnelId: string;
 }
 
-/** Mint the user's party A for one game's tunnel: `address` is the connected wallet (funds seat A,
- *  receives winnings); `publicKey` is a fresh per-game ephemeral that co-signs moves. Called BEFORE
- *  allocate (ADR-0025) — the pubkey is sent so the fleet can bake it into the tunnel at create. */
-export type MakeUserParty = (game: string) => Promise<PartyOnchain>;
+/** One entered arena match: the allocation (bot keys + live tunnel) and the ephemeral key whose pubkey
+ *  is baked into THAT tunnel and co-signs its moves. Returned per request so N same-game windows each
+ *  get a distinct {bot, tunnel, key} triple. */
+export interface ArenaEntered {
+  allocation: ArenaAllocation;
+  keypair: KeyPair;
+}
 
 interface ArenaApi {
   /** Backend base URL; "" (same-origin) by default. Mirrors `resolveBackendUrl` in controlPlane. */
@@ -87,69 +91,74 @@ export async function reportArenaOpened(
 }
 
 /**
- * One-signature arena entry (ADR-0025). Generates a per-game ephemeral key, reserves a bot per game
- * (the fleet pre-creates each tunnel + funds seat B), then deposits seat A into every pre-opened
- * tunnel in ONE batched PTB (the batcher's deposit mode coalesces them — one wallet popup), and
- * reports the user joined. `open` and the API are injectable for tests; production uses the shared
- * batcher + live `fetch`.
+ * One-signature arena entry (ADR-0025). `games` may REPEAT — N windows of the same game each get their
+ * own bot. Mints one ephemeral key PER REQUEST, reserves a bot per request (the fleet pre-creates each
+ * tunnel + funds seat B), then deposits seat A into every pre-opened tunnel in ONE batched PTB (the
+ * batcher's deposit mode coalesces them — one wallet popup), and reports the user joined. `open` and
+ * the API are injectable for tests; production uses the shared batcher + live `fetch`.
  *
- * Returns the full [`ArenaAllocation`]s (with the bot's eph pubkey + address + the live tunnelId),
- * not just the opened match ids — the caller needs the bot keys to verify the bot's move signatures
- * when it wires the relay + engine via `enterArenaMatch`.
+ * Returns one {@link ArenaEntered} per SUCCESSFUL request (allocation + its baked-in keypair), so a
+ * caller can hand each to `enterArenaMatch`. Games the backend couldn't serve are simply absent.
  */
 export async function enterArena(
   opts: {
     games: string[];
     userAddress: string;
     /** Fallback per-seat stake if an allocation omits `stakeEach` (back-compat). Each game's
-     *  deposit prefers `allocation.stakeEach` — the backend's single source of truth — so games
-     *  with different stakes batch correctly into ONE PTB. */
+     *  deposit prefers `allocation.stakeEach` — the backend's single source of truth. */
     stakePerGame?: bigint;
-    makeUserParty: MakeUserParty;
     open?: (req: TunnelOpenRequest) => Promise<string>;
     coinType?: string;
     usesAddressBalance?: boolean;
   } & ArenaApi,
-): Promise<ArenaAllocation[]> {
-  // A fresh ephemeral key per game, BEFORE allocate — its pubkey is baked into the tunnel at create.
-  const parties = new Map<string, PartyOnchain>();
-  await Promise.all(
-    opts.games.map(async (game) => {
-      parties.set(game, await opts.makeUserParty(game));
-    }),
-  );
+): Promise<ArenaEntered[]> {
+  // A fresh ephemeral key PER REQUEST (games may repeat), aligned to the input order — its pubkey is
+  // baked into that request's tunnel at allocate and the SAME key co-signs that match's moves.
+  const keypairs = opts.games.map(() => generateKeyPair());
   const allocations = await allocateArenaBots(
-    opts.games.map((game) => ({
+    opts.games.map((game, i) => ({
       id: game,
-      userEphPubkey: toHex(parties.get(game)!.publicKey),
+      userEphPubkey: toHex(keypairs[i].publicKey),
     })),
     opts.userAddress,
     opts,
   );
+  // Pair each returned allocation back to its request by ORDER WITHIN ITS GAME: the backend preserves
+  // request order and omits games it couldn't serve, so the k-th allocation of game G is the k-th
+  // request of G → its key is `keypairs[reqIdx]`. Correct for identical same-game requests (all serve →
+  // in order; bot exhaustion drops the TAIL). A rare mid-run per-game omission mispairs — that window
+  // then can't co-sign and surfaces an error, but no stake is lost (the deposit funds a recoverable tunnel).
+  const reqIdxsByGame = new Map<string, number[]>();
+  opts.games.forEach((game, i) => {
+    const arr = reqIdxsByGame.get(game);
+    if (arr) arr.push(i);
+    else reqIdxsByGame.set(game, [i]);
+  });
+  const takenByGame = new Map<string, number>();
   const open = opts.open ?? requestTunnelOpen;
-  // Deposit seat A into every pre-opened tunnel. The batcher coalesces these into ONE PTB (one
-  // wallet popup). Each allocation keeps its server-assigned tunnelId (authoritative) — see the
-  // deposit call below for why the batcher's returned id must not be adopted here.
-  const live = await Promise.all(
-    allocations.map(async (alloc) => {
-      const partyA = parties.get(alloc.game)!;
+  const entered = await Promise.all(
+    allocations.map(async (alloc): Promise<ArenaEntered | null> => {
+      const k = takenByGame.get(alloc.game) ?? 0;
+      takenByGame.set(alloc.game, k + 1);
+      const reqIdx = reqIdxsByGame.get(alloc.game)?.[k];
+      if (reqIdx == null) return null; // more allocations than requests for a game (shouldn't happen)
+      const keypair = keypairs[reqIdx];
+      const partyA: PartyOnchain = {
+        address: opts.userAddress,
+        publicKey: keypair.publicKey,
+      };
       const partyB: PartyOnchain = {
         address: alloc.botAddress,
         publicKey: fromHex(alloc.botEphPubkey),
       };
-      // Per-game stake from the allocation (backend GameProfile) so games with different stakes
-      // batch into one PTB; fall back to the caller's flat stake for back-compat.
       const aAmount =
         alloc.stakeEach != null ? BigInt(alloc.stakeEach) : opts.stakePerGame;
       if (aAmount == null)
         throw new Error(
           `arena: no stake for ${alloc.game} (allocation.stakeEach + stakePerGame both unset)`,
         );
-      // Deposit seat A into the fleet-pre-created tunnel. `alloc.tunnelId` is authoritative — the
-      // deposit goes INTO it and cannot change its id — so keep it and never adopt the batcher's
-      // returned id. The address-keyed batcher map collides when a batch shares one party-A address
-      // (all arena games use the same wallet), which would cross games onto a single tunnel and make
-      // the co-signed `tunnel_id` disagree with the bot's reservation → every move rejected.
+      // `alloc.tunnelId` is authoritative — the deposit goes INTO it and can't change its id, so keep
+      // it (the batcher resolves deposits by tunnelId, never by the shared party-A address).
       await open({
         mode: "deposit",
         tunnelId: alloc.tunnelId,
@@ -160,15 +169,19 @@ export async function enterArena(
         coinType: opts.coinType,
         usesAddressBalance: opts.usesAddressBalance ?? true,
       });
-      return alloc;
+      return { allocation: alloc, keypair };
     }),
   );
+  const live = entered.filter((e): e is ArenaEntered => e != null);
   // Best-effort cue: the tunnels are already funded (deposit landed) and the fleet bot enters its move
   // loop on tunnel-open, not on this notification — so a failed/`503` "opened" report must NOT abort
   // entry and strand a funded tunnel. Log and continue so each game still auto-enters + plays.
   try {
     await reportArenaOpened(
-      live.map((o) => ({ matchId: o.matchId, tunnelId: o.tunnelId })),
+      live.map((o) => ({
+        matchId: o.allocation.matchId,
+        tunnelId: o.allocation.tunnelId,
+      })),
       opts,
     );
   } catch (e) {
