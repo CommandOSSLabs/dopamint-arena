@@ -44,7 +44,7 @@ pub enum ScenarioMode {
 /// - `Auto`: duration-led steady state — keep a worker-sized pool of tunnels in
 ///   flight, relaunching as they finish, for the full `--duration`.
 /// - `Fixed(n)`: keep at most `n` tunnel lifecycles in flight until the global
-///   duration or move cap stops production, then drain open tunnels.
+///   duration ends launches or the move cap stops production, then drain open tunnels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConcurrencyMode {
     Auto,
@@ -203,7 +203,7 @@ struct Raw {
     /// Number of Tokio runtime worker threads, or `auto` to use available CPU parallelism.
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     workers: String,
-    /// Duration before move production stops and in-flight tunnels drain.
+    /// Duration before new tunnel launches stop and in-flight tunnels drain.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
     /// Optional global move cap across the benchmark run.

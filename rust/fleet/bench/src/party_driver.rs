@@ -7,8 +7,8 @@ use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sui_tunnel_anchor::{
-    AnchorCostSnapshot, SuiOpenIntentAnchor, SuiOpenIntentId, SuiSponsoredAnchor,
-    SuiSponsoredAnchorConfig,
+    AnchorCostSnapshot, SuiOpenIntentAnchor, SuiOpenIntentId, SuiPtbMetricsSnapshot,
+    SuiSponsoredAnchor, SuiSponsoredAnchorConfig,
 };
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
 use tunnel_blackjack::{BjMove, BjState, Blackjack, BlackjackStrategy};
@@ -39,6 +39,10 @@ impl SuiSponsoredBenchContext {
 
     pub(crate) fn cost_snapshot(&self) -> AnchorCostSnapshot {
         self.anchor.cost_snapshot()
+    }
+
+    pub(crate) fn ptb_metrics_snapshot(&self) -> SuiPtbMetricsSnapshot {
+        self.anchor.ptb_metrics_snapshot()
     }
 }
 

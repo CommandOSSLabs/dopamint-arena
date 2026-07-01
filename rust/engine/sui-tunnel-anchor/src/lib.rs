@@ -76,6 +76,24 @@ pub struct AnchorCostSnapshot {
     pub gas_sponsor_mist: u64,
 }
 
+/// Successful on-chain executions observed by this anchor instance.
+///
+/// Batch sizes are recorded after intent coalescing, party-identity splitting,
+/// and settle-signature pairing, so they represent executed PTB payloads rather
+/// than raw seat-level calls.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuiPtbMetricsSnapshot {
+    pub open: Vec<SuiPtbExecution>,
+    pub settle: Vec<SuiPtbExecution>,
+}
+
+/// One successful on-chain execution and the number of logical tunnel actions it carried.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuiPtbExecution {
+    pub tx_digest: String,
+    pub batch_size: usize,
+}
+
 /// Net MIST consumed by a transaction: computation + storage − rebate.
 fn net_gas_mist(effects: &TransactionEffects) -> u64 {
     let g = effects.gas_summary();
@@ -164,6 +182,7 @@ pub struct SuiSponsoredAnchor {
     open_batch_executor: Option<SuiOpenBatchExecutor>,
     settle_batch_executor: Option<SuiSettleBatchExecutor>,
     cost: Arc<CostMeter>,
+    ptb_metrics: Arc<Mutex<SuiPtbMetricsSnapshot>>,
     direct_tx_nonce: Arc<AtomicU64>,
 }
 
@@ -203,6 +222,7 @@ struct SuiSponsoredAnchorShared {
     backend: Arc<dyn SuiBackendClient>,
     inner: Arc<Mutex<AnchorState>>,
     cost: Arc<CostMeter>,
+    ptb_metrics: Arc<Mutex<SuiPtbMetricsSnapshot>>,
     direct_tx_nonce: Arc<AtomicU64>,
 }
 
@@ -659,6 +679,7 @@ impl SuiSponsoredAnchorShared {
             open_batch_executor: None,
             settle_batch_executor: None,
             cost: self.cost.clone(),
+            ptb_metrics: self.ptb_metrics.clone(),
             direct_tx_nonce: self.direct_tx_nonce.clone(),
         }
     }
@@ -909,6 +930,7 @@ impl SuiSponsoredAnchor {
         let funder_address = funder.public_key().derive_address();
         let inner = Arc::new(Mutex::new(AnchorState::default()));
         let cost = Arc::new(CostMeter::default());
+        let ptb_metrics = Arc::new(Mutex::new(SuiPtbMetricsSnapshot::default()));
         let direct_tx_nonce = Arc::new(AtomicU64::new(0));
         let shared = SuiSponsoredAnchorShared {
             config: config.clone(),
@@ -918,6 +940,7 @@ impl SuiSponsoredAnchor {
             backend: backend.clone(),
             inner: inner.clone(),
             cost: cost.clone(),
+            ptb_metrics: ptb_metrics.clone(),
             direct_tx_nonce: direct_tx_nonce.clone(),
         };
         let open_batch_executor = if config.open_batching.enabled {
@@ -942,6 +965,7 @@ impl SuiSponsoredAnchor {
             open_batch_executor,
             settle_batch_executor,
             cost,
+            ptb_metrics,
             direct_tx_nonce,
         })
     }
@@ -953,6 +977,12 @@ impl SuiSponsoredAnchor {
     /// Returns a point-in-time snapshot of cumulative gas spend.
     pub fn cost_snapshot(&self) -> AnchorCostSnapshot {
         self.cost.snapshot()
+    }
+
+    /// Returns a clone of cumulative PTB metrics for callers that need to diff
+    /// a benchmark run from earlier activity on the same anchor.
+    pub fn ptb_metrics_snapshot(&self) -> SuiPtbMetricsSnapshot {
+        self.ptb_metrics.lock().unwrap().clone()
     }
 
     pub fn for_open_intent(self: &Arc<Self>, intent_id: SuiOpenIntentId) -> SuiOpenIntentAnchor {
@@ -968,6 +998,24 @@ impl SuiSponsoredAnchor {
 
     fn settle_gas_paid_by_funder(&self) -> bool {
         matches!(self.config.settle_mode, SuiSettleMode::DirectSettle)
+    }
+
+    fn record_open_ptb(&self, tx_digest: String, batch_size: usize) {
+        self.ptb_metrics.lock().unwrap().open.push(SuiPtbExecution {
+            tx_digest,
+            batch_size,
+        });
+    }
+
+    fn record_settle_ptb(&self, tx_digest: String, batch_size: usize) {
+        self.ptb_metrics
+            .lock()
+            .unwrap()
+            .settle
+            .push(SuiPtbExecution {
+                tx_digest,
+                batch_size,
+            });
     }
 
     async fn open_with_intent(
@@ -999,6 +1047,8 @@ impl SuiSponsoredAnchor {
         let effects = self.execute_open_kind(kind).await?;
         self.cost
             .add(self.open_gas_paid_by_funder(), net_gas_mist(&effects));
+        ensure_success(&effects)?;
+        self.record_open_ptb(transaction_digest(&effects), 1);
         let (tunnel_id, created_at_ms) = self.opened_from_effects(&effects).await?;
         let record = OpenRecord {
             tunnel_id: tunnel_id.clone(),
@@ -1210,6 +1260,7 @@ impl SuiSponsoredAnchor {
             "sui open batch execute done"
         );
         ensure_success(&effects).map_err(OpenBatchAttemptError::Retryable)?;
+        self.record_open_ptb(transaction_digest(&effects), requests.len());
         let opened = self
             .map_created_tunnels_to_open_requests(&effects, requests)
             .await
@@ -2054,6 +2105,7 @@ impl SuiSponsoredAnchor {
                 );
             }
         }
+        self.record_settle_ptb(body.tx_digest.clone(), 1);
         Ok(SettledTunnel {
             digest: body.tx_digest,
             final_balances: Balances {
@@ -2100,6 +2152,7 @@ impl SuiSponsoredAnchor {
         self.cost
             .add(self.settle_gas_paid_by_funder(), net_gas_mist(&effects));
         let digest = transaction_digest(&effects);
+        self.record_settle_ptb(digest.clone(), prepared.len());
         Ok(prepared
             .into_iter()
             .map(|settle| SettledTunnel {
@@ -3520,6 +3573,10 @@ mod tests {
         assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
         assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 2);
         assert_address_balance_gas_transaction(&chain, shared.funder_address());
+        let metrics = shared.ptb_metrics_snapshot();
+        assert_eq!(metrics.open.len(), 1);
+        assert_eq!(metrics.open[0].tx_digest, Digest::ZERO.to_string());
+        assert_eq!(metrics.open[0].batch_size, 2);
     }
 
     #[tokio::test]
@@ -4473,6 +4530,10 @@ mod tests {
             2
         );
         assert_address_balance_gas_transaction(&chain, shared.funder_address());
+        let metrics = shared.ptb_metrics_snapshot();
+        assert_eq!(metrics.settle.len(), 1);
+        assert_eq!(metrics.settle[0].tx_digest, Digest::ZERO.to_string());
+        assert_eq!(metrics.settle[0].batch_size, 2);
     }
 
     #[tokio::test]

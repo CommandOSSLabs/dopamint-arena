@@ -26,7 +26,8 @@ pub(crate) mod quantum_poker;
 pub(crate) mod tic_tac_toe;
 pub(crate) mod world_canvas;
 
-pub(crate) const MAX_MOVES: u64 = 1000;
+pub(crate) const DEFAULT_MAX_MOVES_PER_TUNNEL: u64 = 1000;
+pub(crate) const MAX_MOVES: u64 = DEFAULT_MAX_MOVES_PER_TUNNEL;
 pub(crate) const DEFAULT_BALANCE: u64 = 200;
 
 pub(crate) struct PlayTunnelRequest<'a> {
@@ -37,6 +38,7 @@ pub(crate) struct PlayTunnelRequest<'a> {
     pub kit: &'a SeatKit,
     pub tunnel_id: &'a str,
     pub initial_balance: u64,
+    pub max_moves_per_tunnel: u64,
     pub anchor_mode: AnchorMode,
     pub sui_context: Option<&'a SuiSponsoredBenchContext>,
     pub telemetry: TunnelTelemetry,
@@ -47,6 +49,7 @@ tokio::task_local! {
     static REQUEST_RUN_CONTROL: Option<DriverRunControl>;
     static REQUEST_STAGE_WINDOWS: Option<StageWindowRecorder>;
     static REQUEST_INITIAL_BALANCE: u64;
+    static REQUEST_MAX_MOVES_PER_TUNNEL: u64;
 }
 
 fn current_request_run_control() -> Option<DriverRunControl> {
@@ -61,6 +64,12 @@ pub(crate) fn current_initial_balance() -> u64 {
     REQUEST_INITIAL_BALANCE
         .try_with(|initial_balance| *initial_balance)
         .unwrap_or(DEFAULT_BALANCE)
+}
+
+pub(crate) fn current_max_moves_per_tunnel() -> u64 {
+    REQUEST_MAX_MOVES_PER_TUNNEL
+        .try_with(|max_moves| *max_moves)
+        .unwrap_or(DEFAULT_MAX_MOVES_PER_TUNNEL)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -85,6 +94,7 @@ where
     StrategyA: MoveStrategy<P>,
     StrategyB: MoveStrategy<P>,
 {
+    let max_moves = current_max_moves_per_tunnel().max(max_moves);
     match codec {
         FrameCodecKind::Json => {
             play_with_codec::<P, JsonFrameCodec, StrategyA, StrategyB>(
@@ -197,6 +207,7 @@ pub(crate) async fn play_tunnel_for(request: PlayTunnelRequest<'_>) -> TunnelOut
         kit,
         tunnel_id,
         initial_balance,
+        max_moves_per_tunnel,
         anchor_mode,
         sui_context,
         telemetry,
@@ -204,241 +215,247 @@ pub(crate) async fn play_tunnel_for(request: PlayTunnelRequest<'_>) -> TunnelOut
     } = request;
     REQUEST_INITIAL_BALANCE
         .scope(initial_balance, async move {
-            REQUEST_RUN_CONTROL
-                .scope(run_control, async move {
-                    REQUEST_STAGE_WINDOWS
-                        .scope(stage_windows, async move {
-                            match protocol_id {
-                                API_CREDITS_V1 => {
-                                    api_credits::play(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BATTLESHIP_V1 => {
-                                    battleship::play_single(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BATTLESHIP_SERIES_V1 => {
-                                    battleship::play_series(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BLACKJACK_BET_V1 => {
-                                    blackjack::play_bet(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BLACKJACK_DUEL_V1 => {
-                                    blackjack::play_duel(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BLACKJACK_V2 => {
-                                    blackjack::play_v2(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BOMB_IT_V1 => {
-                                    bomb_it::play_single(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                BOMB_IT_SERIES_V1 => {
-                                    bomb_it::play_series(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                CARO_V1 => {
-                                    caro::play_single(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                CARO_SERIES_V1 => {
-                                    caro::play_series(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                CHAT_V1 => {
-                                    chat::play(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                CROSS_V1 => {
-                                    cross::play_single(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                CROSS_SERIES_V1 => {
-                                    cross::play_series(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                PAYMENTS_V1 => {
-                                    payments::play(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                QUANTUM_POKER_V2 => {
-                                    quantum_poker::play(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                TIC_TAC_TOE_V1 => {
-                                    tic_tac_toe::play_single(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                TIC_TAC_TOE_SERIES_V1 => {
-                                    tic_tac_toe::play_series(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                WORLD_CANVAS_CELL_V1 => {
-                                    world_canvas::play_cell(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                WORLD_CANVAS_STROKE_V1 => {
-                                    world_canvas::play_stroke(
-                                        codec,
-                                        card_seed,
-                                        kit,
-                                        tunnel_id,
-                                        anchor_mode,
-                                        sui_context,
-                                        telemetry,
-                                    )
-                                    .await
-                                }
-                                _ => panic!("unsupported fleet-bench protocol id: {protocol_id}"),
-                            }
+            REQUEST_MAX_MOVES_PER_TUNNEL
+                .scope(max_moves_per_tunnel, async move {
+                    REQUEST_RUN_CONTROL
+                        .scope(run_control, async move {
+                            REQUEST_STAGE_WINDOWS
+                                .scope(stage_windows, async move {
+                                    match protocol_id {
+                                        API_CREDITS_V1 => {
+                                            api_credits::play(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BATTLESHIP_V1 => {
+                                            battleship::play_single(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BATTLESHIP_SERIES_V1 => {
+                                            battleship::play_series(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BLACKJACK_BET_V1 => {
+                                            blackjack::play_bet(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BLACKJACK_DUEL_V1 => {
+                                            blackjack::play_duel(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BLACKJACK_V2 => {
+                                            blackjack::play_v2(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BOMB_IT_V1 => {
+                                            bomb_it::play_single(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        BOMB_IT_SERIES_V1 => {
+                                            bomb_it::play_series(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        CARO_V1 => {
+                                            caro::play_single(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        CARO_SERIES_V1 => {
+                                            caro::play_series(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        CHAT_V1 => {
+                                            chat::play(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        CROSS_V1 => {
+                                            cross::play_single(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        CROSS_SERIES_V1 => {
+                                            cross::play_series(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        PAYMENTS_V1 => {
+                                            payments::play(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        QUANTUM_POKER_V2 => {
+                                            quantum_poker::play(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        TIC_TAC_TOE_V1 => {
+                                            tic_tac_toe::play_single(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        TIC_TAC_TOE_SERIES_V1 => {
+                                            tic_tac_toe::play_series(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        WORLD_CANVAS_CELL_V1 => {
+                                            world_canvas::play_cell(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        WORLD_CANVAS_STROKE_V1 => {
+                                            world_canvas::play_stroke(
+                                                codec,
+                                                card_seed,
+                                                kit,
+                                                tunnel_id,
+                                                anchor_mode,
+                                                sui_context,
+                                                telemetry,
+                                            )
+                                            .await
+                                        }
+                                        _ => panic!(
+                                            "unsupported fleet-bench protocol id: {protocol_id}"
+                                        ),
+                                    }
+                                })
+                                .await
                         })
                         .await
                 })
@@ -466,6 +483,7 @@ mod tests {
             kit: &kit,
             tunnel_id: "0x1",
             initial_balance: DEFAULT_BALANCE,
+            max_moves_per_tunnel: 2,
             anchor_mode: AnchorMode::Memory,
             sui_context: None,
             telemetry: TunnelTelemetry {

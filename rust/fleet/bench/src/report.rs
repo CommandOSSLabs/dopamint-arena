@@ -131,6 +131,27 @@ fn tps_distribution_line(label: &str, d: &Distribution) -> Option<String> {
     ))
 }
 
+fn ptb_batch_line(label: &str, count: u64, d: &Distribution) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    Some(format!(
+        "  - {label}: ptbs={} batch-size p50={:.1} p90={:.1} avg={:.1} peak={:.1}",
+        humanize::count(count),
+        d.p50,
+        d.p90,
+        d.avg,
+        d.peak,
+    ))
+}
+
+fn tx_digest_line(label: &str, tx_digests: &[String]) -> Option<String> {
+    if tx_digests.is_empty() {
+        return None;
+    }
+    Some(format!("  - {label} txDigests={}", tx_digests.join(", ")))
+}
+
 /// Headline metrics for one protocol's bench run, collected across a
 /// multi-protocol invocation to build the comparison summary.
 #[derive(Clone, Debug)]
@@ -329,6 +350,33 @@ pub fn render_with_style(
             }
         }
     }
+    if simple.sui_ptb_metrics.open_count > 0 || simple.sui_ptb_metrics.settle_count > 0 {
+        out.push_str(&format!("\n{}\n", style.section("Sui PTBs")));
+        if let Some(line) = ptb_batch_line(
+            "open",
+            simple.sui_ptb_metrics.open_count,
+            &simple.sui_ptb_metrics.open_batch_size,
+        ) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = tx_digest_line("open", &simple.sui_ptb_metrics.open_tx_digests) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = ptb_batch_line(
+            "settle",
+            simple.sui_ptb_metrics.settle_count,
+            &simple.sui_ptb_metrics.settle_batch_size,
+        ) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = tx_digest_line("settle", &simple.sui_ptb_metrics.settle_tx_digests) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
     if simple.gas_funder_mist > 0 || simple.gas_sponsor_mist > 0 {
         out.push_str(&format!(
             "\n{}\n  - gas funder={:.6} SUI sponsor={:.6} SUI\n",
@@ -439,6 +487,7 @@ mod tests {
             gas_funder_mist: 0,
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
+            sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
         }
     }
 
@@ -501,6 +550,32 @@ mod tests {
     }
 
     #[test]
+    fn render_emits_sui_ptb_metrics() {
+        let mut o = outcome(2000, 20, 3000);
+        o.sui_ptb_metrics = crate::swarm::SuiPtbMetrics {
+            open_count: 2,
+            settle_count: 1,
+            open_batch_size: crate::stats::summarize(&[2.0, 4.0]),
+            settle_batch_size: crate::stats::summarize(&[3.0]),
+            open_tx_digests: vec!["openA".into(), "openB".into()],
+            settle_tx_digests: vec!["settleA".into()],
+        };
+
+        let s = render(
+            &opts_with_anchor(AnchorMode::SuiSponsored),
+            "blackjack.v2",
+            &o,
+            &res(),
+        );
+
+        assert!(s.contains("Sui PTBs"), "got:\n{s}");
+        assert!(s.contains("open: ptbs=2 batch-size"), "got:\n{s}");
+        assert!(s.contains("settle: ptbs=1 batch-size"), "got:\n{s}");
+        assert!(s.contains("open txDigests=openA, openB"), "got:\n{s}");
+        assert!(s.contains("settle txDigests=settleA"), "got:\n{s}");
+    }
+
+    #[test]
     fn render_golden_new_metrics() {
         use crate::stats::summarize;
         let o = SwarmOutcome {
@@ -526,6 +601,7 @@ mod tests {
             gas_funder_mist: 0,
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
+            sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
         };
         let s = render(
             &opts(1, SignerInitMode::PerTunnel),
@@ -617,6 +693,7 @@ mod tests {
             gas_funder_mist: 0,
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
+            sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
         };
         let s = render(
             &opts(10, SignerInitMode::PerTunnel),

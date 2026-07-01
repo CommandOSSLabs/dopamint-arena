@@ -1,7 +1,7 @@
 //! The local CPU fleet. Tunnel concurrency is an in-flight lifecycle pool: each
 //! task opens, plays, and settles one tunnel through the same `PartyDriver` path
 //! as the serving fleet, and completed lifecycles are replaced until the global
-//! duration or move limit stops move production.
+//! duration stops new launches or the move limit stops move production.
 
 use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode};
 use crate::party_driver::{
@@ -10,7 +10,7 @@ use crate::party_driver::{
 use crate::protocols::{play_tunnel_for, PlayTunnelRequest};
 use crate::stats::{summarize, Distribution};
 use std::time::{Duration, Instant};
-use sui_tunnel_anchor::AnchorCostSnapshot;
+use sui_tunnel_anchor::{AnchorCostSnapshot, SuiPtbExecution, SuiPtbMetricsSnapshot};
 use tokio::task::{JoinError, JoinSet};
 use tunnel_harness::DriverRunControl;
 use tunnel_telemetry::{CollectingSink, RunTelemetry};
@@ -76,6 +76,17 @@ pub struct SwarmOutcome {
     pub gas_funder_mist: u64,
     pub gas_sponsor_mist: u64,
     pub transcript_export_bytes: u64,
+    pub sui_ptb_metrics: SuiPtbMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SuiPtbMetrics {
+    pub open_count: u64,
+    pub settle_count: u64,
+    pub open_batch_size: Distribution,
+    pub settle_batch_size: Distribution,
+    pub open_tx_digests: Vec<String>,
+    pub settle_tx_digests: Vec<String>,
 }
 
 /// Distinct, valid hex tunnel id per tunnel (offset by 1 to avoid the all-zero address).
@@ -83,6 +94,38 @@ pub fn tunnel_id_for(tunnel_index: u64) -> String {
     format!("0x{:x}", tunnel_index + 1)
 }
 
+fn ptb_metrics_delta(before: SuiPtbMetricsSnapshot, after: SuiPtbMetricsSnapshot) -> SuiPtbMetrics {
+    fn execution_delta(
+        before_len: usize,
+        after: Vec<SuiPtbExecution>,
+    ) -> (u64, Distribution, Vec<String>) {
+        let executions = after.into_iter().skip(before_len).collect::<Vec<_>>();
+        let batch_sizes = executions
+            .iter()
+            .map(|execution| execution.batch_size as f64)
+            .collect::<Vec<_>>();
+        let tx_digests = executions
+            .into_iter()
+            .map(|execution| execution.tx_digest)
+            .collect::<Vec<_>>();
+        (tx_digests.len() as u64, summarize(&batch_sizes), tx_digests)
+    }
+
+    let (open_count, open_batch_size, open_tx_digests) =
+        execution_delta(before.open.len(), after.open);
+    let (settle_count, settle_batch_size, settle_tx_digests) =
+        execution_delta(before.settle.len(), after.settle);
+    SuiPtbMetrics {
+        open_count,
+        settle_count,
+        open_batch_size,
+        settle_batch_size,
+        open_tx_digests,
+        settle_tx_digests,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn aggregate(
     samples: Vec<TunnelSample>,
     elapsed_ms: u128,
@@ -90,6 +133,7 @@ fn aggregate(
     open_active_elapsed_ms: u128,
     settle_active_elapsed_ms: u128,
     gas: AnchorCostSnapshot,
+    sui_ptb_metrics: SuiPtbMetrics,
     tunnels_aborted: u64,
 ) -> SwarmOutcome {
     let tunnels_claimed = samples.len() as u64;
@@ -143,6 +187,7 @@ fn aggregate(
         gas_funder_mist: gas.gas_funder_mist,
         gas_sponsor_mist: gas.gas_sponsor_mist,
         transcript_export_bytes,
+        sui_ptb_metrics,
     }
 }
 
@@ -155,6 +200,7 @@ async fn run_one_tunnel(
     sui_context: Option<SuiSponsoredBenchContext>,
     protocol_id: &'static str,
     initial_balance: u64,
+    max_moves_per_tunnel: u64,
     telemetry: TunnelTelemetry,
     kit: SeatKit,
     run_control: Option<DriverRunControl>,
@@ -177,6 +223,7 @@ async fn run_one_tunnel(
         kit: &kit,
         tunnel_id: &tunnel_id,
         initial_balance,
+        max_moves_per_tunnel,
         anchor_mode,
         sui_context: sui_context.as_ref(),
         telemetry,
@@ -238,6 +285,10 @@ fn gas_delta(before: AnchorCostSnapshot, after: AnchorCostSnapshot) -> AnchorCos
     }
 }
 
+fn max_moves_per_tunnel_for_run(moves: Option<u64>) -> u64 {
+    moves.unwrap_or(crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_lifecycle_pipeline(
     workers: usize,
@@ -270,6 +321,7 @@ pub fn run_lifecycle_pipeline(
     let run_control = moves
         .map(DriverRunControl::with_move_limit)
         .unwrap_or_else(DriverRunControl::unbounded);
+    let max_moves_per_tunnel = max_moves_per_tunnel_for_run(moves);
     let started = Instant::now();
     tracing::info!(
         in_flight = pool,
@@ -286,6 +338,10 @@ pub fn run_lifecycle_pipeline(
     let gas_before = gas_context
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
+        .unwrap_or_default();
+    let ptb_metrics_before = gas_context
+        .as_ref()
+        .map(SuiSponsoredBenchContext::ptb_metrics_snapshot)
         .unwrap_or_default();
     let run_control_for_tasks = run_control.clone();
     let stage_windows = StageWindowRecorder::new();
@@ -309,6 +365,7 @@ pub fn run_lifecycle_pipeline(
                 sui_context.clone(),
                 protocol_id,
                 initial_balance,
+                max_moves_per_tunnel,
                 telemetry,
                 kit_for(index),
                 Some(run_control_for_tasks.clone()),
@@ -331,7 +388,6 @@ pub fn run_lifecycle_pipeline(
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                run_control_for_tasks.request_stop();
                 break Instant::now();
             }
 
@@ -369,7 +425,12 @@ pub fn run_lifecycle_pipeline(
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
         .unwrap_or_default();
+    let ptb_metrics_after = gas_context
+        .as_ref()
+        .map(SuiSponsoredBenchContext::ptb_metrics_snapshot)
+        .unwrap_or_default();
     let gas = gas_delta(gas_before, gas_after);
+    let sui_ptb_metrics = ptb_metrics_delta(ptb_metrics_before, ptb_metrics_after);
     let elapsed_ms = started.elapsed().as_millis();
     let open_active_elapsed_ms = stage_windows
         .active_elapsed_ms(tunnel_telemetry::StageId::Open)
@@ -384,6 +445,7 @@ pub fn run_lifecycle_pipeline(
         open_active_elapsed_ms,
         settle_active_elapsed_ms,
         gas,
+        sui_ptb_metrics,
         tunnels_aborted,
     );
     tracing::info!(
@@ -436,6 +498,7 @@ mod tests {
             1000,
             1000,
             AnchorCostSnapshot::default(),
+            SuiPtbMetrics::default(),
             0,
         );
 
@@ -549,6 +612,7 @@ mod tests {
                         None,
                         BLACKJACK_BET_V1,
                         crate::protocols::DEFAULT_BALANCE,
+                        crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL,
                         TunnelTelemetry {
                             collect: false,
                             record_transcript: false,
@@ -861,6 +925,18 @@ mod tests {
     }
 
     #[test]
+    fn max_moves_per_tunnel_tracks_requested_benchmark_moves() {
+        assert_eq!(
+            max_moves_per_tunnel_for_run(Some(crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL + 1)),
+            crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL + 1
+        );
+        assert_eq!(
+            max_moves_per_tunnel_for_run(None),
+            crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL
+        );
+    }
+
+    #[test]
     fn lifecycle_pipeline_duration_stop_drains_in_flight_tunnels() {
         let out = run_lifecycle_pipeline(
             2,
@@ -883,6 +959,32 @@ mod tests {
         assert_eq!(out.tunnels_aborted, 0);
         assert_eq!(out.tunnels_settled, out.tunnels_claimed);
         assert!(out.elapsed_ms >= out.move_window_elapsed_ms);
+    }
+
+    #[test]
+    fn duration_end_stops_spawning_without_stopping_active_tunnels() {
+        let out = run_lifecycle_pipeline(
+            1,
+            0,
+            None,
+            1,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
+        );
+
+        assert_eq!(out.tunnels_claimed, 1);
+        assert_eq!(out.tunnels_settled, 1);
+        assert_eq!(out.moves, 143);
+        assert_eq!(out.tunnels_aborted, 0);
     }
 
     #[test]
