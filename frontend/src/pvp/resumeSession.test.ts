@@ -559,7 +559,11 @@ test("resume.ok re-sends the pending and the resync (covers custom hooks)", asyn
 
   okSubs.forEach((cb) => cb({ matchId: "m1" }));
   assert.equal(sentPeer, 1, "resync announced on resume");
-  assert.equal(resent, 1, "restored pending re-sent on resume (the custom-hook fix)");
+  assert.equal(
+    resent,
+    1,
+    "restored pending re-sent on resume (the custom-hook fix)",
+  );
 
   // A resume for a different match must not touch this session.
   okSubs.forEach((cb) => cb({ matchId: "other" }));
