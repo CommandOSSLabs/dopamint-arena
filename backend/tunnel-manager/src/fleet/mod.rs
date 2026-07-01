@@ -16,7 +16,6 @@ pub mod arena_opener;
 pub mod arena_rendezvous;
 pub mod bus_transport;
 pub mod colocated;
-pub mod transcript_upload;
 pub mod ws;
 
 use std::collections::HashMap;

@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use transcript_store::TranscriptChunkWriter;
 use tunnel_harness::Signer;
 
-use crate::fleet::transcript_upload::{ChunkUpload, S3StreamingRecorder};
+use transcript_stream::{ChunkUpload, S3StreamingRecorder};
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{

@@ -27,8 +27,7 @@ pub struct AppState {
     pub chunk_writer: Option<Arc<dyn TranscriptChunkWriter>>,
     /// Sender into the per-instance bounded transcript uploader — the byte-budget that keeps
     /// streaming RAM-safe under S3 slowdown (producers block when it's full). `None` = no S3.
-    pub chunk_upload_tx:
-        Option<tokio::sync::mpsc::Sender<crate::fleet::transcript_upload::ChunkUpload>>,
+    pub chunk_upload_tx: Option<tokio::sync::mpsc::Sender<transcript_stream::ChunkUpload>>,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
     pub ollama: crate::ollama::OllamaClient,
     /// Latest aggregate snapshot is computed once per tick and fanned out here to

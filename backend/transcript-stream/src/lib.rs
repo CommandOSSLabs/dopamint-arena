@@ -11,12 +11,18 @@
 //!
 //! Chunk bytes go through the same [`encode_settle_entry`] as the settle body, so reassembled
 //! chunks reproduce exactly what the on-chain root commits to.
+//!
+//! Both the sink ([`TranscriptUploader`]) and the finish-path writer are abstracted over
+//! [`transcript_store::TranscriptChunkWriter`], so a consumer drives the *same* recorder against
+//! either the production [`transcript_store::S3TranscriptStore`] or the in-memory
+//! `transcript_store::testing::FakeChunkStore` — the tunnel-manager settle path and the fleet
+//! throughput bench share this crate.
 
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tunnel_core::wire::{encode_settle_entry, SettleBodyEntry};
+use tunnel_core::wire::{encode_settle_entry, SettleBodyEntry, SETTLE_BODY_VERSION};
 use tunnel_harness::{
     StreamingRootRecorder, Transcript, TranscriptEntry, TranscriptError, TranscriptRecorder,
     TranscriptSettleEntry,
@@ -26,9 +32,6 @@ use transcript_store::{TranscriptChunkWriter, TranscriptManifest};
 /// Flush a chunk once the buffer reaches ~1 MB (~4000 entries). Bounds per-session RAM and caps
 /// `PutObject`s at ~⌈25 MB / 1 MB⌉ per match — one S3 call per ~4000 moves, never per move.
 const CHUNK_TARGET: usize = 1024 * 1024;
-
-/// Settle-body wire version recorded in the manifest (`tunnel_core::wire::SETTLE_BODY_VERSION`).
-const SETTLE_VERSION: u8 = 1;
 
 /// Max chunks queued for upload across ALL sessions on this instance — the byte-budget. Queued RAM
 /// ≈ this × [`CHUNK_TARGET`] (~512 MB). When full, producers block (backpressure).
@@ -67,11 +70,13 @@ impl TranscriptUploader {
                     .expect("upload semaphore open");
                 let writer = writer.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = writer
-                        .put_chunk(&upload.tunnel_id, upload.seq, &upload.bytes)
-                        .await
-                    {
-                        tracing::warn!(tunnel = %upload.tunnel_id, seq = upload.seq, error = %e, "transcript chunk upload failed");
+                    let ChunkUpload {
+                        tunnel_id,
+                        seq,
+                        bytes,
+                    } = upload;
+                    if let Err(e) = writer.put_chunk(&tunnel_id, seq, bytes).await {
+                        tracing::warn!(tunnel = %tunnel_id, seq, error = %e, "transcript chunk upload failed");
                     }
                     drop(permit);
                 });
@@ -146,7 +151,7 @@ impl S3StreamingRecorder {
             }
         };
         if let Some((seq, bytes)) = tail {
-            if let Err(e) = writer.put_chunk(&self.tunnel_id, seq, &bytes).await {
+            if let Err(e) = writer.put_chunk(&self.tunnel_id, seq, bytes).await {
                 tracing::warn!(tunnel = %self.tunnel_id, seq, error = %e, "transcript tail chunk upload failed");
             }
         }
@@ -172,7 +177,7 @@ impl S3StreamingRecorder {
             chunk_count,
             total_bytes,
             format!("0x{}", hex::encode(root)),
-            SETTLE_VERSION,
+            SETTLE_BODY_VERSION,
         );
         if let Err(e) = writer.seal(&self.tunnel_id, &manifest).await {
             tracing::warn!(tunnel = %self.tunnel_id, error = %e, "transcript manifest seal failed");
@@ -182,14 +187,14 @@ impl S3StreamingRecorder {
 
 impl<M> TranscriptRecorder<M> for S3StreamingRecorder {
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
+        // Root only (no sink) → fold into the root and skip the settle-entry serialization.
+        if self.tx.is_none() && self.writer.is_none() {
+            return self.inner.record(entry);
+        }
         // Encode the 250 B settle-entry before the root fold consumes `entry`.
         let settle_entry = TranscriptSettleEntry::from_transcript_entry(&self.tunnel_id, &entry);
         self.inner.record(entry)?; // dup/monotonic nonce check + O(log N) root fold
 
-        // Root only (no sink) → nothing to stream.
-        if self.tx.is_none() && self.writer.is_none() {
-            return Ok(());
-        }
         let ready_chunk = {
             let mut b = self.buf.lock().expect("chunk buf");
             encode_settle_entry(

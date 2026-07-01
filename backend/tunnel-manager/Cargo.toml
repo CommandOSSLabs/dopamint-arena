@@ -37,6 +37,7 @@ base64.workspace = true
 aws-config = "1"
 aws-sdk-s3 = "1"
 transcript-store = { path = "../transcript-store" }
+transcript-stream = { path = "../transcript-stream" }
 # Direct rustls dep so we can install `ring` as the process-default CryptoProvider at
 # startup (Task 7), forcing fred/reqwest/aws-sdk onto one provider. See Cargo.toml
 # TLS-provider note + ADR-0023.

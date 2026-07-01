@@ -132,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
     // RAM-safe under S3 slowdown (producers block when full). `None` when S3 is unconfigured.
     let chunk_upload_tx = chunk_writer
         .clone()
-        .map(|w| crate::fleet::transcript_upload::TranscriptUploader::spawn(w).sender());
+        .map(|w| transcript_stream::TranscriptUploader::spawn(w).sender());
 
     let instance_id = config
         .instance_id

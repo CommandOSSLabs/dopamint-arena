@@ -8362,12 +8362,26 @@ dependencies = [
 name = "transcript-store"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "transcript-stream"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "tokio",
+ "tracing",
+ "transcript-store",
+ "tunnel-core",
+ "tunnel-harness",
 ]
 
 [[package]]
@@ -8551,6 +8565,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "transcript-store",
+ "transcript-stream",
  "tunnel-core",
  "tunnel-harness",
  "uuid",

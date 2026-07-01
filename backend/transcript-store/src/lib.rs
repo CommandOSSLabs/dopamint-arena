@@ -19,7 +19,7 @@
 //!
 //! # async fn demo() -> transcript_store::Result<()> {
 //! let store = S3TranscriptStore::from_env().await?;
-//! store.put_chunk("0xtunnel", 0, b"...co-signed entries...").await?;
+//! store.put_chunk("0xtunnel", 0, b"...co-signed entries...".to_vec()).await?;
 //! store
 //!     .seal("0xtunnel", &TranscriptManifest::new(1, 22, "0xroot".into(), 1))
 //!     .await?;
@@ -83,13 +83,7 @@ fn s3_err(
 /// trailing-slash-trimmed; empty prefix yields `transcripts/...`. This is the single source of
 /// truth for the key — writers and readers MUST agree, so both go through here.
 pub fn transcript_key(prefix: &str, tunnel_id: &str, tx_digest: &str) -> String {
-    let prefix = prefix.trim_end_matches('/');
-    let base = format!("transcripts/{tunnel_id}/{tx_digest}.bin");
-    if prefix.is_empty() {
-        base
-    } else {
-        format!("{prefix}/{base}")
-    }
+    format!("{}{tx_digest}.bin", chunk_dir(prefix, tunnel_id))
 }
 
 /// Streaming chunk key: `{prefix}transcripts/{tunnel_id}/chunk-{seq:08}.bin`. The producer streams
@@ -199,8 +193,10 @@ pub trait TranscriptReader: Send + Sync {
 /// [`seal`]: TranscriptChunkWriter::seal
 #[async_trait]
 pub trait TranscriptChunkWriter: Send + Sync {
-    /// Append one chunk. `seq` is monotonic from 0.
-    async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: &[u8]) -> Result<()>;
+    /// Append one chunk. `seq` is monotonic from 0. Takes the buffer by value — a streaming
+    /// producer always owns the flushed chunk, so an owned `Vec` moves into the request body with
+    /// no extra copy of the (~1 MB) chunk.
+    async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: Vec<u8>) -> Result<()>;
     /// Write the manifest that indexes the completed transcript (see [`TranscriptManifest`]).
     /// Call after the final `put_chunk` — never before, or a reader could see a manifest that
     /// promises chunks not yet durable.
@@ -387,13 +383,13 @@ impl TranscriptReader for S3TranscriptStore {
 
 #[async_trait]
 impl TranscriptChunkWriter for S3TranscriptStore {
-    async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: &[u8]) -> Result<()> {
+    async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: Vec<u8>) -> Result<()> {
         let key = chunk_key(&self.prefix, tunnel_id, seq);
         self.client
             .put_object()
             .bucket(&self.bucket)
             .key(&key)
-            .body(ByteStream::from(bytes.to_vec()))
+            .body(ByteStream::from(bytes))
             .content_type("application/octet-stream")
             .send()
             .await
@@ -513,14 +509,14 @@ pub mod testing {
 
     #[async_trait]
     impl TranscriptChunkWriter for FakeChunkStore {
-        async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: &[u8]) -> Result<()> {
+        async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: Vec<u8>) -> Result<()> {
             if let Some(msg) = self.fail_with {
                 return Err(Error::Config(msg.to_string()));
             }
             self.chunks
                 .lock()
                 .unwrap()
-                .insert((tunnel_id.to_string(), seq), bytes.to_vec());
+                .insert((tunnel_id.to_string(), seq), bytes);
             Ok(())
         }
 
