@@ -1,137 +1,145 @@
 # Server-owned streaming transcript
 
-- **Status:** Design (final target). Supersedes the earlier per-settle draft in this file's
-  git history. P1 landed; the rest is the target architecture below.
-- **Date:** 2026-07-01
+- **Status:** Design (grounded in the current code, 2026-07-01). Supersedes the earlier
+  per-settle drafts in this file's git history.
 - **Scope:** the whole transcript flow — bot recorder (`rust/engine/tunnel-harness`,
-  `backend/tunnel-manager/src/fleet`), settle path (`routes.rs`), the browser SDK
-  (`sui-tunnel-ts`) + FE (`frontend/src/pvp`), and the explorer read
-  (`backend/explorer`). ADR-0029 covers the never-terminal settlement lifecycle.
+  `backend/tunnel-manager/src/fleet`), settle path (`routes.rs`, `sui.rs`), the browser
+  SDK/FE (`sui-tunnel-ts`, `frontend/src/pvp`, `frontend/src/backend`), the explorer read
+  (`backend/explorer`), the `transcript-store` crate, and S3 storage lifecycle (`infra`).
+- **Flow:** user-vs-bot arena only, over the WS relay.
 
-## 1. The decision
+## 1. Decision
 
-**The transcript lives fully on the server. The client holds none of it.** As a
-human-vs-bot arena game is played over the relay, the **bot streams every co-signed move to
-S3 in chunks, continuously** — the bot is the sole transcript owner. The browser keeps only
-what protects the *user*: it co-signs each move and retains the single latest co-signed
-**checkpoint** (for resume + dispute). It no longer accumulates, computes a root over, or
-uploads the transcript.
+**The transcript lives fully in server storage. The client holds none of it, and nobody
+uploads it at settle.** As a match plays, the **bot streams every co-signed entry to S3 in
+chunks, continuously**. Settle is **header-only** (root + balances + both sigs) — no full
+transcript is POSTed, from the browser or the bot. The transcript is *already* in S3.
 
-This is the original request ("con bot backend làm … upload từng chunk"): the bot does it,
-streamed, so server RAM stays bounded and the browser is relieved.
+The browser keeps only its O(1) co-signed **checkpoint** (`resume.ts` `latestCoSigned`), which
+is what resume + unilateral dispute already run on. It no longer accumulates entries, computes
+a root, or POSTs a settle body.
 
-## 2. Why streaming, and why NOT S3 multipart
+The transcript exists for one purpose: **a user verifying a settled match** — the explorer's
+`VerifyPanel` fetches it back, recomputes the Merkle root, and checks it against the on-chain
+anchor + every signature + balance conservation, entirely in-browser.
 
-The transcript is an **append-only stream that frequently never completes** — world-canvas
-ends when the human closes the tab, and every deploy hard-kills in-flight matches. That
-lifecycle rules out `CreateMultipartUpload → UploadPart → CompleteMultipartUpload`:
+## 2. What the code does today (the starting point)
 
-- **Parts are invisible/unreadable until `CompleteMultipartUpload`.** An upload that never
-  completes (our common case) archives **nothing** — orphaned, billed, un-listable parts
-  needing a reaper. The opposite of "capture the ongoing history."
-- **5 MiB minimum part** is too coarse for bounded RAM + frequent durability; and once
-  segments are small (periodic settlement, §4), a multipart upload is a **single part**
-  anyway = a plain `PutObject`.
+- **The bot is already RAM-safe.** The arena bot uses `StreamingRootRecorder`
+  (`transcript.rs`): it folds each co-signed leaf into an O(log N) streaming Merkle root and
+  **drops the entry** (`snapshot()` returns empty). It ships **zero entries**; it emits its
+  co-signed half + root over the relay (`arena_anchor.rs`). It never POSTs `/settle`.
+- **The browser is the sole full-transcript holder + uploader.** It accumulates every 250 B
+  entry in a growing `entries[]`, recomputes the root over the whole array at settle, and
+  POSTs the entire body to `/v1/tunnels/{id}/settle` (`settleRequest.ts`, `controlPlane.ts`).
+- **Settle already anchors root-only on-chain.** `/settle` parses the 229 B header, submits
+  `close_cooperative_with_root` (root + balances + sigs; **no entries on-chain, ever**), then
+  archives the browser's POSTed body verbatim to S3 + Walrus.
 
-**Instead: sequential, immediately-durable objects.** One `PutObject` per small chunk
-(~1 MB) to `transcripts/{tunnel_id}/{seq:08}.bin`. Each chunk is a real, readable object the
-instant it lands (S3 strong read-after-write), so an abandoned stream keeps everything
-flushed so far. A tiny `manifest.json` lists the chunks for the verifier. This is the
-industry pattern for append-only-log → object store (Kafka tiered storage, Grafana Loki);
-they use multipart only to move an *already-complete* segment.
+So the unbuilt core is **not** "make the bot RAM-safe" (done) — it is **move byte-ownership
+from the browser to the bot**: the bot's recorder, which drops each entry, must instead
+forward it to a streaming S3 uploader; then the browser can stop.
 
-## 3. Full flow
+## 3. Sizing — why this is "essentially one object per match"
+
+- Entries are a **fixed 250 B** (`wire.rs`): 2 B len + 120 B `state_update` message + 64 B
+  sigA + 64 B sigB. Game state is folded into a 32-byte hash, never carried — so size is
+  perfectly predictable.
+- `MAX_MOVES_PER_TUNNEL = 100k` → **~25 MB**, at which the tunnel **rotates** (settle +
+  reopen). So a tunnel's transcript is already bounded at ~25 MB. The 32 MB `DefaultBodyLimit`
+  on `/settle` (`main.rs:269`) is the current enforcement of that ceiling.
+- Therefore a "transcript" **is one bounded object per tunnel**. Most matches are far smaller
+  (ttt ~25 KB, battleship ~60 KB, poker ~12 MB). **Chunks are an internal durability
+  mechanism, not a user-visible structure**: a short match flushes a single chunk (reassembly
+  is a no-op); only long / never-terminal matches produce several (≤~25).
+
+**Chunk-streaming earns its place through durability, not RAM.** The bot already computes the
+root in O(log N). Streaming small chunks (~1 MB, size-or-timer flush) means an abandoned tab or
+a never-terminal canvas loses at most the un-flushed tail (bounded by the flush timer;
+lossless on a SIGTERM drain), instead of the whole match.
+
+## 4. Storage — the real scale problem
+
+Not RAM (a relay task carries many matches but each is O(log N) root + one small buffer). The
+gaps are storage and lifecycle:
+
+- **No S3 lifecycle / tiering / retention exists today** — the bucket is versioned + SSE-S3 +
+  private, but objects are kept **forever**. At millions of matches × up to 25 MB this is the
+  dominant cost.
+- **Decision — retention:** keep transcripts, **tiered** (S3 Standard → Standard-IA at 30 d →
+  Glacier Instant Retrieval at 90 d). Verify reads are rare and latency-tolerant, so cold
+  tiers are safe; this is the cheapest option that still lets a user verify anytime, and it's
+  reversible (add an expiration later).
+- **Decision — world-canvas:** free-mode, balances never change → **zero fund-dispute
+  surface**; its transcript is provenance-only, yet it's the *dominant* storage driver
+  (unbounded 25 MB segments). For now it takes the same streaming path as every game; a
+  cheaper treatment (shorter retention, or root-only anchoring) is a follow-up optimization,
+  not a blocker.
+
+## 5. Storage layout (`transcript-store`, chunk primitives DONE)
+
+Keyed by `tunnel_id` (the transcript *is* the tunnel; there is no `tx_digest` until settle):
+
+- `chunk_key` → `{prefix}transcripts/{tunnel_id}/chunk-{seq:08}.bin` — immutable, monotonic,
+  zero-padded so lexicographic LIST order = chunk order (no manifest needed; the root already
+  lives on the on-chain settlement row).
+- `TranscriptChunkWriter::put_chunk` (S3 `PutObject`) — durable the instant it returns.
+- `TranscriptChunkReader::read_transcript` — LIST + concat in seq order (S3 strong LIST
+  consistency; reading a *settled* tunnel guarantees all chunks present).
+- `testing::FakeChunkStore` mirrors it for downstream round-trip tests. Reused by the fleet
+  uploader and the explorer — and by the bot fleet.
+
+## 6. Sequencing dependency (do not get this wrong)
+
+The 32 MB browser `/settle` body limit is the **only** thing enforcing the size cap today.
+Removing the browser POST (Phase 3) removes that enforcement — so **never-terminal rotation
+must land with-or-before dropping the POST**, or a canvas would stream unbounded. Rotation is
+governed by **ADR-0029 (never-terminal cooperative rotation)** — which **does not exist yet**
+and must be authored before Phase 3. `CHECKPOINT_EVERY` (`world-canvas-design.md`) is
+likewise unimplemented.
+
+## 7. Full flow (target)
 
 ```
-PLAY  (human ⇄ WS relay ⇄ bot;  relay forwards opaque frames, never parses)
+PLAY  (human ⇄ WS relay ⇄ bot; relay forwards opaque frames)
   bot co-signs each move; per committed move the recorder:
-     • folds the leaf into the O(log N) Merkle root            [P1, RAM-safe, DONE]
-     • appends the entry to a ~1 MB buffer
-     • buffer full / timer → PutObject …/{seq:08}.bin           [STREAM, durable-on-flush]
-  bot holds only: root peaks + one chunk buffer. Bounded regardless of length.
-  browser holds: O(1) checkpoint + co-signs each move. NO transcript.
+     • folds the leaf into the O(log N) root                    [DONE]
+     • serializes the 250 B entry → per-match uploader channel  [new]
+  uploader buffers ~1 MB; size/timer → put_chunk(seq)           [durable-on-flush]
+  bot RAM: O(log N) root + one chunk buffer, released on terminal.
+  browser: O(1) checkpoint + co-signs each move. NO transcript.
 
-SETTLE
-  • both co-sign the settlement-with-root over the relay (browser co-signs the bot's root)
-  • bot combines the halves; the settler submits close_cooperative_with_root — HEADER ONLY
-    (root + balances + sigs; entries are already in S3). No browser POST.
-  • seal manifest.json (chunk keys + root) for the segment
+SETTLE (natural end, rotation at 100k, or periodic for never-terminal)
+  • both co-sign settlement-with-root over the relay; bot combines halves
+  • settler submits close_cooperative_with_root — HEADER ONLY
+  • uploader flushes its tail; chunks are already durable. NO transcript upload.
 
-WORLD-CANVAS (never-terminal): PERIODIC cooperative settlement every N moves / T sec
-  (ADR-0029) — anchors a root on-chain per segment, carries canvas state to the next segment.
-  Mid-segment abandonment: chunks so far are durable; only the current unsealed segment
-  lacks an on-chain root (bounded loss).
-
-READ / VERIFY  (explorer)
-  fetch manifest → GetObject each chunk → concat → recompute root → check on-chain root.
+READ / VERIFY (explorer)
+  read_transcript(tunnel_id) → LIST + concat chunks → recompute root → check on-chain root.
 ```
 
-## 4. Components
+## 8. Consequences (accepted)
 
-- **`StreamingRootRecorder` (Rust, `tunnel-harness`)** — the P1 O(log N) Merkle accumulator
-  **plus** a bounded chunk buffer and an mpsc `Sender`. `record()` folds the leaf and sends
-  the serialized entry. Byte-parity requirement: the bot serializes each entry
-  (`TranscriptSettleEntry::from_transcript_entry` + u16 length prefix) so reassembled chunks
-  are byte-identical to the co-signed leaves the root commits to — a golden test enforces it.
-- **Per-match uploader task (`fleet`)** — owns the channel receiver + the `transcript-store`
-  archiver + `tunnel_id`; sequential `PutObject` on size/timer; **finalize-on-channel-close**
-  flushes the tail + seals the manifest on *both* clean settle and world-canvas abort (the
-  recorder is dropped on both paths → channel closes). Reuses `transcript-store` (§7).
-- **Bot-submits-settle (`fleet` + `routes.rs`)** — the bot combines both settle halves and
-  the settler submits the header-only close. The browser `POST /settle` path is removed; the
-  browser only sends its `settleHalf` over the relay (which it already does).
-- **Browser drops `Transcript` (`sui-tunnel-ts` + `frontend/src/pvp`)** — delete the
-  accumulation (`pvpMatchHook.ts:419/459`), `rawEntries()` upload (`:937`), root
-  compute (`:912`), and `settle.ts`/`settleRequest.ts` body build+POST. Keep co-signing +
-  the checkpoint. The browser **trusts the bot's root** when co-signing (chosen; funds are
-  protected by the checkpoint, not the root) — or, if trustless is wanted later, runs the
-  same O(log N) accumulator (~500 B) to verify it.
-- **Periodic settlement + canvas carry-over (`fleet/core`, ADR-0029)** — never-terminal
-  games settle every N moves while both parties are online; the fresh segment opens carrying
-  the canvas state.
-- **Explorer reassembly (`backend/explorer`)** — `/transcript` reads the manifest + chunks
-  from S3 (via `transcript-store`), reassembles, verifies. Replaces the single-blob read.
+1. **Browser co-signs a root it no longer computes** — trusts the bot's root. Fund-safety is
+   unchanged: it rests on the O(1) checkpoint (co-signed balances) the Move dispute path
+   consumes, not on the transcript. *(Confirm against the Move dispute path before Phase 3.)*
+2. **Arena-only (human-vs-bot).** Human-vs-human has no server participant, so the server
+   can't own that transcript; out of scope.
+3. **Verify is unchanged for the user** — same in-browser `VerifyPanel` re-derivation; only
+   the read source moves to reassembled chunks.
 
-## 5. Consequences (accepted, on the record)
+## 9. Phasing
 
-1. **Browser co-signs a root it no longer computes** — trusts the bot's root. Funds safe via
-   the checkpoint. (O(log N) browser-side verify is the trustless upgrade if ever needed.)
-2. **Arena-only (human-vs-bot).** Human-vs-human has no server participant (opaque relay),
-   so the server can't own the transcript there; that path keeps its browser transcript or is
-   dropped. The arena is bot-backed → covered.
-3. **Fund-safety unchanged** — dispute/premature-close run on the O(1) checkpoint the browser
-   keeps; dropping the transcript doesn't weaken it (verified in the Move dispute path).
-
-## 6. Scalability / failure
-
-- Bot RAM per match: O(log N) root peaks + one ~1 MB chunk buffer — bounded for any length.
-- Deploy/crash: lose ≤ the current sub-chunk tail (bounded by the flush timer); flushed
-  chunks are durable. A graceful-drain on SIGTERM (track in-flight uploaders) makes planned
-  deploys lossless — follow-up.
-- Abandonment: chunks durable; last unsealed segment un-anchored (bounded).
-
-## 7. Reuse — `backend/transcript-store` (DONE)
-
-The write (`TranscriptArchiver`) and read (`TranscriptReader`) both go through the shared
-`transcript-store` crate (canonical `transcript_key`, `S3TranscriptStore` `from_env`,
-`testing` fakes), mirroring `wallet-pool/s3`. The streaming uploader and the explorer both
-use it; the boss's **bot fleet** depends on it the same way. The `TranscriptArchiver` doc
-states the reuse contract: archive the **authoritative co-signed body byte-for-byte**.
-
-## 8. Phasing (this supersedes the per-settle P2 already committed)
-
-1. **Streaming recorder** → S3 sequential chunks during play. *(backend; foundation)*
-2. **Bot-submits-settle** (header-only) + remove the browser POST path. *(backend + FE)*
-3. **Browser drops `Transcript`** (trust root). *(FE / SDK)*
-4. **Periodic settlement + canvas carry-over** for world-canvas. *(backend; ADR-0029)*
-5. **Explorer chunk reassembly + manifest.** *(explorer)*
-
-**DONE already and reused:** P1 (streaming Merkle recorder, O(log N) root) and the
-`transcript-store` crate. The committed per-settle archive + explorer read-redirect are
-**superseded** by (1)+(5) and will be replaced.
-
-## 9. References
-
-S3 sequential-vs-multipart, strong read-after-write, prior art (Kafka tiered storage, Loki):
-see the S3 best-practice sources retained in git history of this file. AWS multipart
-overview: https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
+- **DONE:** streaming Merkle root recorder (O(log N)); `transcript-store` crate; **chunk
+  read/write primitives** (`chunk_key`, `TranscriptChunkWriter`/`Reader`, `FakeChunkStore`).
+1. **Fleet streaming uploader** — recorder forwards each entry over an mpsc channel to a
+   per-match uploader task that `put_chunk`s on size/timer and flushes the tail on terminal.
+   Golden byte-parity test: reassembled chunks == the entries the root commits to. *(backend)*
+2. **Bot-submits header-only settle** *(backend)* — folds both settle halves; settler submits
+   the header-only close. (Browser still POSTs during transition; not yet removed.)
+3. **ADR-0029 + never-terminal rotation, then drop the browser transcript** *(FE/SDK +
+   backend)* — author ADR-0029; wire periodic settle+reopen for canvas; only then remove the
+   browser `entries[]` accumulation, root compute, and `/settle` POST. (Sequencing per §6.)
+4. **Explorer read migration** — `/transcript` reads `read_transcript(tunnel_id)` (chunks)
+   with the legacy single-object + Walrus as fallback. *(explorer)*
+5. **S3 lifecycle** — Standard → IA → Glacier-IR per §4. *(infra)*
