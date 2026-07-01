@@ -25,6 +25,31 @@ pub fn transcript_key(prefix: &str, tunnel_id: &str, tx_digest: &str) -> String 
     }
 }
 
+/// Streaming chunk key: `{prefix}transcripts/{tunnel_id}/chunk-{seq:08}.bin`. The bot streams
+/// the transcript to S3 during play as immutable, monotonically-sequenced chunks — the tunnel
+/// *is* the transcript, and there is no `tx_digest` until it settles, so chunks key on
+/// `tunnel_id`. Zero-padded seq so lexicographic LIST order equals numeric order (safe reassembly
+/// without a manifest). The distinct `chunk-` filename prefix keeps these from colliding with the
+/// legacy one-object [`transcript_key`] in the same `transcripts/{tunnel_id}/` directory.
+pub fn chunk_key(prefix: &str, tunnel_id: &str, seq: u32) -> String {
+    format!("{}chunk-{seq:08}.bin", chunk_dir(prefix, tunnel_id))
+}
+
+/// `{prefix}transcripts/{tunnel_id}/` — the directory holding one tunnel's chunks.
+fn chunk_dir(prefix: &str, tunnel_id: &str) -> String {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        format!("transcripts/{tunnel_id}/")
+    } else {
+        format!("{prefix}/transcripts/{tunnel_id}/")
+    }
+}
+
+/// LIST prefix matching exactly one tunnel's streaming chunks (not the legacy blob).
+fn chunk_list_prefix(prefix: &str, tunnel_id: &str) -> String {
+    format!("{}chunk-", chunk_dir(prefix, tunnel_id))
+}
+
 /// Small ASCII object metadata (S3 caps object metadata at ~2 KB). Identity (`tunnel_id`,
 /// `tx_digest`) is NOT here — it's passed to `archive`/`read` as the single source of truth
 /// for the key, so it can't diverge from the metadata.
@@ -56,6 +81,26 @@ pub trait TranscriptArchiver: Send + Sync {
 #[async_trait]
 pub trait TranscriptReader: Send + Sync {
     async fn read(&self, tunnel_id: &str, tx_digest: &str) -> anyhow::Result<Option<Vec<u8>>>;
+}
+
+/// Writes one streaming transcript chunk during play. Chunks are immutable and appended with a
+/// monotonic `seq` from 0; each `put_chunk` is durable the instant it returns (S3 strong
+/// read-after-write), so an abandoned or never-terminal match keeps every flushed chunk — no
+/// upload happens at settle. `bytes` MUST be authoritative co-signed entries byte-for-byte,
+/// aligned to whole entries, so concatenating all chunks reproduces exactly what the on-chain
+/// root commits to. `Err` = exhausted inline retries.
+#[async_trait]
+pub trait TranscriptChunkWriter: Send + Sync {
+    async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: &[u8]) -> anyhow::Result<()>;
+}
+
+/// Reassembles a streamed transcript for verification: concatenates every chunk of a tunnel in
+/// `seq` order. `Ok(None)` = no chunks stored (reader may fall back, e.g. legacy blob or Walrus).
+/// Reading a *settled* tunnel guarantees all chunks are present — the bot flushes the tail before
+/// the settlement row exists.
+#[async_trait]
+pub trait TranscriptChunkReader: Send + Sync {
+    async fn read_transcript(&self, tunnel_id: &str) -> anyhow::Result<Option<Vec<u8>>>;
 }
 
 /// S3-backed transcript store: one `PutObject`/`GetObject` per call at [`transcript_key`].
@@ -164,6 +209,81 @@ impl TranscriptReader for S3TranscriptStore {
     }
 }
 
+#[async_trait]
+impl TranscriptChunkWriter for S3TranscriptStore {
+    async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: &[u8]) -> anyhow::Result<()> {
+        let key = chunk_key(&self.prefix, tunnel_id, seq);
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(ByteStream::from(bytes.to_vec()))
+            .content_type("application/octet-stream")
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("s3 put_chunk {}/{key}: {e}", self.bucket))?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl TranscriptChunkReader for S3TranscriptStore {
+    async fn read_transcript(&self, tunnel_id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let list_prefix = chunk_list_prefix(&self.prefix, tunnel_id);
+        let mut keys: Vec<String> = Vec::new();
+        let mut continuation: Option<String> = None;
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(&list_prefix);
+            if let Some(token) = &continuation {
+                req = req.continuation_token(token);
+            }
+            let out = req
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("s3 list {}/{list_prefix}: {e}", self.bucket))?;
+            for obj in out.contents() {
+                if let Some(k) = obj.key() {
+                    keys.push(k.to_string());
+                }
+            }
+            match out.next_continuation_token() {
+                Some(token) if out.is_truncated() == Some(true) => {
+                    continuation = Some(token.to_string());
+                }
+                _ => break,
+            }
+        }
+        if keys.is_empty() {
+            return Ok(None);
+        }
+        // Zero-padded seq → lexicographic sort is chunk order.
+        keys.sort();
+        let mut transcript = Vec::new();
+        for key in keys {
+            let out = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("s3 get_chunk {}/{key}: {e}", self.bucket))?;
+            let bytes = out
+                .body
+                .collect()
+                .await
+                .map_err(|e| anyhow::anyhow!("s3 chunk body {}/{key}: {e}", self.bucket))?
+                .into_bytes();
+            transcript.extend_from_slice(&bytes);
+        }
+        Ok(Some(transcript))
+    }
+}
+
 #[cfg(feature = "testing")]
 pub mod testing {
     //! In-memory test doubles for downstream unit tests. Enable with
@@ -216,6 +336,50 @@ pub mod testing {
                 .cloned())
         }
     }
+
+    /// In-memory streaming chunk store: records `put_chunk` and reassembles on `read_transcript`,
+    /// mirroring the S3 impl so downstream (fleet uploader, explorer) can unit-test the round-trip.
+    #[derive(Default)]
+    pub struct FakeChunkStore {
+        /// `(tunnel_id, seq) -> chunk bytes`.
+        pub chunks: Mutex<HashMap<(String, u32), Vec<u8>>>,
+        pub fail_with: Option<&'static str>,
+    }
+
+    #[async_trait]
+    impl TranscriptChunkWriter for FakeChunkStore {
+        async fn put_chunk(&self, tunnel_id: &str, seq: u32, bytes: &[u8]) -> anyhow::Result<()> {
+            if let Some(msg) = self.fail_with {
+                anyhow::bail!("{msg}");
+            }
+            self.chunks
+                .lock()
+                .unwrap()
+                .insert((tunnel_id.to_string(), seq), bytes.to_vec());
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl TranscriptChunkReader for FakeChunkStore {
+        async fn read_transcript(&self, tunnel_id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+            let chunks = self.chunks.lock().unwrap();
+            let mut seqs: Vec<u32> = chunks
+                .keys()
+                .filter(|(t, _)| t == tunnel_id)
+                .map(|(_, s)| *s)
+                .collect();
+            if seqs.is_empty() {
+                return Ok(None);
+            }
+            seqs.sort_unstable();
+            let mut transcript = Vec::new();
+            for seq in seqs {
+                transcript.extend_from_slice(&chunks[&(tunnel_id.to_string(), seq)]);
+            }
+            Ok(Some(transcript))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -227,5 +391,15 @@ mod tests {
         assert_eq!(transcript_key("", "0xt", "DiG"), "transcripts/0xt/DiG.bin");
         assert_eq!(transcript_key("dev/", "0xt", "DiG"), "dev/transcripts/0xt/DiG.bin");
         assert_eq!(transcript_key("dev", "0xt", "DiG"), "dev/transcripts/0xt/DiG.bin");
+    }
+
+    #[test]
+    fn chunk_key_is_seq_ordered() {
+        assert_eq!(chunk_key("", "0xt", 0), "transcripts/0xt/chunk-00000000.bin");
+        assert_eq!(chunk_key("dev", "0xt", 42), "dev/transcripts/0xt/chunk-00000042.bin");
+        // Reassembly relies on lexicographic order equaling numeric order.
+        assert!(chunk_key("", "t", 9) < chunk_key("", "t", 10));
+        // Streaming chunks must not collide with the legacy one-object key in the same dir.
+        assert_ne!(chunk_key("", "t", 1), transcript_key("", "t", "00000001"));
     }
 }
