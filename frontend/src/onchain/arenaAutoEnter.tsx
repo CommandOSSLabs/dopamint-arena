@@ -20,7 +20,10 @@ import { setArenaEntry } from "@/onchain/arenaAllocationStore";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { resolveBackendUrl } from "@/backend/controlPlane";
 import { listActiveTunnels, readResumeRecord } from "@/pvp/resume";
-import { arenaIdsExcludingResuming } from "@/onchain/arenaAllocationSkip";
+import {
+  arenaIdsExcludingResuming,
+  resumingGameKeysOf,
+} from "@/onchain/arenaAllocationSkip";
 import type { PartyOnchain } from "@/onchain/tunnelTx";
 
 /** localStorage key the desktop persists its window layout under (`Desktop.tsx`). */
@@ -63,12 +66,14 @@ function arenaGameIdsForOpenWindows(): string[] {
     if (arenaId) ids.push(arenaId);
   }
   // Skip any game the resume flow will restore: on a reload each open window's PvP hook resumes its
-  // persisted in-flight tunnel, so re-allocating (and depositing a fresh stake into) a second tunnel
-  // for the same game would strand that stake in an abandoned match. Uses the same active-record
-  // signal each lane's resume reads, keeping allocate and resume consistent.
-  const resumingGameKeys = listActiveTunnels()
-    .map((id) => readResumeRecord(id)?.game)
-    .filter((g): g is string => !!g);
+  // persisted IN-FLIGHT tunnel, so re-allocating (and depositing a fresh stake into) a second tunnel
+  // for the same game would strand that stake in an abandoned match. A FINISHED (terminal) record is
+  // excluded from this suppression so a settle+reload allocates a new game instead of stalling on the
+  // settled board — resume clears that record, but this read has no protocol to judge terminality, so
+  // it trusts the record's stamped flag (keeping allocate and resume consistent order-independently).
+  const resumingGameKeys = resumingGameKeysOf(
+    listActiveTunnels().map((id) => readResumeRecord(id)),
+  );
   return arenaIdsExcludingResuming(ids, resumingGameKeys);
 }
 

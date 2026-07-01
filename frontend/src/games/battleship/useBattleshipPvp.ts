@@ -56,7 +56,7 @@ import {
   consumeArenaEntry,
   subscribeArena,
 } from "@/onchain/arenaAllocationStore";
-import { proposeDue } from "./engine/pvpDriver";
+import { proposeDue, canFireShot } from "./engine/pvpDriver";
 import { pickShot, BOT_CONFIGS, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 import { deriveBattleshipView, type BattleshipView } from "./view";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
@@ -233,7 +233,8 @@ class PvpSession {
       st.phase !== "playing" ||
       st.pendingShot ||
       st.turn !== r ||
-      st.winner !== 0
+      st.winner !== 0 ||
+      dt.displayState !== dt.state // a proposal is already awaiting its ACK (e.g. a re-seated resume shoot)
     )
       return;
     const cell = pickShot(
@@ -786,17 +787,10 @@ class PvpSession {
     const dt = this.dt;
     const r = this.role;
     if (!dt || !r) return;
-    const st = dt.state;
-    if (
-      st.phase !== "playing" ||
-      st.pendingShot ||
-      st.turn !== r ||
-      st.winner !== 0
-    ) {
-      return;
-    }
-    const atOpponent = r === "A" ? st.shotsAtB : st.shotsAtA;
-    if (atOpponent.some((s) => s.cell === cell)) return;
+    // `canFireShot` refuses while a proposal still awaits its ACK (`displayState` ahead of `state`):
+    // the confirmed state lags an in-flight shoot, so a re-seated pending shoot after cold-load resume
+    // would otherwise propose a second one and throw "a proposal is already awaiting ACK".
+    if (!canFireShot(dt.state, r, cell, dt.displayState !== dt.state)) return;
     try {
       dt.propose({ type: "shoot", cell }, 0n);
       this.lastYourShot = cell;

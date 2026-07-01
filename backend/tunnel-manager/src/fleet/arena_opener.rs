@@ -43,6 +43,18 @@ pub struct ArenaOpenRequest<'a> {
     pub stake_each: u64,
 }
 
+/// One opened arena tunnel: its on-chain id plus the `created_at` (ms) read from the SAME object
+/// content the batch already reads to correlate seat B by pubkey. Carrying `created_at_ms` out of the
+/// open — instead of a second `getObject` on the bot's play path — is the root-cause fix for "bot
+/// never moves": allocate stores it in the reservation and the bot signs `timestamp = created_at`
+/// straight from there, doing NO chain IO before its first move (a stalled RPC there left bots
+/// spawned-but-silent). The FE reads the same field, so both settle halves commit to equal bytes.
+#[derive(Clone)]
+pub struct ArenaOpen {
+    pub tunnel_id: String,
+    pub created_at_ms: u64,
+}
+
 #[async_trait]
 pub trait ArenaTunnelOpener: Send + Sync {
     /// Create the shared tunnel (party A = user, party B = bot) and fund seat B, returning the
@@ -69,10 +81,21 @@ pub trait ArenaTunnelOpener: Send + Sync {
     async fn open_and_fund_seat_b_many(
         &self,
         reqs: Vec<ArenaOpenRequest<'_>>,
-    ) -> Vec<anyhow::Result<String>> {
+    ) -> Vec<anyhow::Result<ArenaOpen>> {
         let mut out = Vec::with_capacity(reqs.len());
         for req in reqs {
-            out.push(self.open_and_fund_seat_b(req).await);
+            out.push(match self.open_and_fund_seat_b(req).await {
+                Ok(tunnel_id) => {
+                    // created_at is not on the bot's play path — read it here, at allocate, and a slow
+                    // read degrades to 0 (the FE's same fallback) rather than blocking anything.
+                    let created_at_ms = self.read_created_at_ms(&tunnel_id).await.unwrap_or(0);
+                    Ok(ArenaOpen {
+                        tunnel_id,
+                        created_at_ms,
+                    })
+                }
+                Err(e) => Err(e),
+            });
         }
         out
     }
@@ -253,7 +276,10 @@ impl SuiArenaOpener {
     /// gets one seat-B address); each tunnel is correlated back to its request by party-B EPHEMERAL
     /// PUBKEY (distinct per match), read from the created object's content — NOT by address (shared)
     /// and NOT by objectChanges order (unspecified).
-    async fn try_batch_open(&self, reqs: &[ArenaOpenRequest<'_>]) -> anyhow::Result<Vec<String>> {
+    async fn try_batch_open(
+        &self,
+        reqs: &[ArenaOpenRequest<'_>],
+    ) -> anyhow::Result<Vec<ArenaOpen>> {
         let bot_address = reqs[0].bot_address;
         anyhow::ensure!(
             reqs.iter().all(|r| r.bot_address == bot_address),
@@ -308,7 +334,7 @@ impl SuiArenaOpener {
         tx: &Transaction,
         sigs: &[UserSignature],
         want_pks: &[String],
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<Vec<ArenaOpen>> {
         let b64 = base64::engine::general_purpose::STANDARD;
         let tx_b64 = b64.encode(bcs::to_bytes(tx).context("bcs tx")?);
         let sigs_b64: Vec<String> = sigs.iter().map(|s| s.to_base64()).collect();
@@ -334,11 +360,18 @@ impl SuiArenaOpener {
             ids.len(),
             want_pks.len()
         );
-        let created: Vec<(String, String)> = try_join_all(ids.into_iter().map(|id| async move {
-            let pk = self.read_party_b_pubkey(&id).await?;
-            Ok::<(String, String), anyhow::Error>((pk, id))
-        }))
-        .await?;
+        let created: Vec<(String, ArenaOpen)> =
+            try_join_all(ids.into_iter().map(|id| async move {
+                let (pk, created_at_ms) = self.read_party_b_pubkey(&id).await?;
+                Ok::<(String, ArenaOpen), anyhow::Error>((
+                    pk,
+                    ArenaOpen {
+                        tunnel_id: id,
+                        created_at_ms,
+                    },
+                ))
+            }))
+            .await?;
         align_tunnels_by_pubkey(&created, want_pks)
     }
 
@@ -346,11 +379,11 @@ impl SuiArenaOpener {
     /// correlation key. Retried briefly: the tunnel was just created by a `WaitForLocalExecution`
     /// execute (so it IS locally available), but a transient read blip here would otherwise fail the
     /// whole batch and orphan the already-funded tunnels via the serial re-open fallback.
-    async fn read_party_b_pubkey(&self, tunnel_id: &str) -> anyhow::Result<String> {
+    async fn read_party_b_pubkey(&self, tunnel_id: &str) -> anyhow::Result<(String, u64)> {
         let mut last_err = None;
         for attempt in 0..READBACK_ATTEMPTS {
             match self.read_party_b_pubkey_once(tunnel_id).await {
-                Ok(pk) => return Ok(pk),
+                Ok(pair) => return Ok(pair),
                 Err(e) => {
                     last_err = Some(e);
                     if attempt + 1 < READBACK_ATTEMPTS {
@@ -362,19 +395,32 @@ impl SuiArenaOpener {
         Err(last_err.unwrap_or_else(|| anyhow!("read party_b pubkey for {tunnel_id} failed")))
     }
 
-    async fn read_party_b_pubkey_once(&self, tunnel_id: &str) -> anyhow::Result<String> {
+    /// The party-B ephemeral pubkey (batch correlation key) AND the tunnel's `created_at` (ms) — both
+    /// from the SAME content read, so capturing created_at here costs no extra RPC and keeps it off the
+    /// bot's play path (the reservation carries it to the bot).
+    async fn read_party_b_pubkey_once(&self, tunnel_id: &str) -> anyhow::Result<(String, u64)> {
         let r = self
             .rpc(
                 "sui_getObject",
                 serde_json::json!([tunnel_id, {"showContent": true}]),
             )
             .await?;
-        let pk = r
+        let pk_json = r
             .pointer("/data/content/fields/party_b/fields/public_key")
             .ok_or_else(|| anyhow!("tunnel {tunnel_id} has no party_b.public_key: {r}"))?;
-        pubkey_json_to_hex(pk).ok_or_else(|| {
-            anyhow!("tunnel {tunnel_id} party_b.public_key is not a byte vector: {pk}")
-        })
+        let pk = pubkey_json_to_hex(pk_json).ok_or_else(|| {
+            anyhow!("tunnel {tunnel_id} party_b.public_key is not a byte vector: {pk_json}")
+        })?;
+        // Same object, same read: the u64 `created_at` renders as a decimal string (tolerate numeric).
+        let created_at_ms = r
+            .pointer("/data/content/fields/created_at")
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .or_else(|| v.as_u64())
+            })
+            .ok_or_else(|| anyhow!("tunnel {tunnel_id} has no created_at field: {r}"))?;
+        Ok((pk, created_at_ms))
     }
 }
 
@@ -451,12 +497,13 @@ impl ArenaTunnelOpener for SuiArenaOpener {
     async fn open_and_fund_seat_b_many(
         &self,
         reqs: Vec<ArenaOpenRequest<'_>>,
-    ) -> Vec<anyhow::Result<String>> {
+    ) -> Vec<anyhow::Result<ArenaOpen>> {
         if reqs.is_empty() {
             return Vec::new();
         }
         match self.try_batch_open(&reqs).await {
-            Ok(ids) => ids.into_iter().map(Ok).collect(),
+            // The batch path reads `created_at` for free from the seat-B correlation `getObject`.
+            Ok(opens) => opens.into_iter().map(Ok).collect(),
             Err(e) => {
                 // The batch is one all-or-nothing PTB; a single unfundable/invalid game aborts it.
                 // Fall back to per-game opens so the rest still land — matching the pre-batch behavior
@@ -464,7 +511,17 @@ impl ArenaTunnelOpener for SuiArenaOpener {
                 tracing::warn!("arena batch open failed, retrying serially: {e:#}");
                 let mut out = Vec::with_capacity(reqs.len());
                 for req in reqs {
-                    out.push(self.open_and_fund_seat_b(req).await);
+                    out.push(match self.open_and_fund_seat_b(req).await {
+                        Ok(tunnel_id) => {
+                            let created_at_ms =
+                                self.read_created_at_ms(&tunnel_id).await.unwrap_or(0);
+                            Ok(ArenaOpen {
+                                tunnel_id,
+                                created_at_ms,
+                            })
+                        }
+                        Err(e) => Err(e),
+                    });
                 }
                 out
             }
@@ -689,26 +746,26 @@ fn pubkey_json_to_hex(v: &serde_json::Value) -> Option<String> {
 /// party-B ephemeral pubkey — distinct per match even though the batch shares one party-B address.
 /// Errors if the counts differ or a requested pubkey has no created tunnel: a silent misalignment
 /// would hand a user someone else's tunnel.
-fn align_tunnels_by_pubkey(
-    created: &[(String, String)],
+fn align_tunnels_by_pubkey<T: Clone>(
+    created: &[(String, T)],
     want_pks: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<Vec<T>> {
     anyhow::ensure!(
         created.len() == want_pks.len(),
         "batch open created {} tunnels but expected {}",
         created.len(),
         want_pks.len()
     );
-    let by_pk: HashMap<String, &str> = created
+    let by_pk: HashMap<String, &T> = created
         .iter()
-        .map(|(pk, id)| (pk.to_lowercase(), id.as_str()))
+        .map(|(pk, v)| (pk.to_lowercase(), v))
         .collect();
     want_pks
         .iter()
         .map(|pk| {
             by_pk
                 .get(&pk.to_lowercase())
-                .map(|id| id.to_string())
+                .map(|v| (*v).clone())
                 .ok_or_else(|| anyhow!("batch open: no created tunnel matched party_b pubkey {pk}"))
         })
         .collect()
