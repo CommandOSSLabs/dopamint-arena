@@ -130,6 +130,28 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    // Streaming transcript chunk writer (same bucket as `archiver`): the bot streams the co-signed
+    // transcript to S3 in chunks *during play*. `chunk_writer` seals the manifest at `finish()`;
+    // `chunk_upload_tx` feeds the per-instance bounded uploader (byte-budget backpressure). Both
+    // `None` when S3 is unconfigured.
+    let chunk_writer: Option<std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>> =
+        match config.s3_bucket.clone() {
+            Some(bucket) => {
+                let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&aws_cfg);
+                let prefix = config.s3_prefix.clone().unwrap_or_default();
+                Some(std::sync::Arc::new(
+                    transcript_store::S3TranscriptStore::new(client, bucket, prefix),
+                ))
+            }
+            None => None,
+        };
+    let chunk_upload_tx = chunk_writer
+        .clone()
+        .map(|w| transcript_stream::TranscriptUploader::spawn(w).sender());
+
     let instance_id = config
         .instance_id
         .clone()
@@ -243,6 +265,8 @@ async fn main() -> anyhow::Result<()> {
         walrus,
         archiver,
         s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
+        chunk_writer,
+        chunk_upload_tx,
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),

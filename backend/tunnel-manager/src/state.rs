@@ -28,6 +28,12 @@ pub struct AppState {
     pub archiver: Option<Arc<dyn TranscriptArchiver>>,
     /// S3 object-key prefix for transcript archival (e.g. "prod/"). Empty when unset.
     pub s3_prefix: String,
+    /// S3 transcript *chunk* writer — the streaming counterpart to `archiver` (same bucket). Used on
+    /// the recorder's `finish()` path (tail chunk + manifest seal). `None` = no S3.
+    pub chunk_writer: Option<Arc<dyn transcript_store::TranscriptChunkWriter>>,
+    /// Sender into the per-instance bounded transcript uploader — the byte-budget that keeps
+    /// streaming RAM-safe under S3 slowdown (producers block when it's full). `None` = no S3.
+    pub chunk_upload_tx: Option<tokio::sync::mpsc::Sender<transcript_stream::ChunkUpload>>,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
     pub ollama: crate::ollama::OllamaClient,
     /// Latest aggregate snapshot is computed once per tick and fanned out here to
@@ -102,6 +108,8 @@ impl AppState {
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
             s3_prefix: "".into(),
+            chunk_writer: None,
+            chunk_upload_tx: None,
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
