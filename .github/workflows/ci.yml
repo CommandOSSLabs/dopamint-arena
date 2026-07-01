@@ -9,6 +9,14 @@ permissions:
   contents: read
   pull-requests: read
 
+# CI-only compile speedups (no effect on test outcomes): line-tables debug keeps
+# panic file:line for failures while cutting codegen+link; incremental is useless
+# and cache-bloating for fresh CI builds. Ignored by the non-cargo jobs.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   changes:
     name: Detect changes
@@ -140,11 +148,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # nextest runs test binaries concurrently (cargo runs them serially), which
+      # overlaps the slow suites on the critical path. No doctests in the tree, so
+      # nothing is skipped by nextest not running them.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - uses: Swatinem/rust-cache@v2
       # fleet-bench's swarm sims (~5.8 min of run time) live in their own lane
       # (rust-fleet-bench) so they neither sit on this critical path nor
       # double-run with rust-tunnel.
-      - run: cargo test --locked --workspace --exclude fleet-bench
+      - run: cargo nextest run --locked --workspace --exclude fleet-bench
 
   # Full-scale fleet-bench swarm/lifecycle sims. Kept per-PR at full scale — they
   # guard drain/settle-race and telemetry/byte invariants — but isolated to one
@@ -157,8 +171,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p fleet-bench
+      - run: cargo nextest run --locked -p fleet-bench
 
   rust-tunnel:
     name: Rust tunnel crates
