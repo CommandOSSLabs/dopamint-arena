@@ -8,7 +8,7 @@ config:
   dopamint:route53-zone-id: ""
   dopamint:db-instance-class: db.r6g.large
   dopamint:db-min-capacity: "0.5"
-  dopamint:db-max-capacity: "4"
+  dopamint:db-max-capacity: "16"
   dopamint:db-serverless: "true"
   dopamint:cache-node-type: cache.t4g.medium
   dopamint:settler-key:
