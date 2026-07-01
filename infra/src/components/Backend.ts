@@ -80,7 +80,9 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
   const ollamaNumPredict = pulumi.output(args.ollamaNumPredict ?? undefined);
   const ollamaNumCtx = pulumi.output(args.ollamaNumCtx ?? undefined);
   const ollamaKeepAlive = pulumi.output(args.ollamaKeepAlive ?? undefined);
-  const ollamaTopicPredict = pulumi.output(args.ollamaTopicPredict ?? undefined);
+  const ollamaTopicPredict = pulumi.output(
+    args.ollamaTopicPredict ?? undefined,
+  );
   const ollamaOrigins = pulumi.output(args.ollamaOrigins ?? undefined);
   // Bundle Ollama config into one output so the outer pulumi.all stays within
   // the 8-tuple overload and keeps heterogeneous typing.
@@ -251,7 +253,12 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             { name: "OLLAMA_URL", value: "http://localhost:11434" },
             { name: "OLLAMA_MODEL", value: ollamaModel },
             ...(ollamaNumPredictCfg
-              ? [{ name: "OLLAMA_NUM_PREDICT", value: String(ollamaNumPredictCfg) }]
+              ? [
+                  {
+                    name: "OLLAMA_NUM_PREDICT",
+                    value: String(ollamaNumPredictCfg),
+                  },
+                ]
               : []),
             ...(ollamaNumCtxCfg
               ? [{ name: "OLLAMA_NUM_CTX", value: String(ollamaNumCtxCfg) }]
