@@ -275,6 +275,10 @@ impl Protocol for BlackjackDuel {
         state.phase == DuelPhase::Over
     }
 
+    fn can_gracefully_close(&self, state: &Self::State) -> bool {
+        state.phase == DuelPhase::Over
+    }
+
     fn sample_move(
         &self,
         state: &Self::State,

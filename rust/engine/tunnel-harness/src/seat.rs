@@ -92,6 +92,9 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     pub fn is_terminal(&self) -> bool {
         self.protocol.is_terminal(&self.state)
     }
+    pub fn can_gracefully_close(&self) -> bool {
+        self.protocol.can_gracefully_close(&self.state)
+    }
     pub fn balances(&self) -> Balances {
         self.protocol.balances(&self.state)
     }

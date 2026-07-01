@@ -13,6 +13,62 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use crate::cgroup::{cgroup_cpu_usage_usec, consumed_cores, cpu_budget, CpuBasis};
 use crate::stats::summarize;
 
+/// Cap on retained percentile-input samples per metric. A soak run samples every
+/// `interval_ms` for hours, so an uncapped buffer grows without bound; this holds
+/// memory constant. 8192 keeps nearest-rank percentiles tight while staying small.
+const MAX_RESOURCE_SAMPLES: usize = 8192;
+
+/// Bounded uniform sample of a value stream via Algorithm R reservoir sampling.
+/// Percentiles need the *distribution*, so we can't collapse to scalars — but we
+/// also can't keep every sample on a long run. A reservoir keeps a fixed-size set
+/// that stays uniformly random over *all* observations, so retained percentiles
+/// track the whole run instead of biasing toward only-recent samples.
+struct ReservoirSampler {
+    capacity: usize,
+    /// Total observations seen (not the retained count); drives replacement odds.
+    seen: u64,
+    retained: Vec<f64>,
+}
+
+impl ReservoirSampler {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            capacity,
+            seen: 0,
+            retained: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn observe(&mut self, value: f64) {
+        if self.retained.len() < self.capacity {
+            self.retained.push(value);
+        } else {
+            // Item index is `seen` (0-based), so pick a slot in [0, seen]; replacing
+            // only when it lands in-range yields the capacity/seen replacement odds
+            // that keep the reservoir uniform.
+            let slot = random_below(self.seen + 1);
+            if (slot as usize) < self.capacity {
+                self.retained[slot as usize] = value;
+            }
+        }
+        self.seen += 1;
+    }
+
+    fn samples(&self) -> &[f64] {
+        &self.retained
+    }
+}
+
+/// Uniform random index in `0..n`. Only called past capacity where `n > capacity`,
+/// so an OS RNG failure returns an out-of-range value that safely skips replacement.
+fn random_below(n: u64) -> u64 {
+    let mut buf = [0u8; 8];
+    if getrandom::getrandom(&mut buf).is_err() {
+        return n;
+    }
+    u64::from_le_bytes(buf) % n
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ResourceSummary {
     pub cpu_cores_avg: f64,
@@ -74,9 +130,13 @@ fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> Resou
     let mut cores_sum = 0.0f64;
     let mut pct_sum = 0.0f64;
     let mut rss_sum = 0.0f64;
+    // avg/peak are exact running scalars (unaffected by the sample cap); only the
+    // percentile inputs live in the bounded reservoirs.
+    let mut util_sum = 0.0f64;
+    let mut util_peak = 0.0f64;
 
-    let mut util_pct_samples: Vec<f64> = Vec::new();
-    let mut rss_samples: Vec<f64> = Vec::new();
+    let mut util_pct_samples = ReservoirSampler::with_capacity(MAX_RESOURCE_SAMPLES);
+    let mut rss_samples = ReservoirSampler::with_capacity(MAX_RESOURCE_SAMPLES);
 
     // Seed the cgroup CPU-time baseline so the first interval has a delta.
     let mut prev_cgroup: Option<(u64, Instant)> = if budget.basis == CpuBasis::Cgroup {
@@ -129,8 +189,12 @@ fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> Resou
         if rss > summary.rss_peak_bytes {
             summary.rss_peak_bytes = rss;
         }
-        util_pct_samples.push(util_pct);
-        rss_samples.push(rss as f64);
+        util_sum += util_pct;
+        if util_pct > util_peak {
+            util_peak = util_pct;
+        }
+        util_pct_samples.observe(util_pct);
+        rss_samples.observe(rss as f64);
     }
 
     if summary.samples > 0 {
@@ -139,13 +203,14 @@ fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> Resou
         summary.cpu_pct_avg = pct_sum / n;
         summary.rss_avg_bytes = rss_sum / n;
 
-        let util_dist = summarize(&util_pct_samples);
-        summary.cpu_util_avg_pct = util_dist.avg;
+        // avg/peak stay exact from running scalars; only percentiles read the reservoir.
+        summary.cpu_util_avg_pct = util_sum / n;
+        summary.cpu_util_peak_pct = util_peak;
+        let util_dist = summarize(util_pct_samples.samples());
         summary.cpu_util_p50_pct = util_dist.p50;
         summary.cpu_util_p99_pct = util_dist.p99;
-        summary.cpu_util_peak_pct = util_dist.peak;
 
-        let rss_dist = summarize(&rss_samples);
+        let rss_dist = summarize(rss_samples.samples());
         summary.rss_p50_bytes = rss_dist.p50;
     }
     summary
@@ -178,5 +243,51 @@ mod tests {
         assert!(s.rss_avg_bytes > 0.0);
         assert_eq!(s.threads, 4);
         assert!(s.cpu_util_avg_pct >= 0.0 && s.cpu_util_avg_pct.is_finite());
+    }
+
+    #[test]
+    fn reservoir_stays_bounded_on_long_stream() {
+        let mut r = ReservoirSampler::with_capacity(MAX_RESOURCE_SAMPLES);
+        let total = (MAX_RESOURCE_SAMPLES * 3) as u64;
+        for i in 0..total {
+            r.observe(i as f64);
+        }
+        // Retained set is capped regardless of stream length.
+        assert_eq!(r.samples().len(), MAX_RESOURCE_SAMPLES);
+        assert_eq!(r.seen, total);
+
+        // Percentiles over the retained sample remain internally consistent.
+        let d = summarize(r.samples());
+        assert!(d.min <= d.p50, "min {} > p50 {}", d.min, d.p50);
+        assert!(d.p50 <= d.peak, "p50 {} > peak {}", d.p50, d.peak);
+    }
+
+    #[test]
+    fn reservoir_all_equal_inputs_are_deterministic() {
+        let mut r = ReservoirSampler::with_capacity(16);
+        // More than capacity, so replacement runs — but every value is identical,
+        // so the outcome is independent of the random draws.
+        for _ in 0..100 {
+            r.observe(5.0);
+        }
+        assert_eq!(r.samples().len(), 16);
+        let d = summarize(r.samples());
+        assert_eq!(d.min, 5.0);
+        assert_eq!(d.p50, 5.0);
+        assert_eq!(d.p99, 5.0);
+        assert_eq!(d.peak, 5.0);
+    }
+
+    #[test]
+    fn reservoir_below_capacity_keeps_everything() {
+        let mut r = ReservoirSampler::with_capacity(8192);
+        for i in 0..100u64 {
+            r.observe(i as f64);
+        }
+        // Under capacity nothing is dropped, so it degrades to an exact buffer.
+        assert_eq!(r.samples().len(), 100);
+        let d = summarize(r.samples());
+        assert_eq!(d.min, 0.0);
+        assert_eq!(d.peak, 99.0);
     }
 }

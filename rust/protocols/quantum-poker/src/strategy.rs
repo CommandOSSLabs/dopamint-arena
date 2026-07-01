@@ -12,6 +12,7 @@ use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
 pub struct QuantumPokerStrategy {
     rng_state: u32,
     secrets_by_hand: BTreeMap<u64, Vec<SlotSecret>>,
+    allow_voluntary_bets: bool,
 }
 
 impl QuantumPokerStrategy {
@@ -19,6 +20,14 @@ impl QuantumPokerStrategy {
         Self {
             rng_state: seed as u32,
             secrets_by_hand: BTreeMap::new(),
+            allow_voluntary_bets: true,
+        }
+    }
+
+    pub fn conservative(seed: u64) -> Self {
+        Self {
+            allow_voluntary_bets: false,
+            ..Self::new(seed)
         }
     }
 
@@ -88,11 +97,17 @@ impl MoveStrategy<QuantumPoker> for QuantumPokerStrategy {
             | PokerPhase::RiverBet => {
                 let diff = street_bet(state, seat.other()).saturating_sub(street_bet(state, seat));
                 if diff > 0 {
+                    if !self.allow_voluntary_bets {
+                        return Some(PokerMove::Call);
+                    }
                     return Some(if self.next_f64() < 0.85 {
                         PokerMove::Call
                     } else {
                         PokerMove::Fold
                     });
+                }
+                if !self.allow_voluntary_bets {
+                    return Some(PokerMove::Check);
                 }
                 // Size to the effective stack the protocol validates against, not our own balance —
                 // heads-up, betting more than the opponent can match is rejected ("bet exceeds the
@@ -744,6 +759,57 @@ mod tests {
         assert_eq!(out_a.final_balances.sum(), 2000);
         assert_eq!(out_a.final_balances, out_b.final_balances);
         assert!(out_a.moves > 0);
+    }
+
+    #[tokio::test]
+    async fn conservative_strategy_does_not_open_betting() {
+        let mut strategy = QuantumPokerStrategy::conservative(1);
+        let state = PokerState {
+            phase: PokerPhase::PreflopBet,
+            hand_no: 0,
+            hand_cap: 100,
+            commit_a: None,
+            commit_b: None,
+            reveals_a: Vec::new(),
+            reveals_b: Vec::new(),
+            local_secrets_a: None,
+            local_secrets_b: None,
+            hole_a: None,
+            hole_b: None,
+            board: Vec::new(),
+            board_slots: Vec::new(),
+            board_counters: Vec::new(),
+            total_bet_a: 1,
+            total_bet_b: 1,
+            street_bet_a: 1,
+            street_bet_b: 1,
+            to_act: Seat::A,
+            acted_a: false,
+            acted_b: false,
+            folded_by: None,
+            shown_a: false,
+            shown_b: false,
+            shown_hole_a: None,
+            shown_hole_b: None,
+            winner: None,
+            last_result: None,
+            balance_a: 200,
+            balance_b: 200,
+            total: 400,
+        };
+
+        let planned = strategy
+            .plan_move(
+                &state,
+                Seat::A,
+                &MoveStrategyContext {
+                    tunnel_id: "0x1".into(),
+                    seat: Seat::A,
+                },
+            )
+            .await;
+
+        assert_eq!(planned, Some(PokerMove::Check));
     }
 
     #[test]
