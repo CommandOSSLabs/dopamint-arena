@@ -109,17 +109,25 @@ pub fn encode_settle_body(
     out.extend_from_slice(sig_b);
     out.extend_from_slice(&(transcript_entries.len() as u32).to_be_bytes());
     for entry in transcript_entries {
-        let len: u16 = entry
-            .message
-            .len()
-            .try_into()
-            .expect("transcript entry message length fits u16");
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(&entry.message);
-        out.extend_from_slice(&entry.sig_a);
-        out.extend_from_slice(&entry.sig_b);
+        encode_settle_entry(entry, &mut out);
     }
     out
+}
+
+/// Encode one transcript entry in its settle-body wire form: `u16 BE len ‖ message ‖ sig_a(64)
+/// ‖ sig_b(64)`. The single source of truth for the per-entry layout, so a chunk streamed to S3
+/// during play is byte-identical to this entry's slot in [`encode_settle_body`] — i.e. exactly
+/// the bytes the on-chain transcript root commits to.
+pub fn encode_settle_entry(entry: &SettleBodyEntry, out: &mut Vec<u8>) {
+    let len: u16 = entry
+        .message
+        .len()
+        .try_into()
+        .expect("transcript entry message length fits u16");
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&entry.message);
+    out.extend_from_slice(&entry.sig_a);
+    out.extend_from_slice(&entry.sig_b);
 }
 
 pub struct HtlcLock {
