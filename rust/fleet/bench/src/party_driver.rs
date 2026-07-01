@@ -1527,6 +1527,10 @@ mod tests {
         assert!(has_open, "sink must contain Open sample");
         assert!(has_settle, "sink must contain Settle sample");
         assert!(has_frame_send, "sink must contain FrameSend sample");
+        assert!(
+            outcome.sink.samples().len() <= 320,
+            "per-tunnel telemetry must stay bounded even when per-move latency is enabled"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
