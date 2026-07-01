@@ -103,7 +103,9 @@ async fn main() -> anyhow::Result<()> {
 
     // S3 transcript archival (ADR-0023). Optional: absent in dev/test when
     // S3_TRANSCRIPTS_BUCKET is unset. Concurrent with Walrus; Walrus above is unchanged.
-    let archiver: Option<std::sync::Arc<dyn transcript_store::TranscriptArchiver>> =
+    // One S3 store backs both views: `archiver` (one-object settle archive) and `chunk_writer`
+    // (streaming chunks during play). Same bucket, same credentials.
+    let s3_store: Option<std::sync::Arc<transcript_store::S3TranscriptStore>> =
         match config.s3_bucket.clone() {
             Some(bucket) => {
                 let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -121,6 +123,11 @@ async fn main() -> anyhow::Result<()> {
                 None
             }
         };
+    let archiver: Option<std::sync::Arc<dyn transcript_store::TranscriptArchiver>> = s3_store
+        .clone()
+        .map(|s| s as std::sync::Arc<dyn transcript_store::TranscriptArchiver>);
+    let chunk_writer: Option<std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>> =
+        s3_store.map(|s| s as std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>);
 
     let instance_id = config
         .instance_id
@@ -214,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
         enoki,
         walrus,
         archiver,
+        chunk_writer,
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),

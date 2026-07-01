@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use transcript_store::TranscriptArchiver;
+use transcript_store::{TranscriptArchiver, TranscriptChunkWriter};
 
 pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
@@ -22,6 +22,9 @@ pub struct AppState {
     /// S3 transcript archiver (ADR-0023). `None` when S3 is unconfigured (dev/test) —
     /// archival is then disabled. Concurrent with Walrus; Walrus is untouched.
     pub archiver: Option<Arc<dyn TranscriptArchiver>>,
+    /// S3 transcript *chunk* writer — the streaming counterpart to `archiver` (same S3 store). The
+    /// co-located bot streams the transcript to S3 in chunks during play through it. `None` = no S3.
+    pub chunk_writer: Option<Arc<dyn TranscriptChunkWriter>>,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
     pub ollama: crate::ollama::OllamaClient,
     /// Latest aggregate snapshot is computed once per tick and fanned out here to
@@ -97,6 +100,7 @@ impl AppState {
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
+            chunk_writer: None,
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
