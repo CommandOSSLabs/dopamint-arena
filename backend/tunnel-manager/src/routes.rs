@@ -24,17 +24,13 @@ pub(crate) mod test_support {
     pub(crate) fn test_state() -> SharedState {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
+        let rpc = crate::sui_rpc::GovernedRpc::new(
+            "http://127.0.0.1:9999".into(),
+            crate::sui_rpc::RpcLimits::default(),
+        );
         let settler = std::sync::Arc::new(
-            crate::sui::SuiSettler::new(
-                "http://127.0.0.1:9999".into(),
-                "0x2",
-                "0x2::sui::SUI",
-                None,
-                None,
-                &key,
-                None,
-            )
-            .expect("test settler"),
+            crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, None)
+                .expect("test settler"),
         );
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
         let ollama = crate::ollama::OllamaClient::new(
@@ -48,6 +44,7 @@ pub(crate) mod test_support {
             mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
             bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
+            settle_queue: std::sync::Arc::new(crate::settle_queue::InMemorySettleQueue::default()),
             enoki: None,
             walrus,
             archiver: None,
@@ -124,7 +121,7 @@ struct SettleBody {
     update_count: u32,
 }
 
-const SETTLE_BODY_VERSION: u8 = 0x01;
+pub(crate) const SETTLE_BODY_VERSION: u8 = 0x01;
 const SETTLE_BODY_HEADER_LEN: usize = 229;
 
 /// Parse the binary settle-body header (big-endian, fixed offsets — see the plan layout).
@@ -153,6 +150,24 @@ fn parse_settle_body(b: &[u8]) -> Result<SettleBody, String> {
         sig_a: b[97..161].to_vec(),
         sig_b: b[161..225].to_vec(),
         update_count: u32::from_be_bytes(b[225..229].try_into().unwrap()),
+    })
+}
+
+/// Rebuild `CloseArgs` from the 229-byte settle header (ADR-0029). The async worker re-parses the
+/// header it dequeued to drive the on-chain close — the same fixed-offset layout the handler
+/// validated at ingest, so there is one parser, not two.
+pub(crate) fn close_args_from_settle_header(
+    header: &[u8],
+) -> Result<crate::sui::CloseArgs, String> {
+    let p = parse_settle_body(header)?;
+    Ok(crate::sui::CloseArgs {
+        tunnel_id: p.tunnel_id,
+        party_a_balance: p.party_a_balance,
+        party_b_balance: p.party_b_balance,
+        sig_a: p.sig_a,
+        sig_b: p.sig_b,
+        timestamp: p.timestamp,
+        transcript_root: p.transcript_root,
     })
 }
 
@@ -460,91 +475,23 @@ pub(crate) async fn settle(
         .into_response();
     }
 
-    let a = p.party_a_balance;
-    let b = p.party_b_balance;
-    let ts = p.timestamp;
-    // The explorer row stores the root as `0x`-prefixed hex (verifyTranscript re-checks it).
-    let transcript_root_hex = format!("0x{}", hex::encode(&p.transcript_root));
-
-    let close = crate::sui::CloseArgs {
-        tunnel_id: tunnel_id.clone(),
-        party_a_balance: a,
-        party_b_balance: b,
-        sig_a: p.sig_a,
-        sig_b: p.sig_b,
-        timestamp: ts,
-        transcript_root: p.transcript_root,
-    };
-    match state.settler.submit_close(close).await {
-        Ok(digest) => {
-            // The close landed on-chain: record it in the event-derived registry so a duplicate
-            // /settle is rejected for free by the 409 guard above (no chain dry-run). Without this
-            // the guard is dead in production, since the in-process chain status poller is disabled.
-            state
-                .control
-                .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
-                .await;
-            // S3 archival runs CONCURRENTLY with Walrus and is independent of it (ADR-0023).
-            // Fire-and-forget from the response; the SDK handles inline retries. `body` is
-            // cheap to clone (Bytes is ref-counted); Walrus below still gets `body.to_vec()`
-            // exactly as before — its call site, error handling, and result are unchanged.
-            if let Some(archiver) = state.archiver.clone() {
-                let key = crate::s3::archive_key(&state.s3_prefix, &tunnel_id, &digest);
-                let meta = crate::s3::ArchiveMeta {
-                    tunnel_id: tunnel_id.clone(),
-                    tx_digest: digest.clone(),
-                    transcript_root: transcript_root_hex.clone(),
-                    settle_version: crate::routes::SETTLE_BODY_VERSION,
-                };
-                let s3_bytes = body.clone();
-                let s3_digest = digest.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = archiver.archive(&key, &s3_bytes, &meta).await {
-                        tracing::warn!(%s3_digest, error = %e, "s3 archive failed");
-                    }
-                });
-            }
-
-            // Archive the body verbatim — the blob IS the settle body. The in-browser verifier
-            // (verifyTranscript) parses the same fixed-offset bytes and re-checks the
-            // co-signed root against the recomputed Merkle root and the on-chain anchor.
-            let (blob_id, proof_url) = match state.walrus.upload_transcript(body).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::error!(%digest, error = %e, "walrus archival failed");
-                    (String::new(), String::new())
-                }
-            };
-            state
-                .control
-                .push_recent_event(settled_event(
-                    &tunnel_id,
-                    a,
-                    b,
-                    &transcript_root_hex,
-                    &digest,
-                    ts,
-                    &proof_url,
-                ))
-                .await;
-            if !blob_id.is_empty() {
-                let proof_msg = serde_json::json!({
-                    "txDigest": digest,
-                    "walrusBlobId": blob_id,
-                    "proofUrl": proof_url,
-                })
-                .to_string();
-                state.bus.publish_raw("explorer:proofs", proof_msg).await;
-            }
-            Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
-                .into_response()
-        }
+    // Structural checks passed (ADR-0029): durably enqueue and return 202 immediately. No node
+    // RPC on the request path, so a fleet burst is absorbed as queue depth, never a 429. The
+    // worker pool coalesces many settles into one PTB; confirmation arrives via `explorer:proofs`.
+    // The 229-byte header is enough for the PTB; the full body rides along for Walrus archival.
+    let header = body[..SETTLE_BODY_HEADER_LEN].to_vec();
+    match state.settle_queue.enqueue(&tunnel_id, header, body).await {
+        Ok(id) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "status": "accepted", "settlementId": id })),
+        )
+            .into_response(),
         Err(e) => {
-            tracing::warn!(tunnel_id = %tunnel_id, error = %e, "settle close failed");
+            tracing::error!(%tunnel_id, error = %e, "settle enqueue failed");
             ApiError::resp(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "settle_failed",
-                &e.to_string(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "settle_enqueue_failed",
+                "could not queue settlement; retry shortly",
             )
             .into_response()
         }
@@ -959,7 +906,7 @@ pub(crate) async fn chat_topic(State(state): State<SharedState>) -> Response {
 /// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
 /// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
 /// (Walrus archival failed) degrade to `None`, never a broken link.
-fn settled_event(
+pub(crate) fn settled_event(
     tunnel_id: &str,
     party_a_balance: u64,
     party_b_balance: u64,
@@ -1030,7 +977,6 @@ fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
 mod tests {
     use super::test_support::test_state;
     use super::*;
-    use crate::state::AppState;
 
     // The binary /settle body the SDK codec (`encodeSettleBody`) emits — byte-identical to
     // the TS golden vector (settleBinary.test.ts). Pasting it here pins TS↔Rust wire parity: a
@@ -1166,6 +1112,26 @@ mod tests {
         assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
     }
 
+    // ADR-0029: a valid settle is durably enqueued and answered 202 immediately — no node RPC on
+    // the request path. The worker pool (tested separately) drains it. This is what lets a fleet
+    // burst be absorbed as queue depth instead of tripping the fullnode 429.
+    #[tokio::test]
+    async fn settle_enqueues_and_returns_202() {
+        let state = test_state();
+        let resp = settle(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(golden_tunnel_id()),
+            sample_settle_body(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+        assert_eq!(
+            state.settle_queue.depth().await.unwrap(),
+            1,
+            "the settlement is on the queue"
+        );
+    }
+
     // /health/ready reflects ControlStore::ready(); in-memory is always ready.
     #[tokio::test]
     async fn health_ready_reflects_control_store() {
@@ -1247,16 +1213,10 @@ mod tests {
     fn settler_with_admin_cap(rpc_url: &str) -> crate::sui::SuiSettler {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-        crate::sui::SuiSettler::new(
-            rpc_url.into(),
-            "0x2",
-            "0x2::sui::SUI",
-            None,
-            None,
-            &key,
-            Some("0x5"),
-        )
-        .expect("settler with admin cap")
+        let rpc =
+            crate::sui_rpc::GovernedRpc::new(rpc_url.into(), crate::sui_rpc::RpcLimits::default());
+        crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, Some("0x5"))
+            .expect("settler with admin cap")
     }
 
     // The public faucet is 503 when the on-chain faucet is unconfigured (no AdminCap) — it never
@@ -1459,64 +1419,6 @@ mod tests {
         };
         let resp = chat(axum::extract::State(state), axum::Json(req)).await;
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    }
-
-    // POST /v1/tunnels/:tunnel_id/settle archives the identical binary body to S3 concurrently
-    // with Walrus (ADR-0023). The bytes recorded by the S3 archiver must match the request body
-    // byte-for-byte, and the object key must live under the `transcripts/` prefix.
-    #[tokio::test]
-    async fn settle_archives_identical_body_to_s3() {
-        use std::time::Duration;
-
-        use axum::routing::post;
-        use axum::Router;
-        use tower::ServiceExt;
-
-        use crate::s3::FakeArchiver;
-
-        let body = sample_settle_body();
-        let parsed = parse_settle_body(&body).expect("valid settle body");
-        let tunnel_id = normalize_tunnel_id(&parsed.tunnel_id);
-
-        let archiver = std::sync::Arc::new(FakeArchiver::default());
-        let mut state = AppState::with_fake_archiver(archiver.clone());
-        // Reach the settlement success path (S3 archival sits inside it) without real RPC.
-        std::sync::Arc::get_mut(&mut state)
-            .expect("unique test arc")
-            .settler = crate::sui::SuiSettler::fixed_digest("DiG123").into();
-
-        let app = Router::new()
-            .route("/v1/tunnels/:tunnel_id/settle", post(settle))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/tunnels/{}/settle", tunnel_id))
-                    .header("x-settle-version", SETTLE_BODY_VERSION.to_string())
-                    .body(axum::body::Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // Give the fire-and-forget S3 spawn a chance to finish before inspecting the recording.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let archived = archiver.archived.lock().unwrap().clone();
-        assert_eq!(archived.len(), 1, "expected exactly one S3 archive");
-        assert_eq!(
-            archived[0].1,
-            body.to_vec(),
-            "archived bytes must match the settle body"
-        );
-        assert!(
-            archived[0].0.starts_with("transcripts/"),
-            "key must start with transcripts/: {}",
-            archived[0].0
-        );
     }
 
     // GET /v1/chat/topic asks Ollama for a short random conversation topic.

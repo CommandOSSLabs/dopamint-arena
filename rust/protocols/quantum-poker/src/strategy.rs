@@ -94,6 +94,9 @@ impl MoveStrategy<QuantumPoker> for QuantumPokerStrategy {
                         PokerMove::Fold
                     });
                 }
+                // Size to the effective stack the protocol validates against, not our own balance —
+                // heads-up, betting more than the opponent can match is rejected ("bet exceeds the
+                // effective stack"), which after stacks diverge would abort the match.
                 let available = available_for(state, seat);
                 if available > 0 && self.next_f64() < 0.35 {
                     let cap = available.min(200);

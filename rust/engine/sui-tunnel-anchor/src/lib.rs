@@ -2255,6 +2255,10 @@ struct SponsorExecuteResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettleResponse {
+    /// On the async path (ADR-0029) `/settle` returns 202 with no digest — settlement is durably
+    /// queued and the on-chain digest arrives later via the `explorer:proofs` event. Defaults to
+    /// empty so the 202 body parses; the sync 200 `{txDigest}` path still populates it.
+    #[serde(default)]
     pub tx_digest: String,
 }
 

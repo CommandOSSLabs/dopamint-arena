@@ -12,9 +12,13 @@ pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
-    /// Shared with the arena opener, which has the settler sponsor each bot open's gas (ADR-0028):
-    /// one settler instance (and one `sponsor_nonce`) backs opens, faucet, `/settle`, and sponsors.
+    /// Shared (`Arc`): the arena opener has the settler sponsor each bot open's gas (ADR-0028) and
+    /// the async settle-worker pool holds it as a `BatchSettler` — one settler instance (and one
+    /// `sponsor_nonce`) backs opens, faucet, `/settle`, and user sponsors.
     pub settler: std::sync::Arc<crate::sui::SuiSettler>,
+    /// Durable settle queue (ADR-0029): `/settle` enqueues here and returns 202; the worker pool
+    /// drains it, coalescing many closes into one PTB.
+    pub settle_queue: std::sync::Arc<dyn crate::settle_queue::SettleQueue>,
     /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
     /// `settler` as the fallback. `None` = settler-only.
     pub enoki: Option<crate::enoki::EnokiClient>,
@@ -93,6 +97,7 @@ impl AppState {
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
             settler: Arc::new(crate::sui::SuiSettler::noop()),
+            settle_queue: Arc::new(crate::settle_queue::InMemorySettleQueue::default()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
@@ -118,18 +123,6 @@ impl AppState {
             faucet_max_per_window: 5,
             faucet_admin_token: None,
         })
-    }
-
-    /// Test builder that wires a recording S3 archiver. Settler stays noop;
-    /// Redis/Postgres/S3 unused otherwise.
-    pub fn with_fake_archiver(
-        archiver: std::sync::Arc<dyn crate::s3::TranscriptArchiver>,
-    ) -> SharedState {
-        let mut s = Self::in_memory_for_test();
-        let inner = std::sync::Arc::get_mut(&mut s).expect("unique test arc");
-        inner.archiver = Some(archiver);
-        inner.s3_prefix = "".into();
-        s
     }
 }
 
