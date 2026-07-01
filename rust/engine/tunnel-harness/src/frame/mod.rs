@@ -73,7 +73,7 @@ pub struct MoveFrame<M> {
 }
 
 /// The responder's co-signature over the same state_update message.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AckFrame {
     pub nonce: u64,
     #[serde(with = "BigArray")]
