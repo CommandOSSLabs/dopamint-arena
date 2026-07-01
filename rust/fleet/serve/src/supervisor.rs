@@ -91,6 +91,7 @@ mod tests {
             Ok(DriverOutcome {
                 moves,
                 final_balances: Balances { a: 1, b: 1 },
+                play_ns: 0,
             })
         })
     }

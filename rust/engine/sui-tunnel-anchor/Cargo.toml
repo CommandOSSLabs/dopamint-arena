@@ -21,5 +21,6 @@ sui-rpc.workspace = true
 sui-sdk-types.workspace = true
 tokio.workspace = true
 tonic.workspace = true
+tracing.workspace = true
 tunnel-core = { path = "../tunnel-core" }
 tunnel-harness = { path = "../tunnel-harness" }

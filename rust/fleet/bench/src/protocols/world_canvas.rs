@@ -1,20 +1,21 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
+use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
-use crate::party_driver::{MatchResult, SeatKit};
+use crate::party_driver::TunnelTelemetry;
+use crate::party_driver::{SeatKit, TunnelOutcome};
 use tunnel_world_canvas::{
     WorldCanvasCell, WorldCanvasCellStrategy, WorldCanvasStroke, WorldCanvasStrokeStrategy,
 };
 
-pub(crate) fn play_cell(
+pub(crate) async fn play_cell(
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult {
+    telemetry: TunnelTelemetry,
+) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     let protocol = WorldCanvasCell::new(256, 16, MAX_MOVES).expect("valid cell canvas");
     play_with_strategies(
@@ -24,25 +25,26 @@ pub(crate) fn play_cell(
         codec,
         anchor_mode,
         sui_context,
-        transcript_recorder,
         seed,
         kit,
         tunnel_id,
         DEFAULT_BALANCE,
         DEFAULT_BALANCE,
         MAX_MOVES,
+        telemetry,
     )
+    .await
 }
 
-pub(crate) fn play_stroke(
+pub(crate) async fn play_stroke(
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult {
+    telemetry: TunnelTelemetry,
+) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
         WorldCanvasStroke,
@@ -51,12 +53,13 @@ pub(crate) fn play_stroke(
         codec,
         anchor_mode,
         sui_context,
-        transcript_recorder,
         seed,
         kit,
         tunnel_id,
         DEFAULT_BALANCE,
         DEFAULT_BALANCE,
         MAX_MOVES,
+        telemetry,
     )
+    .await
 }
