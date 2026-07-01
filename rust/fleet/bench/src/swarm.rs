@@ -17,7 +17,20 @@ use tokio::task::{JoinError, JoinSet};
 use tunnel_harness::DriverRunControl;
 use tunnel_telemetry::{CollectingSink, RunTelemetry};
 
-const TUNNEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(300);
+const TUNNEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Wall-clock grace granted to detached background tasks (fire-and-forget
+/// heartbeat POSTs) to finish after the measured run ends. Dropping a runtime
+/// cancels its still-pending tasks mid-request, so an explicit timed shutdown
+/// lets terminal heartbeats drain. Costs nothing when no tasks are pending.
+const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// Cap on retained per-tunnel samples. Headline totals and counts are tracked
+/// exactly regardless of this cap; only the inputs to per-tunnel *distributions*
+/// and telemetry are bounded (via reservoir sampling), so a multi-million-tunnel
+/// soak run cannot grow memory without limit. Runs at or below this many tunnels
+/// retain every sample, so their reported distributions are exact.
+const SAMPLE_RESERVOIR_CAP: usize = 50_000;
 
 /// Golden seat A secret: bytes 0x01..0x20.
 pub const SEAT_A: [u8; 32] = {
@@ -165,7 +178,7 @@ fn ptb_metrics_delta(before: SuiPtbMetricsSnapshot, after: SuiPtbMetricsSnapshot
 
 #[allow(clippy::too_many_arguments)]
 fn aggregate(
-    samples: Vec<TunnelSample>,
+    samples: TunnelSamples,
     elapsed_ms: u128,
     move_window_elapsed_ms: u128,
     open_active_elapsed_ms: u128,
@@ -174,31 +187,39 @@ fn aggregate(
     sui_ptb_metrics: SuiPtbMetrics,
     tunnels_aborted: u64,
 ) -> SwarmOutcome {
-    let tunnels_claimed = samples.len() as u64;
-    let tunnels_opened = samples.iter().filter(|s| s.open_ok).count() as u64;
-    let tunnels_settled = samples.iter().filter(|s| s.settle_ok).count() as u64;
+    // Headline totals/counts are exact (running scalars); only distribution and
+    // telemetry inputs come from the bounded reservoir.
+    let tunnels_claimed = samples.claimed;
+    let tunnels_opened = samples.opened;
+    let tunnels_settled = samples.settled;
     let tunnels_failed = tunnels_claimed.saturating_sub(tunnels_settled);
-    let moves: u64 = samples.iter().map(|s| s.moves).sum();
-    let bytes: u64 = samples.iter().map(|s| s.bytes).sum();
-    let play_ns_total: u128 = samples.iter().map(|s| s.play_ns).sum();
-    let total_ns_total: u128 = samples.iter().map(|s| s.total_ns).sum();
-    let moves_dist = summarize(&samples.iter().map(|s| s.moves as f64).collect::<Vec<_>>());
-    let play_ns_dist = summarize(&samples.iter().map(|s| s.play_ns as f64).collect::<Vec<_>>());
+    let moves = samples.moves;
+    let bytes = samples.bytes;
+    let play_ns_total = samples.play_ns_total;
+    let total_ns_total = samples.total_ns_total;
+    let retained = samples.reservoir;
+    let moves_dist = summarize(&retained.iter().map(|s| s.moves as f64).collect::<Vec<_>>());
+    let play_ns_dist = summarize(
+        &retained
+            .iter()
+            .map(|s| s.play_ns as f64)
+            .collect::<Vec<_>>(),
+    );
     let per_tunnel_tps_play = summarize(
-        &samples
+        &retained
             .iter()
             .filter(|s| s.play_ns > 0)
             .map(|s| s.moves as f64 * 1_000_000_000.0 / s.play_ns as f64)
             .collect::<Vec<_>>(),
     );
     let per_tunnel_tps_e2e = summarize(
-        &samples
+        &retained
             .iter()
             .filter(|s| s.total_ns > 0)
             .map(|s| s.moves as f64 * 1_000_000_000.0 / s.total_ns as f64)
             .collect::<Vec<_>>(),
     );
-    let telemetry = RunTelemetry::from_sinks(samples.iter().map(|s| s.sink.clone()).collect());
+    let telemetry = RunTelemetry::from_sinks(retained.iter().map(|s| s.sink.clone()).collect());
     // Single source of truth: export bytes come from the recorder's measured
     // `RecorderExport` samples, never double-counted with a separate total.
     let transcript_export_bytes = telemetry.export_bytes_total();
@@ -294,13 +315,103 @@ async fn run_one_tunnel(
     }
 }
 
+/// Fast, non-cryptographic PRNG for reservoir index selection. Seeded once from
+/// the OS RNG; a per-sample syscall would defeat the point of a perf change, and
+/// a weak seed only skews *which* samples are retained, never correctness.
+struct Xorshift64(u64);
+
+impl Xorshift64 {
+    fn seeded() -> Self {
+        let mut buf = [0u8; 8];
+        let _ = getrandom::getrandom(&mut buf);
+        Self(u64::from_le_bytes(buf) | 1)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+}
+
+/// Accumulates per-tunnel results with exact running aggregates plus a bounded
+/// reservoir of full samples for distribution and telemetry inputs. The coordinator
+/// loop grows one entry per completed tunnel for the whole run, so an unbounded Vec
+/// would balloon memory and force an O(N²) move-target re-sum; the exact scalars
+/// here make the move-target check O(1) and keep headline numbers exact, while the
+/// reservoir bounds memory. See `SAMPLE_RESERVOIR_CAP` for the exactness contract.
+struct TunnelSamples {
+    claimed: u64,
+    opened: u64,
+    settled: u64,
+    moves: u64,
+    bytes: u64,
+    play_ns_total: u128,
+    total_ns_total: u128,
+    reservoir: Vec<TunnelSample>,
+    rng: Xorshift64,
+}
+
+impl TunnelSamples {
+    fn new() -> Self {
+        Self {
+            claimed: 0,
+            opened: 0,
+            settled: 0,
+            moves: 0,
+            bytes: 0,
+            play_ns_total: 0,
+            total_ns_total: 0,
+            reservoir: Vec::new(),
+            rng: Xorshift64::seeded(),
+        }
+    }
+
+    fn record(&mut self, sample: TunnelSample) {
+        self.claimed += 1;
+        if sample.open_ok {
+            self.opened += 1;
+        }
+        if sample.settle_ok {
+            self.settled += 1;
+        }
+        self.moves += sample.moves;
+        self.bytes += sample.bytes;
+        self.play_ns_total += sample.play_ns;
+        self.total_ns_total += sample.total_ns;
+
+        // Reservoir sampling (Algorithm R): retain a uniform sample of all tunnels.
+        if self.reservoir.len() < SAMPLE_RESERVOIR_CAP {
+            self.reservoir.push(sample);
+        } else {
+            let idx = (self.rng.next_u64() % self.claimed) as usize;
+            if idx < SAMPLE_RESERVOIR_CAP {
+                self.reservoir[idx] = sample;
+            }
+        }
+    }
+
+    /// Exact total committed moves across every recorded tunnel (O(1)).
+    fn committed_moves(&self) -> u64 {
+        self.moves
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.claimed == 0
+    }
+}
+
 fn record_tunnel_join(
-    samples: &mut Vec<TunnelSample>,
+    samples: &mut TunnelSamples,
     result: Result<TunnelSample, JoinError>,
 ) -> bool {
     match result {
         Ok(sample) => {
-            samples.push(sample);
+            samples.record(sample);
             false
         }
         Err(error) => {
@@ -336,11 +447,11 @@ fn move_target_count(moves: Option<MoveTarget>) -> Option<u64> {
     }
 }
 
-fn reached_move_target(samples: &[TunnelSample], moves: Option<MoveTarget>) -> bool {
+fn reached_move_target(samples: &TunnelSamples, moves: Option<MoveTarget>) -> bool {
     let Some(target) = move_target_count(moves) else {
         return false;
     };
-    samples.iter().map(|sample| sample.moves).sum::<u64>() >= target
+    samples.committed_moves() >= target
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -432,7 +543,7 @@ pub fn run_lifecycle_pipeline(
             next_index += 1;
         }
 
-        let mut samples = Vec::new();
+        let mut samples = TunnelSamples::new();
         let mut tunnels_aborted = 0;
         let Some(move_window_started) = wait_for_first_play_window(
             &stage_windows_for_tasks,
@@ -506,6 +617,9 @@ pub fn run_lifecycle_pipeline(
             tunnels_aborted,
         )
     });
+    // Give detached telemetry (fire-and-forget heartbeat POSTs) a bounded window
+    // to finish; an implicit runtime drop would cancel them mid-request.
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_GRACE);
     let gas_after = gas_context
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
@@ -549,7 +663,7 @@ pub fn run_lifecycle_pipeline(
 async fn wait_for_first_play_window(
     stage_windows: &StageWindowRecorder,
     tasks: &mut JoinSet<TunnelSample>,
-    samples: &mut Vec<TunnelSample>,
+    samples: &mut TunnelSamples,
     tunnels_aborted: &mut u64,
     timeout: Duration,
 ) -> Option<Instant> {
@@ -590,10 +704,17 @@ async fn wait_for_first_play_window(
 
 async fn drain_join_set_with_timeout(
     tasks: &mut JoinSet<TunnelSample>,
-    samples: &mut Vec<TunnelSample>,
+    samples: &mut TunnelSamples,
     tunnels_aborted: &mut u64,
     timeout: Duration,
 ) {
+    if !tasks.is_empty() {
+        tracing::info!(
+            pending = tasks.len(),
+            timeout_ms = timeout.as_millis(),
+            "draining tunnel tasks after stop"
+        );
+    }
     let now = Instant::now();
     let deadline = now.checked_add(timeout).unwrap_or(now);
     while !tasks.is_empty() {
@@ -660,8 +781,11 @@ mod tests {
 
     #[test]
     fn aggregates_per_tunnel_tps_distribution() {
+        let mut samples = TunnelSamples::new();
+        samples.record(sample_with_tps(300.0));
+        samples.record(sample_with_tps(500.0));
         let outcome = aggregate(
-            vec![sample_with_tps(300.0), sample_with_tps(500.0)],
+            samples,
             1000,
             900,
             1000,
@@ -675,6 +799,20 @@ mod tests {
         assert_eq!(outcome.per_tunnel_tps_e2e.peak, 250.0);
         assert_eq!(outcome.telemetry.count(StageId::Move), 0);
         assert_eq!(outcome.tunnels_failed, 0);
+    }
+
+    #[test]
+    fn tunnel_samples_keep_exact_totals_and_bounded_reservoir() {
+        let mut samples = TunnelSamples::new();
+        let n = SAMPLE_RESERVOIR_CAP as u64 + 1_000;
+        for _ in 0..n {
+            samples.record(sample_with_tps(3.0));
+        }
+        // Headline totals stay exact regardless of the cap...
+        assert_eq!(samples.claimed, n);
+        assert_eq!(samples.committed_moves(), n * 3);
+        // ...while retained per-tunnel samples never exceed the reservoir cap.
+        assert_eq!(samples.reservoir.len(), SAMPLE_RESERVOIR_CAP);
     }
 
     #[test]
@@ -725,7 +863,7 @@ mod tests {
                 sample_with_tps(1.0)
             });
 
-            let mut samples = Vec::new();
+            let mut samples = TunnelSamples::new();
             let mut aborted = 0;
             while let Some(result) = tasks.join_next().await {
                 if record_tunnel_join(&mut samples, result) {
@@ -753,7 +891,7 @@ mod tests {
                 sample_with_tps(1.0)
             });
 
-            let mut samples = Vec::new();
+            let mut samples = TunnelSamples::new();
             let mut aborted = 0;
             drain_join_set_with_timeout(
                 &mut tasks,
@@ -785,7 +923,7 @@ mod tests {
                 sample_with_tps(1.0)
             });
 
-            let mut samples = Vec::new();
+            let mut samples = TunnelSamples::new();
             let mut aborted = 0;
             let start = wait_for_first_play_window(
                 &stage_windows,
@@ -841,10 +979,10 @@ mod tests {
                     .build()
                     .expect("test runtime");
                 runtime.block_on(async {
-                    let mut samples = Vec::new();
+                    let mut samples = TunnelSamples::new();
                     for tunnel_index in 0..8 {
                         let run_control = DriverRunControl::with_move_limit(20 + tunnel_index);
-                        samples.push(
+                        samples.record(
                             run_one_tunnel(
                                 tunnel_index,
                                 ScenarioMode::Varied,
@@ -874,16 +1012,17 @@ mod tests {
             .expect("varied mode test thread");
         let moves_dist = summarize(
             &samples
+                .reservoir
                 .iter()
                 .map(|sample| sample.moves as f64)
                 .collect::<Vec<_>>(),
         );
-        assert!(samples.iter().all(|sample| sample.settle_ok));
+        assert!(samples.reservoir.iter().all(|sample| sample.settle_ok));
         assert!(
             moves_dist.peak > moves_dist.min,
             "move-control samples should vary: {moves_dist:?}"
         );
-        assert!(samples.iter().all(|sample| sample.play_ns > 0));
+        assert!(samples.reservoir.iter().all(|sample| sample.play_ns > 0));
     }
 
     #[test]
