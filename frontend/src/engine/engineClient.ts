@@ -19,6 +19,7 @@ import type {
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
 import { enginePoolEnabled } from "./flag";
+import { resumeIdb } from "./persist/idb";
 import { elog } from "./debug";
 import type { GameWorkerApi } from "./engine.game.worker";
 
@@ -253,6 +254,22 @@ function propagateVisibility(windowId: string, visible: boolean): void {
   }
 }
 
+/** Pool resume: mirror the hub — peek IndexedDB first and only spawn a game worker for a window that
+ *  actually has a match to resume, so a fresh open sits at its lobby (no worker) until the user plays. */
+async function resumePoolWindow(
+  windowId: string,
+  gameId: GameId,
+): Promise<void> {
+  let records;
+  try {
+    records = await resumeIdb.getAllByGame(gameId);
+  } catch {
+    return;
+  }
+  if (!records || records.length === 0) return;
+  fire(ensureGameWorker(windowId).resume(gameId));
+}
+
 // --- dispose ------------------------------------------------------------------------------
 
 function disposeWindow(windowId: string): void {
@@ -349,7 +366,7 @@ export const engineClient = {
   resume(windowId: string, gameId: GameId): void {
     ensurePvpWindow(windowId);
     if (enginePoolEnabled()) {
-      fire(ensureGameWorker(windowId).resume(gameId));
+      void resumePoolWindow(windowId, gameId);
       return;
     }
     fire(ensureHub().resume(windowId, gameId));
