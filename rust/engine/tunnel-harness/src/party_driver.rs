@@ -9,7 +9,12 @@ use crate::{
     Protocol, Seat, SettlementMode, Signer, TranscriptRecorder, TranscriptSettleEntry,
     TunnelAnchor, TunnelAnchorError, TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
 };
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use std::time::{Duration, Instant};
+use tokio::sync::watch;
 use tunnel_core::protocol_id::ProtocolId;
 use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Settlement};
 
@@ -34,6 +39,120 @@ pub struct SeatParts<P: Protocol, S: Signer> {
     pub seat: Seat,
 }
 
+#[derive(Clone)]
+pub struct DriverRunControl {
+    inner: Arc<DriverRunControlInner>,
+}
+
+struct DriverRunControlInner {
+    move_limit: Option<u64>,
+    move_reservations: AtomicU64,
+    moves: AtomicU64,
+    stop_tx: watch::Sender<bool>,
+}
+
+impl Default for DriverRunControl {
+    fn default() -> Self {
+        Self::unbounded()
+    }
+}
+
+impl DriverRunControl {
+    pub fn unbounded() -> Self {
+        let (stop_tx, _) = watch::channel(false);
+        Self {
+            inner: Arc::new(DriverRunControlInner {
+                move_limit: None,
+                move_reservations: AtomicU64::new(0),
+                moves: AtomicU64::new(0),
+                stop_tx,
+            }),
+        }
+    }
+
+    pub fn with_move_limit(move_limit: u64) -> Self {
+        let (stop_tx, _) = watch::channel(move_limit == 0);
+        Self {
+            inner: Arc::new(DriverRunControlInner {
+                move_limit: Some(move_limit),
+                move_reservations: AtomicU64::new(0),
+                moves: AtomicU64::new(0),
+                stop_tx,
+            }),
+        }
+    }
+
+    pub fn request_stop(&self) {
+        self.inner.stop_tx.send_replace(true);
+    }
+
+    pub fn stopped(&self) -> bool {
+        *self.inner.stop_tx.borrow()
+    }
+
+    pub fn moves(&self) -> u64 {
+        self.inner.moves.load(Ordering::Relaxed)
+    }
+
+    fn subscribe(&self) -> watch::Receiver<bool> {
+        self.inner.stop_tx.subscribe()
+    }
+
+    fn has_outstanding_reserved_move(&self) -> bool {
+        self.inner.move_reservations.load(Ordering::Acquire)
+            > self.inner.moves.load(Ordering::Acquire)
+    }
+
+    fn reserve_move_proposal(&self) -> bool {
+        let Some(move_limit) = self.inner.move_limit else {
+            self.inner.move_reservations.fetch_add(1, Ordering::AcqRel);
+            if self.stopped() {
+                self.inner.move_reservations.fetch_sub(1, Ordering::AcqRel);
+                return false;
+            }
+            return true;
+        };
+
+        loop {
+            if self.stopped() {
+                return false;
+            }
+            let reservations = self.inner.move_reservations.load(Ordering::Acquire);
+            if reservations >= move_limit {
+                return false;
+            }
+            if self
+                .inner
+                .move_reservations
+                .compare_exchange_weak(
+                    reservations,
+                    reservations + 1,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn record_committed_move_observed_by(&self, seat: Seat) {
+        if seat != Seat::A {
+            return;
+        }
+
+        let moves = self.inner.moves.fetch_add(1, Ordering::Relaxed) + 1;
+        if self
+            .inner
+            .move_limit
+            .is_some_and(|move_limit| moves >= move_limit)
+        {
+            self.request_stop();
+        }
+    }
+}
+
 pub struct PartyDriver<P, Pol, Ch, S, A, R, C = JsonFrameCodec>
 where
     P: Protocol,
@@ -51,6 +170,7 @@ where
     recorder: R,
     observers: Vec<Box<dyn DriverObserver>>,
     codec: C,
+    run_control: Option<DriverRunControl>,
 }
 
 impl<P, Pol, Ch, S, A, R> PartyDriver<P, Pol, Ch, S, A, R, JsonFrameCodec>
@@ -107,6 +227,7 @@ where
             recorder,
             observers: Vec::new(),
             codec,
+            run_control: None,
         }
     }
 
@@ -114,6 +235,11 @@ where
     /// registration order; each receives every event read-only.
     pub fn observe(mut self, observer: Box<dyn DriverObserver>) -> Self {
         self.observers.push(observer);
+        self
+    }
+
+    pub fn with_run_control(mut self, run_control: DriverRunControl) -> Self {
+        self.run_control = Some(run_control);
         self
     }
 
@@ -132,6 +258,7 @@ where
             recorder,
             mut observers,
             codec,
+            run_control,
         } = self;
 
         let result = Self::drive(
@@ -143,6 +270,7 @@ where
             &recorder,
             &mut observers,
             max_moves,
+            run_control,
             &mut now,
         )
         .await;
@@ -169,6 +297,7 @@ where
         recorder: &R,
         observers: &mut [Box<dyn DriverObserver>],
         max_moves: u64,
+        run_control: Option<DriverRunControl>,
         now: &mut (impl FnMut() -> u64 + Send),
     ) -> Result<DriverOutcome, HarnessError> {
         let protocol_id = ProtocolId::parse(parts.protocol.name())
@@ -230,13 +359,52 @@ where
             if seat.is_terminal() {
                 break;
             }
+            if run_control
+                .as_ref()
+                .is_some_and(|control| control.stopped())
+            {
+                match Self::recv_or_stop(frame_transport, run_control.as_ref()).await? {
+                    DriverRecv::Frame(bytes) => {
+                        let out = seat.handle_frame(&bytes)?;
+                        for f in out {
+                            frame_transport.send(f).await?;
+                        }
+                        moves += 1;
+                        let ev = MoveCommitted {
+                            by: our_seat.other(),
+                            nonce: seat.nonce(),
+                            move_index: moves,
+                            timestamp_ms: next_timestamp(),
+                        };
+                        for o in observers.iter_mut() {
+                            o.on_move_committed(&ev);
+                        }
+                        if let Some(entry) = seat.take_last_committed() {
+                            last_timestamp = entry.timestamp;
+                            recorder.record(entry)?;
+                        }
+                        if let Some(control) = run_control.as_ref() {
+                            control.record_committed_move_observed_by(our_seat);
+                        }
+                        continue;
+                    }
+                    DriverRecv::Closed | DriverRecv::Stopped => break,
+                }
+            }
             if moves >= max_moves {
                 return Err(HarnessError::Verification(
                     "max moves reached before terminal".into(),
                 ));
             }
 
-            if let Some(mv) = move_strategy.plan_move(seat.state(), our_seat, &ctx).await {
+            let planned_move = move_strategy.plan_move(seat.state(), our_seat, &ctx).await;
+
+            if let Some(mv) = planned_move {
+                if let Some(control) = run_control.as_ref() {
+                    if !control.reserve_move_proposal() {
+                        break;
+                    }
+                }
                 let frame = seat.propose(mv, next_timestamp())?;
                 frame_transport.send(frame).await?;
                 match frame_transport.recv().await? {
@@ -260,14 +428,17 @@ where
                             last_timestamp = entry.timestamp;
                             recorder.record(entry)?;
                         }
+                        if let Some(control) = run_control.as_ref() {
+                            control.record_committed_move_observed_by(our_seat);
+                        }
                     }
                     None => return Err(HarnessError::FrameTransport(FrameTransportError::Closed)),
                 }
                 continue;
             }
 
-            match frame_transport.recv().await? {
-                Some(bytes) => {
+            match Self::recv_or_stop(frame_transport, run_control.as_ref()).await? {
+                DriverRecv::Frame(bytes) => {
                     let out = seat.handle_frame(&bytes)?;
                     for f in out {
                         frame_transport.send(f).await?;
@@ -286,8 +457,14 @@ where
                         last_timestamp = entry.timestamp;
                         recorder.record(entry)?;
                     }
+                    if let Some(control) = run_control.as_ref() {
+                        control.record_committed_move_observed_by(our_seat);
+                    }
                 }
-                None => return Err(HarnessError::FrameTransport(FrameTransportError::Closed)),
+                DriverRecv::Closed => {
+                    return Err(HarnessError::FrameTransport(FrameTransportError::Closed));
+                }
+                DriverRecv::Stopped => break,
             }
         }
 
@@ -356,6 +533,64 @@ where
         }
         Ok(outcome)
     }
+
+    async fn recv_or_stop(
+        frame_transport: &Ch,
+        run_control: Option<&DriverRunControl>,
+    ) -> Result<DriverRecv, HarnessError> {
+        let Some(run_control) = run_control else {
+            return match frame_transport.recv().await? {
+                Some(bytes) => Ok(DriverRecv::Frame(bytes)),
+                None => Ok(DriverRecv::Closed),
+            };
+        };
+
+        let mut stop_rx = run_control.subscribe();
+        loop {
+            if run_control.stopped() {
+                if !run_control.has_outstanding_reserved_move() {
+                    return Ok(DriverRecv::Stopped);
+                }
+                match tokio::time::timeout(Duration::from_millis(1), frame_transport.recv()).await {
+                    Ok(frame) => {
+                        return match frame? {
+                            Some(bytes) => Ok(DriverRecv::Frame(bytes)),
+                            None if run_control.stopped()
+                                && !run_control.has_outstanding_reserved_move() =>
+                            {
+                                Ok(DriverRecv::Stopped)
+                            }
+                            None => Ok(DriverRecv::Closed),
+                        };
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            tokio::select! {
+                biased;
+
+                frame = frame_transport.recv() => {
+                    return match frame? {
+                        Some(bytes) => Ok(DriverRecv::Frame(bytes)),
+                        None if run_control.stopped() => Ok(DriverRecv::Stopped),
+                        None => Ok(DriverRecv::Closed),
+                    };
+                }
+                changed = stop_rx.changed() => {
+                    if changed.is_err() {
+                        return Ok(DriverRecv::Stopped);
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum DriverRecv {
+    Frame(Vec<u8>),
+    Closed,
+    Stopped,
 }
 
 #[cfg(test)]
@@ -383,6 +618,61 @@ mod tests {
     struct OneMoveState {
         moved: bool,
         balances: Balances,
+    }
+
+    #[derive(Clone)]
+    struct RepeatingProtocol;
+
+    #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+    struct RepeatingMove;
+
+    #[derive(Clone)]
+    struct RepeatingState {
+        moves: u64,
+        balances: Balances,
+    }
+
+    impl Protocol for RepeatingProtocol {
+        type State = RepeatingState;
+        type Move = RepeatingMove;
+
+        fn name(&self) -> &str {
+            "repeating.v1"
+        }
+
+        fn initial_state(&self, ctx: &TunnelContext) -> Self::State {
+            RepeatingState {
+                moves: 0,
+                balances: ctx.initial,
+            }
+        }
+
+        fn apply_move(
+            &self,
+            state: &Self::State,
+            _mv: &Self::Move,
+            by: Seat,
+        ) -> Result<Self::State, crate::ProtocolError> {
+            if by != Seat::A {
+                return Err(crate::ProtocolError("only A can move".into()));
+            }
+            Ok(RepeatingState {
+                moves: state.moves + 1,
+                balances: state.balances,
+            })
+        }
+
+        fn encode_state(&self, state: &Self::State) -> Vec<u8> {
+            state.moves.to_le_bytes().to_vec()
+        }
+
+        fn balances(&self, state: &Self::State) -> Balances {
+            state.balances
+        }
+
+        fn is_terminal(&self, state: &Self::State) -> bool {
+            state.moves >= 100
+        }
     }
 
     impl Protocol for OneMoveProtocol {
@@ -510,6 +800,287 @@ mod tests {
             initial: Balances { a: 100, b: 100 },
             seat,
         }
+    }
+
+    fn repeating_parts(
+        seat: Seat,
+        secret: &[u8; 32],
+        opponent_pk: [u8; 32],
+    ) -> SeatParts<RepeatingProtocol, LocalSigner> {
+        SeatParts {
+            protocol: RepeatingProtocol,
+            signer: LocalSigner::from_secret(secret),
+            opponent_pk,
+            initial: Balances { a: 100, b: 100 },
+            seat,
+        }
+    }
+
+    struct RepeatingStrategy;
+
+    impl MoveStrategy<RepeatingProtocol> for RepeatingStrategy {
+        async fn plan_move(
+            &mut self,
+            _state: &RepeatingState,
+            seat: Seat,
+            _ctx: &crate::MoveStrategyContext,
+        ) -> Option<RepeatingMove> {
+            (seat == Seat::A).then_some(RepeatingMove)
+        }
+    }
+
+    struct StopAfterSendTransport<T> {
+        inner: T,
+        run_control: DriverRunControl,
+    }
+
+    impl<T: FrameTransport> FrameTransport for StopAfterSendTransport<T> {
+        async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+            self.inner.send(bytes).await?;
+            self.run_control.request_stop();
+            Ok(())
+        }
+
+        async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+            self.inner.recv().await
+        }
+    }
+
+    struct StopBeforeSendTransport<T> {
+        inner: T,
+        run_control: DriverRunControl,
+    }
+
+    impl<T: FrameTransport> FrameTransport for StopBeforeSendTransport<T> {
+        async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+            self.run_control.request_stop();
+            tokio::task::yield_now().await;
+            self.inner.send(bytes).await
+        }
+
+        async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+            self.inner.recv().await
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_control_move_limit_stops_non_terminal_drivers_and_settles() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::with_move_limit(2);
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("drivers should stop and settle after the cooperative limit");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 2);
+        assert_eq!(out_b.moves, 2);
+        assert_eq!(run_control.moves(), 2);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.party_a_balance == 100));
+        assert!(requests.iter().all(|r| r.party_b_balance == 100));
+    }
+
+    #[test]
+    fn run_control_reserves_move_limit_exactly() {
+        let run_control = DriverRunControl::with_move_limit(1);
+
+        assert!(run_control.reserve_move_proposal());
+        assert!(!run_control.reserve_move_proposal());
+        assert_eq!(run_control.moves(), 0);
+
+        run_control.record_committed_move_observed_by(Seat::A);
+
+        assert_eq!(run_control.moves(), 1);
+        assert!(run_control.stopped());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn external_stop_after_queued_move_still_allows_ack_and_settlement() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::unbounded();
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            StopAfterSendTransport {
+                inner: ch_a,
+                run_control: run_control.clone(),
+            },
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("queued move should be acked before cooperative stop is honored");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 1);
+        assert_eq!(out_b.moves, 1);
+        assert_eq!(run_control.moves(), 1);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.party_a_balance == 100));
+        assert!(requests.iter().all(|r| r.party_b_balance == 100));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn external_stop_after_reservation_before_send_still_allows_ack_and_settlement() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::with_move_limit(1);
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            StopBeforeSendTransport {
+                inner: ch_a,
+                run_control: run_control.clone(),
+            },
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("reserved move should be acked before cooperative stop is honored");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 1);
+        assert_eq!(out_b.moves, 1);
+        assert_eq!(run_control.moves(), 1);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.party_a_balance == 100));
+        assert!(requests.iter().all(|r| r.party_b_balance == 100));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unbounded_external_stop_after_reservation_before_send_still_allows_ack_and_settlement()
+    {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::unbounded();
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            StopBeforeSendTransport {
+                inner: ch_a,
+                run_control: run_control.clone(),
+            },
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("reserved move should be acked before duration stop is honored");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 1);
+        assert_eq!(out_b.moves, 1);
+        assert_eq!(run_control.moves(), 1);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.party_a_balance == 100));
+        assert!(requests.iter().all(|r| r.party_b_balance == 100));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

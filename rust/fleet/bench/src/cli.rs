@@ -39,11 +39,11 @@ pub enum ScenarioMode {
     Golden,
 }
 
-/// How many tunnels to drive and what bounds the run.
+/// Maximum number of tunnel lifecycles to keep in flight.
 /// - `Auto`: duration-led steady state — keep a worker-sized pool of tunnels in
 ///   flight, relaunching as they finish, for the full `--duration`.
-/// - `Fixed(n)`: count-led burst — run exactly `n` tunnels once; `--duration` is
-///   only a guard that aborts an overrunning run.
+/// - `Fixed(n)`: keep at most `n` tunnel lifecycles in flight until the global
+///   duration or move cap stops production, then drain open tunnels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConcurrencyMode {
     Auto,
@@ -87,8 +87,9 @@ impl ScenarioMode {
 pub struct BenchOpts {
     pub workers: usize,
     pub duration_secs: u64,
-    /// Tunnel concurrency: `auto` (duration-led steady state) or a fixed count
-    /// (count-led burst). Replaces the old fixed-count flag.
+    /// Optional global move cap across the benchmark run.
+    pub moves: Option<u64>,
+    /// Tunnel lifecycle pool size: `auto` or a fixed in-flight count.
     pub tunnel_concurrency: ConcurrencyMode,
     /// Show the per-move latency breakdown — per-frame transport send/recv (and
     /// recorder-record, when a real recorder runs) latency rows. Off by default.
@@ -183,11 +184,9 @@ Sui sponsored anchor flags:\n  \
 --sui-stake-source address-balance: withdraw the total stake from the sender balance\n  \
 --sui-open-batch-size: max sponsored open requests per PTB batch; default 255, maximum 255\n  \
 --sui-open-batch-flush-ms: open batch flush cadence in milliseconds; default 250\n  \
---sui-open-batch-max-wait-ms: maximum time an open request waits before flush; default 1000\n  \
 --sui-disable-open-batching: execute each sponsored open request without the batch queue\n\n\
---sui-settle-batch-size: max PTB settle requests per batch; default 255, maximum 255\n  \
+--sui-settle-batch-size: max PTB settle requests per batch; default 681, maximum 681\n  \
 --sui-settle-batch-flush-ms: settle batch flush cadence in milliseconds; default 250\n  \
---sui-settle-batch-max-wait-ms: maximum time a settle request waits before flush; default 1000\n  \
 --sui-disable-settle-batching: execute each PTB settlement without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
@@ -197,10 +196,13 @@ struct Raw {
     /// Number of Tokio runtime worker threads, or `auto` to use available CPU parallelism.
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     workers: String,
-    /// Duration for auto steady-state runs. Fixed tunnel counts drain to completion.
+    /// Duration before move production stops and in-flight tunnels drain.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
-    /// Tunnel concurrency: `auto` (duration-led steady state) or a fixed count.
+    /// Optional global move cap across the benchmark run.
+    #[arg(long = "moves", value_name = "N")]
+    moves: Option<u64>,
+    /// Tunnel lifecycle pool size: `auto` or a fixed in-flight count.
     #[arg(
         long = "tunnel-concurrency",
         default_value = "auto",
@@ -319,20 +321,13 @@ struct Raw {
         value_name = "MS"
     )]
     sui_open_batch_flush_ms: u64,
-    /// Maximum Sui open request wait time before a batch flush.
-    #[arg(
-        long = "sui-open-batch-max-wait-ms",
-        default_value_t = 1_000,
-        value_name = "MS"
-    )]
-    sui_open_batch_max_wait_ms: u64,
     /// Disable Sui sponsored open PTB batching.
     #[arg(long = "sui-disable-open-batching")]
     sui_disable_open_batching: bool,
     /// Maximum Sui PTB settle requests per batch.
     #[arg(
         long = "sui-settle-batch-size",
-        default_value_t = 255,
+        default_value_t = 681,
         value_name = "N"
     )]
     sui_settle_batch_size: usize,
@@ -343,13 +338,6 @@ struct Raw {
         value_name = "MS"
     )]
     sui_settle_batch_flush_ms: u64,
-    /// Maximum Sui settle request wait time before a batch flush.
-    #[arg(
-        long = "sui-settle-batch-max-wait-ms",
-        default_value_t = 1_000,
-        value_name = "MS"
-    )]
-    sui_settle_batch_max_wait_ms: u64,
     /// Disable Sui PTB settlement batching.
     #[arg(long = "sui-disable-settle-batching")]
     sui_disable_settle_batching: bool,
@@ -438,6 +426,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     if workers == 0 {
         return Err("--workers must be at least 1".to_string());
     }
+    if raw.moves == Some(0) {
+        return Err("--moves must be greater than 0".to_string());
+    }
 
     let signer_init_mode = match raw.signer_init_mode.as_str() {
         "per-tunnel" => SignerInitMode::PerTunnel,
@@ -493,12 +484,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     };
 
     let sui_anchor = if anchor_mode == AnchorMode::SuiSponsored {
-        if transcript_recorder != TranscriptRecorderMode::Memory {
-            return Err(format!(
-                "--anchor {} requires --transcript-recorder memory",
-                raw.anchor
-            ));
-        }
         let mut missing = Vec::new();
         if raw.sui_rpc_url.is_none() {
             missing.push("--sui-rpc-url");
@@ -583,26 +568,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         if raw.sui_open_batch_flush_ms == 0 {
             return Err("--sui-open-batch-flush-ms must be greater than 0".to_string());
         }
-        if raw.sui_open_batch_max_wait_ms < raw.sui_open_batch_flush_ms {
-            return Err(
-                "--sui-open-batch-max-wait-ms must be greater than or equal to --sui-open-batch-flush-ms"
-                    .to_string(),
-            );
-        }
         if raw.sui_settle_batch_size == 0 {
             return Err("--sui-settle-batch-size must be greater than 0".to_string());
         }
-        if raw.sui_settle_batch_size > 255 {
-            return Err("--sui-settle-batch-size must be <= 255".to_string());
+        if raw.sui_settle_batch_size > 681 {
+            return Err("--sui-settle-batch-size must be <= 681".to_string());
         }
         if raw.sui_settle_batch_flush_ms == 0 {
             return Err("--sui-settle-batch-flush-ms must be greater than 0".to_string());
-        }
-        if raw.sui_settle_batch_max_wait_ms < raw.sui_settle_batch_flush_ms {
-            return Err(
-                "--sui-settle-batch-max-wait-ms must be greater than or equal to --sui-settle-batch-flush-ms"
-                    .to_string(),
-            );
         }
         Some(SuiSponsoredAnchorOpts {
             rpc_url: raw.sui_rpc_url.unwrap(),
@@ -616,13 +589,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
                 enabled: !raw.sui_disable_open_batching,
                 max_batch_size: raw.sui_open_batch_size,
                 flush_interval_ms: raw.sui_open_batch_flush_ms,
-                max_wait_ms: raw.sui_open_batch_max_wait_ms,
             },
             settle_batching: SuiOpenBatchingConfig {
                 enabled: !raw.sui_disable_settle_batching,
                 max_batch_size: raw.sui_settle_batch_size,
                 flush_interval_ms: raw.sui_settle_batch_flush_ms,
-                max_wait_ms: raw.sui_settle_batch_max_wait_ms,
             },
         })
     } else {
@@ -645,6 +616,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
+        moves: raw.moves,
         tunnel_concurrency,
         per_move_latency: raw.per_move_latency,
         trace: raw.trace,
@@ -665,6 +637,80 @@ mod tests {
 
     fn parse_v(args: &[&str]) -> Result<BenchOpts, String> {
         parse(args.iter().map(|s| s.to_string()))
+    }
+
+    fn sui_anchor_args() -> Vec<&'static str> {
+        vec![
+            "--anchor",
+            "sui-sponsored",
+            "--transcript-recorder",
+            "memory",
+            "--sui-rpc-url",
+            "http://rpc",
+            "--sui-backend-url",
+            "http://backend",
+            "--sui-package-id",
+            "0x2",
+            "--sui-funder-priv-key",
+            "suiprivkey1example",
+            "--sui-funder-stake-coin-id",
+            "0x7",
+        ]
+    }
+
+    #[test]
+    fn parses_global_move_limit() {
+        let opts = parse_v(&["--moves", "1000000"]).unwrap();
+
+        assert_eq!(opts.moves, Some(1_000_000));
+    }
+
+    #[test]
+    fn rejects_zero_global_move_limit() {
+        let err = parse_v(&["--moves", "0"]).unwrap_err();
+
+        assert!(err.contains("--moves must be greater than 0"), "{err}");
+    }
+
+    #[test]
+    fn sui_batching_uses_flush_without_max_wait() {
+        let opts = parse_v(&sui_anchor_args()).expect("parse sui opts");
+        let sui = opts.sui_anchor.expect("sui opts");
+
+        assert_eq!(sui.open_batching.max_batch_size, 255);
+        assert_eq!(sui.open_batching.flush_interval_ms, 250);
+        assert_eq!(sui.settle_batching.max_batch_size, 681);
+        assert_eq!(sui.settle_batching.flush_interval_ms, 250);
+    }
+
+    #[test]
+    fn max_wait_batch_flags_are_removed() {
+        let mut open_max_wait = sui_anchor_args();
+        open_max_wait.extend(["--sui-open-batch-max-wait-ms", "1000"]);
+        let err = parse_v(&open_max_wait).unwrap_err();
+        assert!(err.contains("unexpected argument"), "{err}");
+        assert!(err.contains("--sui-open-batch-max-wait-ms"), "{err}");
+
+        let mut settle_max_wait = sui_anchor_args();
+        settle_max_wait.extend(["--sui-settle-batch-max-wait-ms", "1000"]);
+        let err = parse_v(&settle_max_wait).unwrap_err();
+        assert!(err.contains("unexpected argument"), "{err}");
+        assert!(err.contains("--sui-settle-batch-max-wait-ms"), "{err}");
+    }
+
+    #[test]
+    fn settle_batch_limit_allows_681_and_rejects_682() {
+        let mut max_settle_batch = sui_anchor_args();
+        max_settle_batch.extend(["--sui-settle-batch-size", "681"]);
+        parse_v(&max_settle_batch).expect("681 settle batch size should parse");
+
+        let mut oversized_settle_batch = sui_anchor_args();
+        oversized_settle_batch.extend(["--sui-settle-batch-size", "682"]);
+        let err = parse_v(&oversized_settle_batch).unwrap_err();
+        assert!(
+            err.contains("--sui-settle-batch-size must be <= 681"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -729,8 +775,8 @@ mod tests {
 
     #[test]
     fn pre_initialized_signers_uses_tunnel_concurrency_as_pool_size() {
-        // tunnel_concurrency defaults to auto (duration-led); an explicit count
-        // pins the burst size and drives the pre-initialized signer pool.
+        // tunnel_concurrency defaults to auto; an explicit count pins the
+        // in-flight lifecycle pool and drives the pre-initialized signer pool.
         let o = parse_v(&["--signer-init-mode", "pre-initialized"]).unwrap();
         assert_eq!(o.signer_init_mode, SignerInitMode::PreInitialized);
         assert_eq!(o.tunnel_concurrency, ConcurrencyMode::Auto);
@@ -1006,14 +1052,41 @@ mod tests {
     }
 
     #[test]
-    fn anchor_sui_requires_transcript_recorder_and_config() {
+    fn anchor_sui_requires_chain_config_not_transcript_recorder() {
         let err = parse_v(&["--anchor", "sui"]).unwrap_err();
-        assert!(err.contains("transcript-recorder"), "{err}");
+        assert!(err.contains("sui-rpc-url"), "{err}");
+        assert!(err.contains("sui-funder-priv-key"), "{err}");
+        assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
 
         let err = parse_v(&["--anchor", "sui", "--transcript-recorder", "memory"]).unwrap_err();
         assert!(err.contains("sui-rpc-url"), "{err}");
         assert!(err.contains("sui-funder-priv-key"), "{err}");
         assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
+    }
+
+    #[test]
+    fn anchor_sui_allows_transcript_recorder_none() {
+        let o = parse_v(&[
+            "--anchor",
+            "sui",
+            "--transcript-recorder",
+            "none",
+            "--sui-rpc-url",
+            "https://sui.example/rpc",
+            "--sui-backend-url",
+            "https://backend.example",
+            "--sui-package-id",
+            "0xabc",
+            "--sui-funder-priv-key",
+            "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-stake-source",
+            "address-balance",
+        ])
+        .unwrap();
+
+        assert_eq!(o.transcript_recorder, TranscriptRecorderMode::None);
+        assert_eq!(o.anchor_mode, AnchorMode::SuiSponsored);
+        assert!(o.sui_anchor.is_some());
     }
 
     #[test]
@@ -1135,11 +1208,9 @@ mod tests {
         assert!(sui.open_batching.enabled);
         assert_eq!(sui.open_batching.max_batch_size, 255);
         assert_eq!(sui.open_batching.flush_interval_ms, 250);
-        assert_eq!(sui.open_batching.max_wait_ms, 1000);
         assert!(sui.settle_batching.enabled);
-        assert_eq!(sui.settle_batching.max_batch_size, 255);
+        assert_eq!(sui.settle_batching.max_batch_size, 681);
         assert_eq!(sui.settle_batching.flush_interval_ms, 250);
-        assert_eq!(sui.settle_batching.max_wait_ms, 1000);
     }
 
     #[test]
@@ -1163,23 +1234,17 @@ mod tests {
             "25".into(),
             "--sui-open-batch-flush-ms".into(),
             "100".into(),
-            "--sui-open-batch-max-wait-ms".into(),
-            "500".into(),
             "--sui-settle-batch-size".into(),
             "15".into(),
             "--sui-settle-batch-flush-ms".into(),
             "75".into(),
-            "--sui-settle-batch-max-wait-ms".into(),
-            "300".into(),
         ]);
         let opts = opts.expect("parse sui opts");
         let sui = opts.sui_anchor.expect("sui opts");
         assert_eq!(sui.open_batching.max_batch_size, 25);
         assert_eq!(sui.open_batching.flush_interval_ms, 100);
-        assert_eq!(sui.open_batching.max_wait_ms, 500);
         assert_eq!(sui.settle_batching.max_batch_size, 15);
         assert_eq!(sui.settle_batching.flush_interval_ms, 75);
-        assert_eq!(sui.settle_batching.max_wait_ms, 300);
     }
 
     #[test]
@@ -1242,23 +1307,13 @@ mod tests {
         let err = parse_v(&zero_flush_ms).unwrap_err();
         assert!(err.contains("sui-open-batch-flush-ms"), "{err}");
 
-        let mut max_wait_before_flush = base.to_vec();
-        max_wait_before_flush.extend([
-            "--sui-open-batch-flush-ms",
-            "250",
-            "--sui-open-batch-max-wait-ms",
-            "249",
-        ]);
-        let err = parse_v(&max_wait_before_flush).unwrap_err();
-        assert!(err.contains("sui-open-batch-max-wait-ms"), "{err}");
-
         let mut zero_settle_batch_size = base.to_vec();
         zero_settle_batch_size.extend(["--sui-settle-batch-size", "0"]);
         let err = parse_v(&zero_settle_batch_size).unwrap_err();
         assert!(err.contains("sui-settle-batch-size"), "{err}");
 
         let mut oversized_settle_batch = base.to_vec();
-        oversized_settle_batch.extend(["--sui-settle-batch-size", "256"]);
+        oversized_settle_batch.extend(["--sui-settle-batch-size", "682"]);
         let err = parse_v(&oversized_settle_batch).unwrap_err();
         assert!(err.contains("sui-settle-batch-size"), "{err}");
 
@@ -1266,16 +1321,6 @@ mod tests {
         zero_settle_flush_ms.extend(["--sui-settle-batch-flush-ms", "0"]);
         let err = parse_v(&zero_settle_flush_ms).unwrap_err();
         assert!(err.contains("sui-settle-batch-flush-ms"), "{err}");
-
-        let mut settle_max_wait_before_flush = base.to_vec();
-        settle_max_wait_before_flush.extend([
-            "--sui-settle-batch-flush-ms",
-            "250",
-            "--sui-settle-batch-max-wait-ms",
-            "249",
-        ]);
-        let err = parse_v(&settle_max_wait_before_flush).unwrap_err();
-        assert!(err.contains("sui-settle-batch-max-wait-ms"), "{err}");
     }
 
     #[test]
@@ -1293,7 +1338,7 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_concurrency_auto_is_default_and_numbers_pin_a_burst() {
+    fn tunnel_concurrency_auto_is_default_and_numbers_pin_pool_size() {
         assert_eq!(
             parse_v(&[]).unwrap().tunnel_concurrency,
             ConcurrencyMode::Auto
@@ -1403,11 +1448,10 @@ mod tests {
         assert!(help.contains("--sui-open-batch-size <N>"));
         assert!(help.contains("default 255, maximum 255"));
         assert!(help.contains("--sui-open-batch-flush-ms <MS>"));
-        assert!(help.contains("--sui-open-batch-max-wait-ms <MS>"));
         assert!(help.contains("--sui-disable-open-batching"));
         assert!(help.contains("--sui-settle-batch-size <N>"));
+        assert!(help.contains("default 681, maximum 681"));
         assert!(help.contains("--sui-settle-batch-flush-ms <MS>"));
-        assert!(help.contains("--sui-settle-batch-max-wait-ms <MS>"));
         assert!(help.contains("--sui-disable-settle-batching"));
     }
 }

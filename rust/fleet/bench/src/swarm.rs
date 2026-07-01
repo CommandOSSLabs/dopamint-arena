@@ -1,16 +1,18 @@
-//! The local CPU fleet. Each requested tunnel is spawned as an async task and
-//! driven through the same `PartyDriver` path as the serving fleet. Total work
-//! under `--tunnel-concurrency N` with `ScenarioMode::Golden` is exact
-//! (143*N moves), which is the golden regression gate; `--duration` is only a
-//! guard that can end a run before all spawned tunnels complete.
+//! The local CPU fleet. Tunnel concurrency is an in-flight lifecycle pool: each
+//! task opens, plays, and settles one tunnel through the same `PartyDriver` path
+//! as the serving fleet, and completed lifecycles are replaced until the global
+//! duration or move limit stops move production.
 
 use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode};
-use crate::party_driver::{SeatKit, SuiSponsoredBenchContext, TunnelTelemetry};
+use crate::party_driver::{
+    SeatKit, StageWindowRecorder, SuiSponsoredBenchContext, TunnelTelemetry,
+};
 use crate::protocols::{play_tunnel_for, PlayTunnelRequest};
 use crate::stats::{summarize, Distribution};
 use std::time::{Duration, Instant};
 use sui_tunnel_anchor::AnchorCostSnapshot;
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
+use tunnel_harness::DriverRunControl;
 use tunnel_telemetry::{CollectingSink, RunTelemetry};
 
 /// Golden seat A secret: bytes 0x01..0x20.
@@ -57,15 +59,16 @@ pub struct SwarmOutcome {
     pub tunnels_opened: u64,
     pub tunnels_claimed: u64,
     pub elapsed_ms: u128,
+    pub move_window_elapsed_ms: u128,
+    pub open_active_elapsed_ms: u128,
+    pub settle_active_elapsed_ms: u128,
     pub play_ns_total: u128,
     pub total_ns_total: u128,
     pub moves_dist: Distribution,
     pub play_ns_dist: Distribution,
     pub tunnels_failed: u64,
-    /// Tunnels that were in flight when the run ended (duration cutoff in
-    /// steady-state, or the duration guard firing in burst mode) and were
-    /// aborted without completing. Reported so abandoned work is visible rather
-    /// than silently dropped from the counts.
+    /// Tunnels abandoned before settlement. Normal lifecycle stops drain to
+    /// settlement, so this should stay zero outside legacy/error paths.
     pub tunnels_aborted: u64,
     pub per_tunnel_tps_play: Distribution,
     pub per_tunnel_tps_e2e: Distribution,
@@ -83,6 +86,9 @@ pub fn tunnel_id_for(tunnel_index: u64) -> String {
 fn aggregate(
     samples: Vec<TunnelSample>,
     elapsed_ms: u128,
+    move_window_elapsed_ms: u128,
+    open_active_elapsed_ms: u128,
+    settle_active_elapsed_ms: u128,
     gas: AnchorCostSnapshot,
     tunnels_aborted: u64,
 ) -> SwarmOutcome {
@@ -122,6 +128,9 @@ fn aggregate(
         tunnels_opened,
         tunnels_claimed,
         elapsed_ms,
+        move_window_elapsed_ms,
+        open_active_elapsed_ms,
+        settle_active_elapsed_ms,
         play_ns_total,
         total_ns_total,
         moves_dist,
@@ -147,6 +156,8 @@ async fn run_one_tunnel(
     protocol_id: &'static str,
     telemetry: TunnelTelemetry,
     kit: SeatKit,
+    run_control: Option<DriverRunControl>,
+    stage_windows: Option<StageWindowRecorder>,
 ) -> TunnelSample {
     let tunnel_id = tunnel_id_for(tunnel_index);
     tracing::debug!(
@@ -161,11 +172,13 @@ async fn run_one_tunnel(
         protocol_id,
         codec,
         card_seed: scenario.card_seed(tunnel_index),
+        run_control,
         kit: &kit,
         tunnel_id: &tunnel_id,
         anchor_mode,
         sui_context: sui_context.as_ref(),
         telemetry,
+        stage_windows,
     })
     .await;
     tracing::debug!(
@@ -194,57 +207,20 @@ async fn run_one_tunnel(
     }
 }
 
-/// Reaps tasks that already finished but haven't been joined yet, so they count
-/// as completed (their moves kept) rather than aborted. Without this, the
-/// deadline path would abort just-finished tasks and undercount throughput.
-fn reap_finished(tasks: &mut JoinSet<TunnelSample>, samples: &mut Vec<TunnelSample>) {
-    while let Some(joined) = tasks.try_join_next() {
-        if let Ok(sample) = joined {
+fn record_tunnel_join(
+    samples: &mut Vec<TunnelSample>,
+    result: Result<TunnelSample, JoinError>,
+) -> bool {
+    match result {
+        Ok(sample) => {
             samples.push(sample);
+            false
+        }
+        Err(error) => {
+            tracing::warn!(?error, "tunnel task failed to join");
+            true
         }
     }
-}
-
-/// Drains the burst's tasks, returning completed samples and the count of
-/// tunnels still genuinely in flight when the `--duration` guard fired (aborted,
-/// not completed). Returning the aborted count keeps abandoned work visible
-/// instead of silently dropping it.
-async fn collect_spawned_tunnels(
-    mut tasks: JoinSet<TunnelSample>,
-    duration_secs: u64,
-) -> (Vec<TunnelSample>, u64) {
-    let mut samples = Vec::new();
-    if duration_secs == 0 {
-        while let Some(result) = tasks.join_next().await {
-            samples.push(result.expect("tunnel task joined"));
-        }
-        return (samples, 0);
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(duration_secs);
-    loop {
-        if tasks.is_empty() {
-            break;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            reap_finished(&mut tasks, &mut samples);
-            let aborted = tasks.len() as u64;
-            tasks.abort_all();
-            return (samples, aborted);
-        }
-        match tokio::time::timeout(remaining, tasks.join_next()).await {
-            Ok(Some(result)) => samples.push(result.expect("tunnel task joined")),
-            Ok(None) => break,
-            Err(_) => {
-                reap_finished(&mut tasks, &mut samples);
-                let aborted = tasks.len() as u64;
-                tasks.abort_all();
-                return (samples, aborted);
-            }
-        }
-    }
-    (samples, 0)
 }
 
 /// Per-protocol gas spend = meter after the run minus before. The shared Sui
@@ -261,227 +237,11 @@ fn gas_delta(before: AnchorCostSnapshot, after: AnchorCostSnapshot) -> AnchorCos
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_concurrent_with_kits<I>(
+pub fn run_lifecycle_pipeline(
     workers: usize,
     duration_secs: u64,
-    scenario: ScenarioMode,
-    codec: FrameCodecKind,
-    anchor_mode: AnchorMode,
-    sui_context: Option<&SuiSponsoredBenchContext>,
-    protocol_id: &'static str,
-    telemetry: TunnelTelemetry,
-    kits: I,
-) -> SwarmOutcome
-where
-    I: IntoIterator<Item = (u64, SeatKit)>,
-{
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(workers)
-        .thread_name("fleet-bench-tunnel")
-        .build()
-        .expect("fleet bench runtime");
-    let sui_context = sui_context.cloned();
-    let gas_context = sui_context.clone();
-    let tunnel_concurrency = kits.into_iter().collect::<Vec<_>>();
-    let started = Instant::now();
-    tracing::info!(
-        concurrency = tunnel_concurrency.len(),
-        workers,
-        protocol_id,
-        duration_secs,
-        ?anchor_mode,
-        ?codec,
-        ?scenario,
-        "fleet run start"
-    );
-    let gas_before = gas_context
-        .as_ref()
-        .map(SuiSponsoredBenchContext::cost_snapshot)
-        .unwrap_or_default();
-    let (samples, aborted) = runtime.block_on(async move {
-        let mut tasks = JoinSet::new();
-        for (tunnel_index, kit) in tunnel_concurrency {
-            tasks.spawn(run_one_tunnel(
-                tunnel_index,
-                scenario,
-                codec,
-                anchor_mode,
-                sui_context.clone(),
-                protocol_id,
-                telemetry,
-                kit,
-            ));
-        }
-        collect_spawned_tunnels(tasks, duration_secs).await
-    });
-    if aborted > 0 {
-        tracing::warn!(
-            completed = samples.len(),
-            aborted,
-            duration_secs,
-            protocol_id,
-            ?anchor_mode,
-            "fleet duration guard aborted in-flight tunnels"
-        );
-    }
-    let gas_after = gas_context
-        .as_ref()
-        .map(SuiSponsoredBenchContext::cost_snapshot)
-        .unwrap_or_default();
-    let gas = gas_delta(gas_before, gas_after);
-    let outcome = aggregate(samples, started.elapsed().as_millis(), gas, aborted);
-    tracing::info!(
-        moves = outcome.moves,
-        secs = outcome.elapsed_ms as f64 / 1000.0,
-        tunnels_opened = outcome.tunnels_opened,
-        tunnels_settled = outcome.tunnels_settled,
-        tunnels_failed = outcome.tunnels_failed,
-        tunnels_aborted = outcome.tunnels_aborted,
-        "fleet run done"
-    );
-    outcome
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_concurrent_tunnels(
-    workers: usize,
-    duration_secs: u64,
-    tunnel_concurrency: u64,
-    scenario: ScenarioMode,
-    codec: FrameCodecKind,
-    anchor_mode: AnchorMode,
-    sui_context: Option<&SuiSponsoredBenchContext>,
-    protocol_id: &'static str,
-    telemetry: TunnelTelemetry,
-) -> SwarmOutcome {
-    let kits = (0..tunnel_concurrency).map(|idx| (idx, random_seat_kit()));
-    run_concurrent_with_kits(
-        workers,
-        duration_secs,
-        scenario,
-        codec,
-        anchor_mode,
-        sui_context,
-        protocol_id,
-        telemetry,
-        kits,
-    )
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn run_simple(
-    workers: usize,
-    duration_secs: u64,
-    tunnels: Option<u64>,
-    scenario: ScenarioMode,
-    codec: FrameCodecKind,
-    anchor_mode: AnchorMode,
-    sui_context: Option<&SuiSponsoredBenchContext>,
-    protocol_id: &'static str,
-) -> SwarmOutcome {
-    let tunnel_count = tunnels.unwrap_or(workers.max(1) as u64);
-    let kits = (0..tunnel_count).map(|idx| (idx, SeatKit::new(&SEAT_A, &SEAT_B)));
-    run_concurrent_with_kits(
-        workers,
-        duration_secs,
-        scenario,
-        codec,
-        anchor_mode,
-        sui_context,
-        protocol_id,
-        TunnelTelemetry {
-            collect: false,
-            record_transcript: false,
-        },
-        kits,
-    )
-}
-
-/// Apples-to-apples-with-loadbench fleet: generates two fresh ed25519 keypairs
-/// per tunnel (mirroring loadbench's per-tunnel `generateKeyPairSync`) inside the
-/// timed window, then derives their public keys via `play_fixed_match_seeded`.
-/// The efficient binary codec and native crypto stay; only the *harness* shape
-/// (fresh per-tunnel key setup) is matched to loadbench. With
-/// `ScenarioMode::Golden`, cards derive from `round`, so totals stay 143*N moves.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn run_fresh_keys(
-    workers: usize,
-    duration_secs: u64,
-    tunnels: Option<u64>,
-    scenario: ScenarioMode,
-    codec: FrameCodecKind,
-    anchor_mode: AnchorMode,
-    sui_context: Option<&SuiSponsoredBenchContext>,
-    protocol_id: &'static str,
-) -> SwarmOutcome {
-    run_concurrent_tunnels(
-        workers,
-        duration_secs,
-        tunnels.unwrap_or(workers.max(1) as u64),
-        scenario,
-        codec,
-        anchor_mode,
-        sui_context,
-        protocol_id,
-        TunnelTelemetry {
-            collect: false,
-            record_transcript: false,
-        },
-    )
-}
-
-fn random_seat_kit() -> SeatKit {
-    let mut secret_a = [0u8; 32];
-    let mut secret_b = [0u8; 32];
-    getrandom::getrandom(&mut secret_a).expect("os rng");
-    getrandom::getrandom(&mut secret_b).expect("os rng");
-    SeatKit::new(&secret_a, &secret_b)
-}
-
-/// Steady-state fleet: create every tunnel's signer material before the timed
-/// window, then run exactly that many tunnels from the pre-built pool.
-#[allow(clippy::too_many_arguments)]
-pub fn run_preinitialized_signers(
-    workers: usize,
-    duration_secs: u64,
-    tunnels: u64,
-    scenario: ScenarioMode,
-    codec: FrameCodecKind,
-    anchor_mode: AnchorMode,
-    sui_context: Option<&SuiSponsoredBenchContext>,
-    protocol_id: &'static str,
-    telemetry: TunnelTelemetry,
-) -> SwarmOutcome {
-    let kits: Vec<SeatKit> = (0..tunnels).map(|_| random_seat_kit()).collect();
-    run_concurrent_with_kits(
-        workers,
-        duration_secs,
-        scenario,
-        codec,
-        anchor_mode,
-        sui_context,
-        protocol_id,
-        telemetry,
-        kits.into_iter()
-            .enumerate()
-            .map(|(idx, kit)| (idx as u64, kit)),
-    )
-}
-
-/// Duration-led steady state for `--tunnel-concurrency auto`: keep `in_flight`
-/// tunnels running, relaunching each as it finishes, until `--duration` elapses.
-/// Throughput is measured over the full window (stable), unlike a one-shot burst
-/// that finishes in milliseconds. `preinitialize` builds the signer pool up front
-/// so key generation stays out of the timed loop; otherwise each tunnel gets a
-/// fresh keypair. Tunnels still running at the deadline are aborted and reported.
-#[allow(clippy::too_many_arguments)]
-pub fn run_steady_state(
-    workers: usize,
-    duration_secs: u64,
-    in_flight: usize,
+    moves: Option<u64>,
+    tunnel_concurrency: usize,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
     anchor_mode: AnchorMode,
@@ -498,30 +258,38 @@ pub fn run_steady_state(
         .expect("fleet bench runtime");
     let sui_context = sui_context.cloned();
     let gas_context = sui_context.clone();
-    let pool = in_flight.max(1);
+    let pool = tunnel_concurrency.max(1);
     let preinit_kits: Vec<SeatKit> = if preinitialize {
         (0..pool).map(|_| random_seat_kit()).collect()
     } else {
         Vec::new()
     };
+    let run_control = moves
+        .map(DriverRunControl::with_move_limit)
+        .unwrap_or_else(DriverRunControl::unbounded);
     let started = Instant::now();
     tracing::info!(
         in_flight = pool,
         workers,
         protocol_id,
         duration_secs,
+        moves,
         ?anchor_mode,
         ?codec,
         ?scenario,
         preinitialize,
-        "fleet steady-state start"
+        "fleet lifecycle pipeline start"
     );
     let gas_before = gas_context
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
         .unwrap_or_default();
-    let (samples, aborted) = runtime.block_on(async move {
-        let deadline = Instant::now() + Duration::from_secs(duration_secs.max(1));
+    let run_control_for_tasks = run_control.clone();
+    let stage_windows = StageWindowRecorder::new();
+    let stage_windows_for_tasks = stage_windows.clone();
+    let (samples, move_window_elapsed_ms, tunnels_aborted) = runtime.block_on(async move {
+        let move_window_started = Instant::now();
+        let deadline = move_window_started + Duration::from_secs(duration_secs);
         let kit_for = |index: u64| -> SeatKit {
             if preinitialize {
                 preinit_kits[index as usize % preinit_kits.len()].clone()
@@ -529,83 +297,110 @@ pub fn run_steady_state(
                 random_seat_kit()
             }
         };
-        let mut tasks = JoinSet::new();
-        let mut next_index: u64 = 0;
-        for _ in 0..pool {
+        let spawn_tunnel = |tasks: &mut JoinSet<TunnelSample>, index: u64| {
             tasks.spawn(run_one_tunnel(
-                next_index,
+                index,
                 scenario,
                 codec,
                 anchor_mode,
                 sui_context.clone(),
                 protocol_id,
                 telemetry,
-                kit_for(next_index),
+                kit_for(index),
+                Some(run_control_for_tasks.clone()),
+                Some(stage_windows_for_tasks.clone()),
             ));
+        };
+
+        let mut tasks = JoinSet::new();
+        let mut next_index: u64 = 0;
+        for _ in 0..pool {
+            spawn_tunnel(&mut tasks, next_index);
             next_index += 1;
         }
+
         let mut samples = Vec::new();
-        loop {
+        let mut tunnels_aborted = 0;
+        let stop_observed_at = loop {
+            if run_control_for_tasks.stopped() {
+                break Instant::now();
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                break;
+                run_control_for_tasks.request_stop();
+                break Instant::now();
             }
-            match tokio::time::timeout(remaining, tasks.join_next()).await {
+
+            let poll_window = remaining.min(Duration::from_millis(10));
+            match tokio::time::timeout(poll_window, tasks.join_next()).await {
                 Ok(Some(result)) => {
-                    samples.push(result.expect("tunnel task joined"));
-                    // Refill to keep the pool full until the deadline.
-                    if Instant::now() < deadline {
-                        tasks.spawn(run_one_tunnel(
-                            next_index,
-                            scenario,
-                            codec,
-                            anchor_mode,
-                            sui_context.clone(),
-                            protocol_id,
-                            telemetry,
-                            kit_for(next_index),
-                        ));
+                    if record_tunnel_join(&mut samples, result) {
+                        tunnels_aborted += 1;
+                    }
+                    if !run_control_for_tasks.stopped() && Instant::now() < deadline {
+                        spawn_tunnel(&mut tasks, next_index);
                         next_index += 1;
                     }
                 }
-                Ok(None) => break,
-                Err(_) => break,
+                Ok(None) => break Instant::now(),
+                Err(_) => {}
+            }
+        };
+
+        while let Some(result) = tasks.join_next().await {
+            if record_tunnel_join(&mut samples, result) {
+                tunnels_aborted += 1;
             }
         }
-        // Reap tasks that finished during the final window so they're counted as
-        // completed, not aborted.
-        reap_finished(&mut tasks, &mut samples);
-        let aborted = tasks.len() as u64;
-        tasks.abort_all();
-        (samples, aborted)
+
+        (
+            samples,
+            stop_observed_at
+                .duration_since(move_window_started)
+                .as_millis(),
+            tunnels_aborted,
+        )
     });
-    if aborted > 0 {
-        tracing::warn!(
-            completed = samples.len(),
-            aborted,
-            duration_secs,
-            protocol_id,
-            ?anchor_mode,
-            "fleet steady-state duration ended with in-flight tunnels"
-        );
-    }
     let gas_after = gas_context
         .as_ref()
         .map(SuiSponsoredBenchContext::cost_snapshot)
         .unwrap_or_default();
     let gas = gas_delta(gas_before, gas_after);
-    let outcome = aggregate(samples, started.elapsed().as_millis(), gas, aborted);
+    let elapsed_ms = started.elapsed().as_millis();
+    let open_active_elapsed_ms = stage_windows
+        .active_elapsed_ms(tunnel_telemetry::StageId::Open)
+        .min(elapsed_ms);
+    let settle_active_elapsed_ms = stage_windows
+        .active_elapsed_ms(tunnel_telemetry::StageId::Settle)
+        .min(elapsed_ms);
+    let outcome = aggregate(
+        samples,
+        elapsed_ms,
+        move_window_elapsed_ms,
+        open_active_elapsed_ms,
+        settle_active_elapsed_ms,
+        gas,
+        tunnels_aborted,
+    );
     tracing::info!(
         moves = outcome.moves,
         secs = outcome.elapsed_ms as f64 / 1000.0,
+        move_window_secs = outcome.move_window_elapsed_ms as f64 / 1000.0,
         tunnels = outcome.tunnels_claimed,
         tunnels_opened = outcome.tunnels_opened,
         tunnels_settled = outcome.tunnels_settled,
         tunnels_failed = outcome.tunnels_failed,
-        tunnels_aborted = outcome.tunnels_aborted,
-        "fleet steady-state done"
+        "fleet lifecycle pipeline done"
     );
     outcome
+}
+
+fn random_seat_kit() -> SeatKit {
+    let mut secret_a = [0u8; 32];
+    let mut secret_b = [0u8; 32];
+    getrandom::getrandom(&mut secret_a).expect("os rng");
+    getrandom::getrandom(&mut secret_b).expect("os rng");
+    SeatKit::new(&secret_a, &secret_b)
 }
 
 #[cfg(test)]
@@ -633,6 +428,9 @@ mod tests {
         let outcome = aggregate(
             vec![sample_with_tps(300.0), sample_with_tps(500.0)],
             1000,
+            900,
+            1000,
+            1000,
             AnchorCostSnapshot::default(),
             0,
         );
@@ -644,81 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn fresh_signers_conserve_totals() {
-        // Fresh per-tunnel keys don't change gameplay (cards derive from round),
-        // so the golden gate holds: exactly 143*N moves.
-        // golden frame bytes are stable at 75_982/tunnel; exact total is asserted
-        // in telemetry_collection_preserves_move_and_byte_invariants.
-        let out = run_fresh_keys(
-            2,
-            3600,
-            Some(6),
-            ScenarioMode::Golden,
-            FrameCodecKind::Json,
-            AnchorMode::Memory,
-            None,
-            BLACKJACK_BET_V1,
-        );
-        assert_eq!(out.tunnels_claimed, 6);
-        assert_eq!(out.tunnels_settled, 6);
-        assert_eq!(out.moves, 143 * 6);
-        assert!(out.bytes > 0, "frame bytes must be non-zero");
-    }
-
-    #[test]
-    fn concurrent_tunnels_spawn_requested_count() {
-        let out = run_concurrent_tunnels(
-            2,
-            0,
-            8,
-            ScenarioMode::Golden,
-            FrameCodecKind::Json,
-            AnchorMode::Memory,
-            None,
-            BLACKJACK_BET_V1,
-            TunnelTelemetry {
-                collect: false,
-                record_transcript: false,
-            },
-        );
-        assert_eq!(out.tunnels_claimed, 8);
-        assert_eq!(out.tunnels_settled, 8);
-        assert_eq!(out.moves, 143 * 8);
-        assert!(out.bytes > 0, "frame bytes must be non-zero");
-    }
-
-    #[test]
-    fn preinitialized_signers_match_baseline_totals() {
-        let simple = run_simple(
-            2,
-            3600,
-            Some(8),
-            ScenarioMode::Golden,
-            FrameCodecKind::Json,
-            AnchorMode::Memory,
-            None,
-            BLACKJACK_BET_V1,
-        );
-        let preinitialized = run_preinitialized_signers(
-            2,
-            3600,
-            8,
-            ScenarioMode::Golden,
-            FrameCodecKind::Json,
-            AnchorMode::Memory,
-            None,
-            BLACKJACK_BET_V1,
-            TunnelTelemetry {
-                collect: false,
-                record_transcript: false,
-            },
-        );
-        assert_eq!(preinitialized.moves, simple.moves);
-        assert_eq!(preinitialized.bytes, simple.bytes);
-        assert_eq!(preinitialized.tunnels_settled, simple.tunnels_settled);
-    }
-
-    #[test]
     fn tunnel_ids_are_distinct_and_hex() {
         assert_eq!(tunnel_id_for(0), "0x1");
         assert_eq!(tunnel_id_for(254), "0xff");
@@ -726,138 +449,199 @@ mod tests {
     }
 
     #[test]
-    fn single_worker_golden_matches_are_constant() {
-        // matches-bounded: exactly N matches => 143*N moves, N tunnels.
-        // golden frame bytes are stable at 75_982/tunnel; exact total is asserted
-        // in telemetry_collection_preserves_move_and_byte_invariants.
-        let out = run_simple(
+    fn lifecycle_pipeline_executes_memory_anchor() {
+        let out = run_lifecycle_pipeline(
             1,
             3600,
-            Some(5),
+            Some(1),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
-        assert_eq!(out.tunnels_claimed, 5);
-        assert_eq!(out.tunnels_settled, 5);
-        assert_eq!(out.moves, 143 * 5);
+        assert_eq!(out.moves, 1);
+        assert_eq!(out.tunnels_opened, 1);
+        assert_eq!(out.tunnels_settled, 1);
+        assert_eq!(out.tunnels_aborted, 0);
         assert!(out.bytes > 0, "frame bytes must be non-zero");
     }
 
     #[test]
-    fn memory_anchor_mode_executes_matches() {
-        let out = run_simple(
-            1,
+    fn tunnel_task_panic_is_counted_as_aborted() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let (samples, aborted) = runtime.block_on(async {
+            let mut tasks = JoinSet::new();
+            tasks.spawn(async {
+                panic!("synthetic tunnel task panic");
+                #[allow(unreachable_code)]
+                sample_with_tps(1.0)
+            });
+
+            let mut samples = Vec::new();
+            let mut aborted = 0;
+            while let Some(result) = tasks.join_next().await {
+                if record_tunnel_join(&mut samples, result) {
+                    aborted += 1;
+                }
+            }
+            (samples, aborted)
+        });
+
+        assert!(samples.is_empty());
+        assert_eq!(aborted, 1);
+    }
+
+    #[test]
+    fn preinitialized_lifecycle_pool_executes() {
+        let out = run_lifecycle_pipeline(
+            2,
             3600,
             Some(2),
+            2,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            true,
         );
-        assert_eq!(out.tunnels_opened, 2);
-        assert_eq!(out.tunnels_settled, 2);
-    }
-
-    #[test]
-    fn multi_worker_conserves_totals() {
-        // Total work is fixed by --tunnel-concurrency regardless of worker count.
-        // golden frame bytes are stable at 75_982/tunnel; exact total is asserted
-        // in telemetry_collection_preserves_move_and_byte_invariants.
-        let out = run_simple(
-            4,
-            3600,
-            Some(20),
-            ScenarioMode::Golden,
-            FrameCodecKind::Json,
-            AnchorMode::Memory,
-            None,
-            BLACKJACK_BET_V1,
-        );
-        assert_eq!(out.tunnels_claimed, 20);
-        assert_eq!(out.tunnels_settled, 20);
-        assert_eq!(out.moves, 143 * 20);
-        assert!(out.bytes > 0, "frame bytes must be non-zero");
+        assert_eq!(out.moves, 2);
+        assert_eq!(out.tunnels_settled, out.tunnels_opened);
+        assert_eq!(out.tunnels_aborted, 0);
     }
 
     #[test]
     fn varied_mode_produces_a_nondegenerate_move_distribution() {
-        let out = run_simple(
-            2,
-            3600,
-            Some(24),
-            ScenarioMode::Varied,
-            FrameCodecKind::Bcs,
-            AnchorMode::Memory,
-            None,
-            BLACKJACK_BET_V1,
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .build()
+            .expect("test runtime");
+        let samples = runtime.block_on(async {
+            let mut samples = Vec::new();
+            for tunnel_index in 0..8 {
+                samples.push(
+                    run_one_tunnel(
+                        tunnel_index,
+                        ScenarioMode::Varied,
+                        FrameCodecKind::Bcs,
+                        AnchorMode::Memory,
+                        None,
+                        BLACKJACK_BET_V1,
+                        TunnelTelemetry {
+                            collect: false,
+                            record_transcript: false,
+                        },
+                        random_seat_kit(),
+                        None,
+                        None,
+                    )
+                    .await,
+                );
+            }
+            samples
+        });
+        let moves_dist = summarize(
+            &samples
+                .iter()
+                .map(|sample| sample.moves as f64)
+                .collect::<Vec<_>>(),
         );
-        assert_eq!(out.tunnels_settled, 24);
-        assert_eq!(out.tunnels_claimed, 24);
-        // Varied cards => not every match is 143 moves.
+        assert!(samples.iter().all(|sample| sample.settle_ok));
+        // Varied cards => complete tunnel lengths differ by seed.
         assert!(
-            out.moves_dist.peak > out.moves_dist.min,
-            "moves should vary: {:?}",
-            out.moves_dist
+            moves_dist.peak > moves_dist.min,
+            "complete tunnel moves should vary: {moves_dist:?}"
         );
-        assert!(out.play_ns_total > 0);
-        assert_eq!(
-            out.tunnels_opened, out.tunnels_settled,
-            "synchronous build: opened == settled"
-        );
+        assert!(samples.iter().all(|sample| sample.play_ns > 0));
     }
 
     #[test]
     fn golden_scenario_is_constant_143() {
-        let out = run_simple(
+        let out = run_lifecycle_pipeline(
             2,
             3600,
-            Some(50),
+            Some(143),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
-        assert_eq!(out.moves, 143 * 50);
+        assert_eq!(out.moves, 143);
         assert_eq!(out.moves_dist.min, 143.0);
         assert_eq!(out.moves_dist.peak, 143.0);
     }
 
     #[test]
     fn codec_choice_is_consensus_invisible() {
-        let json = run_simple(
+        let json = run_lifecycle_pipeline(
             2,
             3600,
-            Some(8),
+            Some(143),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
-        let bcs = run_simple(
+        let bcs = run_lifecycle_pipeline(
             2,
             3600,
-            Some(8),
+            Some(143),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Bcs,
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
-        let postcard = run_simple(
+        let postcard = run_lifecycle_pipeline(
             2,
             3600,
-            Some(8),
+            Some(143),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Postcard,
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
 
         assert_eq!(bcs.moves, json.moves);
@@ -869,45 +653,56 @@ mod tests {
 
     #[test]
     fn blackjack_v2_matches_execute() {
-        let out = run_simple(
+        let out = run_lifecycle_pipeline(
             1,
             3600,
-            Some(3),
+            Some(1),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
             None,
             tunnel_core::protocol_id::BLACKJACK_V2,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
-        assert_eq!(out.tunnels_claimed, 3);
-        assert_eq!(out.tunnels_settled, 3);
         assert!(out.moves > 0);
+        assert_eq!(out.tunnels_settled, out.tunnels_opened);
         assert!(out.bytes > 0);
     }
 
     #[test]
     fn payments_matches_execute() {
-        let out = run_simple(
+        let out = run_lifecycle_pipeline(
             1,
             3600,
-            Some(3),
+            Some(1),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
             None,
             tunnel_core::protocol_id::PAYMENTS_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
         );
-        assert_eq!(out.tunnels_claimed, 3);
-        assert_eq!(out.tunnels_settled, 3);
         assert!(out.moves > 0);
+        assert_eq!(out.tunnels_settled, out.tunnels_opened);
         assert!(out.bytes > 0);
     }
 
     fn run_simple_for_test(tunnel_count: u64, collect: bool) -> SwarmOutcome {
-        run_concurrent_tunnels(
+        run_lifecycle_pipeline(
             2,
-            0,
-            tunnel_count,
+            3600,
+            Some(143 * tunnel_count),
+            1,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
@@ -917,6 +712,7 @@ mod tests {
                 collect,
                 record_transcript: false,
             },
+            false,
         )
     }
 
@@ -933,17 +729,17 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "timing-sensitive; run manually"]
-    fn steady_state_refills_pool_across_the_duration_window() {
-        // Duration-led: a 4-deep pool relaunched for ~1s must complete far more
-        // than 4 tunnels, proving the refill loop runs (not a one-shot burst).
-        // Ignored in CI: the fixed 1s window is starved of CPU when this runs
-        // alongside the other heavy swarm tests on a small shared runner, so the
-        // throughput assertion is unreliable there. Run manually or in isolation.
-        let out = run_steady_state(
+    #[ignore = "timing-sensitive under parallel test load; run manually"]
+    fn lifecycle_pipeline_refills_fixed_pool_across_duration_window() {
+        // Duration-led: a 2-deep pool starts with two lifecycles and may
+        // complete more as the refill loop runs. Ignored in CI: the fixed 1s
+        // window is starved of CPU when this runs alongside the other heavy
+        // swarm tests on a small shared runner.
+        let out = run_lifecycle_pipeline(
             2,
             1,
-            4,
+            None,
+            2,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             AnchorMode::Memory,
@@ -956,13 +752,95 @@ mod tests {
             false,
         );
         assert!(
-            out.tunnels_claimed > 4,
-            "refill should exceed the in-flight pool, got {}",
+            out.tunnels_claimed > 2,
+            "refill should replace completed lifecycles beyond the initial pool, got {}",
             out.tunnels_claimed
         );
-        // Every completed golden tunnel is 143 moves; aborted ones aren't counted.
-        assert_eq!(out.moves, 143 * out.tunnels_claimed);
         assert_eq!(out.tunnels_settled, out.tunnels_claimed);
+        assert_eq!(out.tunnels_aborted, 0);
+        assert!(out.move_window_elapsed_ms <= out.elapsed_ms);
+        assert!(out.open_active_elapsed_ms > 0);
+        assert!(out.settle_active_elapsed_ms > 0);
+        assert!(out.open_active_elapsed_ms <= out.elapsed_ms);
+        assert!(out.settle_active_elapsed_ms <= out.elapsed_ms);
+    }
+
+    #[test]
+    fn lifecycle_pipeline_move_limit_stops_non_terminal_tunnel_and_settles() {
+        let out = run_lifecycle_pipeline(
+            1,
+            3600,
+            Some(1),
+            1,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
+        );
+
+        assert!(
+            out.moves < 143,
+            "move cap should stop the golden path early"
+        );
+        assert_eq!(out.tunnels_opened, 1);
+        assert_eq!(out.tunnels_settled, 1);
+        assert_eq!(out.tunnels_aborted, 0);
+    }
+
+    #[test]
+    fn lifecycle_pipeline_move_limit_is_exact_across_concurrent_tunnels() {
+        let out = run_lifecycle_pipeline(
+            2,
+            3600,
+            Some(1),
+            2,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
+        );
+
+        assert_eq!(out.moves, 1);
+        assert_eq!(out.tunnels_opened, 2);
+        assert_eq!(out.tunnels_settled, out.tunnels_opened);
+        assert_eq!(out.tunnels_claimed, out.tunnels_opened);
+        assert_eq!(out.tunnels_aborted, 0);
+    }
+
+    #[test]
+    fn lifecycle_pipeline_duration_stop_drains_in_flight_tunnels() {
+        let out = run_lifecycle_pipeline(
+            2,
+            1,
+            None,
+            2,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            BLACKJACK_BET_V1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
+        );
+
+        assert_eq!(out.tunnels_aborted, 0);
+        assert_eq!(out.tunnels_settled, out.tunnels_claimed);
+        assert!(out.elapsed_ms >= out.move_window_elapsed_ms);
     }
 
     #[test]

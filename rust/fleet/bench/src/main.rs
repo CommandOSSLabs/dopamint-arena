@@ -74,12 +74,14 @@ fn main() {
 }
 
 /// Runs one protocol under its own resource-sampling window, returning the
-/// headline outcome and its resources. `--tunnel-concurrency auto` runs a
-/// duration-led steady state; a fixed count runs exactly that many tunnels once.
-fn duration_guard_for_run(opts: &cli::BenchOpts) -> u64 {
+/// headline outcome and its resources. `--tunnel-concurrency` is the maximum
+/// number of in-flight tunnel lifecycles.
+fn tunnel_pool_for_run(opts: &cli::BenchOpts) -> usize {
     match opts.tunnel_concurrency {
-        ConcurrencyMode::Auto => opts.duration_secs,
-        ConcurrencyMode::Fixed(_) => 0,
+        ConcurrencyMode::Auto => ConcurrencyMode::auto_in_flight(opts.workers),
+        ConcurrencyMode::Fixed(count) => count
+            .try_into()
+            .expect("fixed tunnel concurrency exceeds usize"),
     }
 }
 
@@ -93,44 +95,21 @@ fn run_protocol(
         collect: opts.per_move_latency,
         record_transcript: matches!(opts.transcript_recorder, TranscriptRecorderMode::Memory),
     };
-    let duration_guard_secs = duration_guard_for_run(opts);
+    let tunnel_pool = tunnel_pool_for_run(opts);
     let sampler = resources::start(250, opts.workers);
-    let outcome = match opts.tunnel_concurrency {
-        ConcurrencyMode::Auto => swarm::run_steady_state(
-            opts.workers,
-            duration_guard_secs,
-            ConcurrencyMode::auto_in_flight(opts.workers),
-            opts.scenario,
-            opts.frame_codec,
-            opts.anchor_mode,
-            sui_context,
-            protocol_id,
-            telemetry,
-            preinitialize,
-        ),
-        ConcurrencyMode::Fixed(count) if preinitialize => swarm::run_preinitialized_signers(
-            opts.workers,
-            duration_guard_secs,
-            count,
-            opts.scenario,
-            opts.frame_codec,
-            opts.anchor_mode,
-            sui_context,
-            protocol_id,
-            telemetry,
-        ),
-        ConcurrencyMode::Fixed(count) => swarm::run_concurrent_tunnels(
-            opts.workers,
-            duration_guard_secs,
-            count,
-            opts.scenario,
-            opts.frame_codec,
-            opts.anchor_mode,
-            sui_context,
-            protocol_id,
-            telemetry,
-        ),
-    };
+    let outcome = swarm::run_lifecycle_pipeline(
+        opts.workers,
+        opts.duration_secs,
+        opts.moves,
+        tunnel_pool,
+        opts.scenario,
+        opts.frame_codec,
+        opts.anchor_mode,
+        sui_context,
+        protocol_id,
+        telemetry,
+        preinitialize,
+    );
     (outcome, sampler.stop())
 }
 
@@ -145,6 +124,7 @@ mod tests {
         BenchOpts {
             workers: 4,
             duration_secs: 15,
+            moves: None,
             tunnel_concurrency,
             per_move_latency: false,
             trace: false,
@@ -160,15 +140,18 @@ mod tests {
     }
 
     #[test]
-    fn fixed_concurrency_runs_without_duration_guard() {
+    fn fixed_concurrency_sets_lifecycle_pool_size() {
         assert_eq!(
-            duration_guard_for_run(&opts(ConcurrencyMode::Fixed(1000))),
-            0
+            tunnel_pool_for_run(&opts(ConcurrencyMode::Fixed(1000))),
+            1000
         );
     }
 
     #[test]
-    fn auto_concurrency_uses_duration_guard() {
-        assert_eq!(duration_guard_for_run(&opts(ConcurrencyMode::Auto)), 15);
+    fn auto_concurrency_derives_lifecycle_pool_from_workers() {
+        assert_eq!(
+            tunnel_pool_for_run(&opts(ConcurrencyMode::Auto)),
+            ConcurrencyMode::auto_in_flight(4)
+        );
     }
 }

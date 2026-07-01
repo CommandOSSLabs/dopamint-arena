@@ -37,6 +37,7 @@ const ED25519_SCHEME_FLAG: u8 = 0x00;
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const MAX_SPONSORED_OPEN_BATCH_SIZE: usize = 255;
+const MAX_SPONSORED_SETTLE_BATCH_SIZE: usize = 681;
 const DEFAULT_DIRECT_GAS_BUDGET_MIST: u64 = 1_000_000_000;
 
 /// Accumulated gas spend (MIST) split by who paid: the funder wallet
@@ -86,7 +87,6 @@ pub struct SuiOpenBatchingConfig {
     pub enabled: bool,
     pub max_batch_size: usize,
     pub flush_interval_ms: u64,
-    pub max_wait_ms: u64,
 }
 
 impl Default for SuiOpenBatchingConfig {
@@ -95,7 +95,6 @@ impl Default for SuiOpenBatchingConfig {
             enabled: true,
             max_batch_size: MAX_SPONSORED_OPEN_BATCH_SIZE,
             flush_interval_ms: 250,
-            max_wait_ms: 1_000,
         }
     }
 }
@@ -831,9 +830,7 @@ fn open_batch_deadline(items: &[OpenBatchItem], config: &SuiOpenBatchingConfig) 
         .first()
         .map(|item| item.enqueued_at)
         .unwrap_or_else(Instant::now);
-    let flush_at = oldest + Duration::from_millis(config.flush_interval_ms);
-    let max_wait_at = oldest + Duration::from_millis(config.max_wait_ms);
-    flush_at.min(max_wait_at)
+    oldest + Duration::from_millis(config.flush_interval_ms)
 }
 
 fn settle_batch_deadline(items: &[SettleBatchItem], config: &SuiOpenBatchingConfig) -> Instant {
@@ -841,9 +838,7 @@ fn settle_batch_deadline(items: &[SettleBatchItem], config: &SuiOpenBatchingConf
         .first()
         .map(|item| item.enqueued_at)
         .unwrap_or_else(Instant::now);
-    let flush_at = oldest + Duration::from_millis(config.flush_interval_ms);
-    let max_wait_at = oldest + Duration::from_millis(config.max_wait_ms);
-    flush_at.min(max_wait_at)
+    oldest + Duration::from_millis(config.flush_interval_ms)
 }
 
 fn send_open_group_result(
@@ -2122,6 +2117,9 @@ impl SuiSponsoredAnchor {
         if prepared.is_empty() {
             return Err(TunnelAnchorError::Rejected("settle batch is empty".into()));
         }
+        if prepared.len() > MAX_SPONSORED_SETTLE_BATCH_SIZE {
+            return Err(TunnelAnchorError::Rejected("settle batch too large".into()));
+        }
         if prepared.len() >= 1024 {
             return Err(TunnelAnchorError::Rejected(
                 "settle batch exceeds PTB command limit".into(),
@@ -2738,7 +2736,10 @@ mod tests {
                 },
             },
             open_batching: SuiOpenBatchingConfig::default(),
-            settle_batching: SuiOpenBatchingConfig::default(),
+            settle_batching: SuiOpenBatchingConfig {
+                max_batch_size: MAX_SPONSORED_SETTLE_BATCH_SIZE,
+                ..Default::default()
+            },
         }
     }
 
@@ -2998,6 +2999,18 @@ mod tests {
         request
     }
 
+    fn prepared_settle(tunnel_id: impl Into<String>) -> PreparedSettle {
+        PreparedSettle {
+            tunnel_id: tunnel_id.into(),
+            party_a_balance: 7,
+            party_b_balance: 3,
+            timestamp: 1234,
+            root: [0xaa; 32],
+            sig_a: [0x11; 64],
+            sig_b: [0x22; 64],
+        }
+    }
+
     fn programmable(kind: TransactionKind) -> ProgrammableTransaction {
         match kind {
             TransactionKind::ProgrammableTransaction(ptb) => ptb,
@@ -3008,6 +3021,86 @@ mod tests {
     #[test]
     fn direct_ptb_default_gas_budget_is_large_enough_for_batches() {
         const { assert!(DEFAULT_DIRECT_GAS_BUDGET_MIST >= 1_000_000_000) };
+    }
+
+    #[test]
+    fn open_batch_deadline_uses_flush_interval_only() {
+        let now = Instant::now();
+        let (responder, _receiver) = oneshot::channel();
+        let items = vec![OpenBatchItem {
+            key: OpenKey {
+                intent_id: intent(1),
+            },
+            request: open_request(),
+            responder,
+            enqueued_at: now,
+        }];
+        let config = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 255,
+            flush_interval_ms: 25,
+        };
+
+        assert_eq!(
+            open_batch_deadline(&items, &config),
+            now + Duration::from_millis(25)
+        );
+    }
+
+    #[test]
+    fn settle_batch_default_limit_is_681() {
+        let config = config();
+
+        assert_eq!(config.open_batching.max_batch_size, 255);
+        assert_eq!(config.settle_batching.max_batch_size, 681);
+    }
+
+    #[test]
+    fn settle_batch_deadline_uses_flush_interval_only() {
+        let now = Instant::now();
+        let (responder, _receiver) = oneshot::channel();
+        let items = vec![SettleBatchItem {
+            prepared: prepared_settle("0x1"),
+            responder,
+            enqueued_at: now,
+        }];
+        let config = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 681,
+            flush_interval_ms: 25,
+        };
+
+        assert_eq!(
+            settle_batch_deadline(&items, &config),
+            now + Duration::from_millis(25)
+        );
+    }
+
+    #[tokio::test]
+    async fn settle_batch_rejects_more_than_681_prepared_requests() {
+        let anchor = SuiSponsoredAnchor::with_clients(
+            config(),
+            Arc::new(FakeChain::default()),
+            Arc::new(FakeBackend::default()),
+        )
+        .expect("anchor");
+        let prepared = (0..=MAX_SPONSORED_SETTLE_BATCH_SIZE)
+            .map(|index| prepared_settle(format!("0x{:x}", index + 1)))
+            .collect::<Vec<_>>();
+
+        let error = anchor
+            .build_batched_settle_kind(&prepared)
+            .await
+            .expect_err("oversized settle batch should be rejected");
+
+        assert!(
+            matches!(
+                error,
+                TunnelAnchorError::Rejected(ref message)
+                    if message.contains("settle batch") && message.contains("too large")
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -3379,7 +3472,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 60_000,
-            max_wait_ms: 60_000,
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
@@ -3546,7 +3638,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -3600,7 +3691,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -3662,7 +3752,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -3707,7 +3796,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let anchor = scoped_anchor(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -3768,7 +3856,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -3831,7 +3918,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -3873,7 +3959,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
-            max_wait_ms: 10_000,
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4330,7 +4415,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 60_000,
-            max_wait_ms: 60_000,
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
@@ -4404,7 +4488,6 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 60_000,
-            max_wait_ms: 60_000,
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())

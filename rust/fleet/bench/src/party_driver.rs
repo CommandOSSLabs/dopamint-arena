@@ -4,8 +4,8 @@
 //! golden-stable for blackjack.bet.v1 with the default seed (143 moves, 75_982 bytes/tunnel).
 
 use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use sui_tunnel_anchor::{
     AnchorCostSnapshot, SuiOpenIntentAnchor, SuiOpenIntentId, SuiSponsoredAnchor,
     SuiSponsoredAnchorConfig,
@@ -14,11 +14,11 @@ use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
 use tunnel_blackjack::{BjMove, BjState, Blackjack, BlackjackStrategy};
 use tunnel_harness::instrument::{InstrumentedAnchor, InstrumentedRecorder, InstrumentedTransport};
 use tunnel_harness::{
-    Balances, FrameCodec, InMemoryAnchor, InMemoryFrameTransport, InMemoryTranscriptRecorder,
-    LocalSigner, MoveStrategy, MoveStrategyContext, NullTranscriptRecorder, OpenedTunnel,
-    PartyDriver, Protocol, Seat, SeatParts, SettledTunnel, SettlementMode, Signer, Transcript,
-    TranscriptEntry, TranscriptError, TranscriptRecorder, TunnelAnchor, TunnelAnchorError,
-    TunnelOpenRequest, TunnelSettleRequest,
+    Balances, DriverRunControl, FrameCodec, HarnessError, InMemoryAnchor, InMemoryFrameTransport,
+    InMemoryTranscriptRecorder, LocalSigner, MoveStrategy, MoveStrategyContext,
+    NullTranscriptRecorder, OpenedTunnel, PartyDriver, Protocol, Seat, SeatParts, SettledTunnel,
+    SettlementMode, Signer, Transcript, TranscriptEntry, TranscriptError, TranscriptRecorder,
+    TunnelAnchor, TunnelAnchorError, TunnelOpenRequest, TunnelSettleRequest,
 };
 use tunnel_telemetry::{CollectingSink, StageId, TelemetrySink};
 
@@ -134,6 +134,66 @@ pub struct TunnelTelemetry {
     pub record_transcript: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct StageWindowRecorder {
+    origin: Instant,
+    state: Arc<Mutex<StageWindowState>>,
+}
+
+#[derive(Default)]
+struct StageWindowState {
+    open: StageWindow,
+    settle: StageWindow,
+}
+
+#[derive(Default)]
+struct StageWindow {
+    first_start: Option<Duration>,
+    last_end: Option<Duration>,
+}
+
+impl StageWindowRecorder {
+    pub(crate) fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+            state: Arc::new(Mutex::new(StageWindowState::default())),
+        }
+    }
+
+    fn record(&self, stage: StageId, start: Instant, end: Instant) {
+        let start = start.saturating_duration_since(self.origin);
+        let end = end.saturating_duration_since(self.origin);
+        let mut state = self.state.lock().expect("stage window mutex poisoned");
+        let window = match stage {
+            StageId::Open => &mut state.open,
+            StageId::Settle => &mut state.settle,
+            _ => return,
+        };
+        window.first_start = Some(window.first_start.map_or(start, |first| first.min(start)));
+        window.last_end = Some(window.last_end.map_or(end, |last| last.max(end)));
+    }
+
+    pub(crate) fn active_elapsed_ms(&self, stage: StageId) -> u128 {
+        let state = self.state.lock().expect("stage window mutex poisoned");
+        let window = match stage {
+            StageId::Open => &state.open,
+            StageId::Settle => &state.settle,
+            _ => return 0,
+        };
+        let Some(first_start) = window.first_start else {
+            return 0;
+        };
+        let Some(last_end) = window.last_end else {
+            return 0;
+        };
+        if last_end < first_start {
+            return 0;
+        }
+        let millis = (last_end - first_start).as_millis();
+        millis.max(1)
+    }
+}
+
 /// A cloneable anchor that dispatches to either the in-memory or sponsored-Sui backend.
 /// Local to the bench so it can implement the foreign TunnelAnchor trait.
 #[derive(Clone)]
@@ -149,24 +209,51 @@ impl BenchAnchorInner {
             Self::Sui(_) => "sui-sponsored",
         }
     }
-}
 
-impl TunnelAnchor for BenchAnchorInner {
     fn settlement_mode(&self) -> SettlementMode {
         match self {
             Self::Memory(a) => a.settlement_mode(),
             Self::Sui(a) => a.settlement_mode(),
         }
     }
+}
+
+#[derive(Clone)]
+struct BenchAnchor {
+    inner: BenchAnchorInner,
+    stage_windows: Option<StageWindowRecorder>,
+}
+
+impl BenchAnchor {
+    fn new(inner: BenchAnchorInner, stage_windows: Option<StageWindowRecorder>) -> Self {
+        Self {
+            inner,
+            stage_windows,
+        }
+    }
+
+    fn record_stage(&self, stage: StageId, start: Instant, end: Instant) {
+        if let Some(recorder) = &self.stage_windows {
+            recorder.record(stage, start, end);
+        }
+    }
+}
+
+impl TunnelAnchor for BenchAnchor {
+    fn settlement_mode(&self) -> SettlementMode {
+        self.inner.settlement_mode()
+    }
 
     async fn open(&self, request: TunnelOpenRequest) -> Result<OpenedTunnel, TunnelAnchorError> {
-        let anchor = self.label();
+        let anchor = self.inner.label();
         let protocol = request.protocol.as_str().to_owned();
         tracing::debug!(anchor, protocol, "anchor open start");
-        let result = match self {
-            Self::Memory(a) => a.open(request).await,
-            Self::Sui(a) => a.open(request).await,
+        let started = Instant::now();
+        let result = match &self.inner {
+            BenchAnchorInner::Memory(a) => a.open(request).await,
+            BenchAnchorInner::Sui(a) => a.open(request).await,
         };
+        self.record_stage(StageId::Open, started, Instant::now());
         match &result {
             Ok(opened) => tracing::debug!(
                 anchor,
@@ -184,15 +271,17 @@ impl TunnelAnchor for BenchAnchorInner {
         &self,
         request: TunnelSettleRequest,
     ) -> Result<SettledTunnel, TunnelAnchorError> {
-        let anchor = self.label();
+        let anchor = self.inner.label();
         let tunnel_id = request.tunnel_id.clone();
         let by = request.by;
         let final_nonce = request.final_nonce;
         tracing::debug!(anchor, tunnel_id, ?by, final_nonce, "anchor settle start");
-        let result = match self {
-            Self::Memory(a) => a.settle(request).await,
-            Self::Sui(a) => a.settle(request).await,
+        let started = Instant::now();
+        let result = match &self.inner {
+            BenchAnchorInner::Memory(a) => a.settle(request).await,
+            BenchAnchorInner::Sui(a) => a.settle(request).await,
         };
+        self.record_stage(StageId::Settle, started, Instant::now());
         match &result {
             Ok(_) => tracing::debug!(anchor, tunnel_id, ?by, final_nonce, "anchor settle done"),
             Err(error) => {
@@ -288,6 +377,8 @@ pub(crate) async fn play_protocol_tunnel_with_strategies<P, C, StrategyA, Strate
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
     telemetry: TunnelTelemetry,
+    run_control: Option<DriverRunControl>,
+    stage_windows: Option<StageWindowRecorder>,
 ) -> TunnelOutcome
 where
     P: Protocol + Clone,
@@ -320,7 +411,10 @@ where
     // Recorder choice follows the anchor's settlement mode, so capture it before
     // the anchor is moved into the wrapper.
     let settlement_mode = inner_anchor.settlement_mode();
-    let anchor = InstrumentedAnchor::new(inner_anchor, CollectingSink::with_capacity(capacity));
+    let anchor = InstrumentedAnchor::new(
+        BenchAnchor::new(inner_anchor, stage_windows),
+        CollectingSink::with_capacity(capacity),
+    );
     // Keep a clone outside the drivers to read counters after join.
     let anchor_handle = anchor.clone();
 
@@ -364,6 +458,16 @@ where
         rec_b,
         C::default(),
     );
+    let driver_a = if let Some(control) = run_control.as_ref() {
+        driver_a.with_run_control(control.clone())
+    } else {
+        driver_a
+    };
+    let driver_b = if let Some(control) = run_control.as_ref() {
+        driver_b.with_run_control(control.clone())
+    } else {
+        driver_b
+    };
 
     let started = Instant::now();
     // Clocks start from CREATED_AT so timestamp magnitudes match the old bench
@@ -382,8 +486,20 @@ where
     );
     let e2e_ns = started.elapsed().as_nanos();
 
-    let (outcome_a, rec_a_returned) = res_a.expect("seat A driver completed");
-    let (_outcome_b, rec_b_returned) = res_b.expect("seat B driver completed");
+    let (outcome_a, rec_a_returned) = match res_a {
+        Ok((outcome, recorder)) => (Some(outcome), Some(recorder)),
+        Err(error) => {
+            record_driver_error(tunnel_id, Seat::A, &error);
+            (None, None)
+        }
+    };
+    let (outcome_b, rec_b_returned) = match res_b {
+        Ok((outcome, recorder)) => (Some(outcome), Some(recorder)),
+        Err(error) => {
+            record_driver_error(tunnel_id, Seat::B, &error);
+            (None, None)
+        }
+    };
 
     let bytes_a = bytes_a_ctr.load(std::sync::atomic::Ordering::Relaxed);
     let bytes_b = bytes_b_ctr.load(std::sync::atomic::Ordering::Relaxed);
@@ -416,21 +532,38 @@ where
         .expect("transport B sink mutex poisoned");
     sink.merge(sink_ch_a);
     sink.merge(sink_ch_b);
-    // Drain recorder sinks (returned from run).
-    sink.merge(rec_a_returned.into_sink());
-    sink.merge(rec_b_returned.into_sink());
+    // Drain recorder sinks when the driver completed successfully. Failed
+    // drivers drop their recorder inside `PartyDriver::run`; the anchor and
+    // transport samples still show where the lifecycle stopped.
+    if let Some(recorder) = rec_a_returned {
+        sink.merge(recorder.into_sink());
+    }
+    if let Some(recorder) = rec_b_returned {
+        sink.merge(recorder.into_sink());
+    }
+
+    let reference_outcome = outcome_a.as_ref().or(outcome_b.as_ref());
 
     TunnelOutcome {
-        moves: outcome_a.moves,
+        moves: reference_outcome.map_or(0, |outcome| outcome.moves),
         bytes: bytes_a + bytes_b,
         e2e_ns,
-        play_ns: outcome_a.play_ns,
-        final_balances: outcome_a.final_balances,
+        play_ns: reference_outcome.map_or(0, |outcome| outcome.play_ns),
+        final_balances: reference_outcome.map_or(initial, |outcome| outcome.final_balances),
         open_ok,
         settle_ok,
         sink,
         export_bytes: 0,
     }
+}
+
+fn record_driver_error(tunnel_id: &str, seat: Seat, error: &HarnessError) {
+    tracing::warn!(
+        tunnel_id,
+        ?seat,
+        ?error,
+        "tunnel driver failed; recording failed tunnel sample"
+    );
 }
 
 /// Drives a seeded blackjack.bet.v1 tunnel through the engine. `card_seed = None`
@@ -462,6 +595,8 @@ pub async fn play_tunnel_seeded<C: FrameCodec<BjMove> + Default>(
             collect: false,
             record_transcript: false,
         },
+        None,
+        None,
     )
     .await
 }
@@ -492,6 +627,8 @@ pub async fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
             collect: false,
             record_transcript: false,
         },
+        None,
+        None,
     )
     .await
 }
@@ -562,7 +699,7 @@ impl MoveStrategy<SeededBlackjack> for BlackjackStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tunnel_harness::{BcsFrameCodec, JsonFrameCodec, PostcardFrameCodec};
+    use tunnel_harness::{BcsFrameCodec, DriverRunControl, JsonFrameCodec, PostcardFrameCodec};
 
     async fn golden_match<C: FrameCodec<BjMove> + Default>() -> TunnelOutcome {
         let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
@@ -610,6 +747,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stage_window_recorder_counts_same_tick_recording_as_one_ms() {
+        let recorder = StageWindowRecorder::new();
+        let recorded_at = Instant::now();
+
+        recorder.record(StageId::Open, recorded_at, recorded_at);
+
+        assert_eq!(recorder.active_elapsed_ms(StageId::Open), 1);
+        assert_eq!(recorder.active_elapsed_ms(StageId::Settle), 0);
+    }
+
     /// End-to-end: `record_transcript: true` on the (rootless) memory anchor wires
     /// the in-memory recorder, records every move, and still settles cleanly —
     /// the `--transcript-recorder memory` path on the memory anchor.
@@ -638,12 +786,60 @@ mod tests {
                 collect: false,
                 record_transcript: true,
             },
+            None,
+            None,
         )
         .await;
 
         assert_eq!(outcome.moves, 143, "golden move count");
         assert!(outcome.settle_ok, "rootless settle must still succeed");
         assert_eq!(outcome.final_balances.sum(), 400, "balances conserved");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_control_stops_non_terminal_bench_tunnel_and_settles() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let kit = SeatKit::new(&sa, &sb);
+        let run_control = DriverRunControl::with_move_limit(2);
+
+        let outcome = play_protocol_tunnel_with_strategies::<
+            SeededBlackjack,
+            JsonFrameCodec,
+            BlackjackStrategy,
+            BlackjackStrategy,
+        >(
+            SeededBlackjack { card_seed: None },
+            BlackjackStrategy,
+            BlackjackStrategy,
+            &kit,
+            "0x1",
+            200,
+            200,
+            1000,
+            AnchorMode::Memory,
+            None,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            Some(run_control.clone()),
+            None,
+        )
+        .await;
+
+        assert!(run_control.stopped());
+        assert_eq!(
+            outcome.moves, 2,
+            "move limit should cap committed moves exactly before settlement"
+        );
+        assert_eq!(run_control.moves(), outcome.moves);
+        assert!(
+            outcome.moves < 143,
+            "control should stop before the terminal golden path"
+        );
+        assert!(outcome.settle_ok, "cooperative stop still settles");
+        assert_eq!(outcome.final_balances.sum(), 400);
     }
 
     /// D2 golden: engine PartyDriver reproduces the 143-move blackjack.bet.v1 golden.
@@ -672,6 +868,8 @@ mod tests {
                 collect: true,
                 record_transcript: false,
             },
+            None,
+            None,
         )
         .await;
 

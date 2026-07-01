@@ -97,14 +97,14 @@ pub fn setup_overhead_pct(o: &SwarmOutcome) -> f64 {
     overhead / o.total_ns_total as f64 * 100.0
 }
 
-/// Wall move-TPS extrapolated to gameplay-only by scaling out the open/settle
-/// fraction (total / play); falls back to wall TPS when no play timing exists.
+/// Move throughput during the lifecycle's move-production window; falls back to
+/// the wall window for legacy callers that have not populated the lifecycle
+/// window yet.
 pub fn play_only_tps(o: &SwarmOutcome) -> f64 {
-    let tps = move_tps(o.moves, o.elapsed_ms);
-    if o.play_ns_total == 0 {
-        tps
+    if o.move_window_elapsed_ms == 0 {
+        move_tps(o.moves, o.elapsed_ms)
     } else {
-        tps * (o.total_ns_total as f64 / o.play_ns_total as f64)
+        move_tps(o.moves, o.move_window_elapsed_ms)
     }
 }
 
@@ -276,8 +276,8 @@ pub fn render_with_style(
         humanize::count(simple.tunnels_settled),
         humanize::count(simple.tunnels_failed),
         humanize::count(simple.tunnels_aborted),
-        rate_per_sec(simple.tunnels_opened, simple.elapsed_ms),
-        rate_per_sec(simple.tunnels_settled, simple.elapsed_ms),
+        rate_per_sec(simple.tunnels_opened, simple.open_active_elapsed_ms),
+        rate_per_sec(simple.tunnels_settled, simple.settle_active_elapsed_ms),
         simple.moves_dist.p50,
         simple.moves_dist.p90,
         simple.moves_dist.avg,
@@ -393,6 +393,7 @@ mod tests {
         BenchOpts {
             workers,
             duration_secs: 15,
+            moves: None,
             tunnel_concurrency: ConcurrencyMode::Fixed(64),
             per_move_latency: false,
             trace: false,
@@ -422,6 +423,9 @@ mod tests {
             tunnels_opened: tunnels,
             tunnels_claimed: tunnels,
             elapsed_ms: ms,
+            move_window_elapsed_ms: ms,
+            open_active_elapsed_ms: ms,
+            settle_active_elapsed_ms: ms,
             play_ns_total: 0,
             total_ns_total: 0,
             moves_dist: crate::stats::Distribution::default(),
@@ -505,6 +509,9 @@ mod tests {
             tunnels_opened: 3,
             tunnels_claimed: 3,
             elapsed_ms: 1000,
+            move_window_elapsed_ms: 1000,
+            open_active_elapsed_ms: 1000,
+            settle_active_elapsed_ms: 1000,
             // 800ms of play time, 1000ms total (20% setup overhead)
             play_ns_total: 800_000_000,
             total_ns_total: 1_000_000_000,
@@ -539,8 +546,7 @@ mod tests {
         );
         // (1e9 - 8e8) / 1e9 * 100 = 20.0%
         assert!(s.contains("  - setup overhead 20.0%"), "got:\n{s}");
-        // play-only TPS = 429.0 * (1e9 / 8e8) = 429.0 * 1.25 = 536.25
-        assert!(s.contains("  - play-only move-TPS 536."), "got:\n{s}");
+        assert!(s.contains("  - play-only move-TPS 429.0"), "got:\n{s}");
         assert!(
             s.contains("  - play-loop p50=267.0ms p90=267.0ms avg=266.7ms peak=267.0ms"),
             "got:\n{s}"
@@ -553,6 +559,39 @@ mod tests {
     }
 
     #[test]
+    fn render_rates_use_lifecycle_active_windows() {
+        let mut o = outcome(100, 10, 10_000);
+        o.tunnels_opened = 4;
+        o.tunnels_settled = 10;
+        o.open_active_elapsed_ms = 2_000;
+        o.settle_active_elapsed_ms = 5_000;
+
+        let s = render(
+            &opts(1, SignerInitMode::PerTunnel),
+            "blackjack.bet.v1",
+            &o,
+            &res(),
+        );
+
+        assert!(
+            s.contains(
+                "  - opened=4  closed=10  failed=0  aborted=0  open-rate=2.0/s  close-rate=2.0/s"
+            ),
+            "got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn play_only_tps_uses_move_window_elapsed() {
+        let mut o = outcome(100, 1, 10_000);
+        o.move_window_elapsed_ms = 2_000;
+        o.play_ns_total = 1_000_000_000;
+        o.total_ns_total = 10_000_000_000;
+
+        assert_eq!(play_only_tps(&o), 50.0);
+    }
+
+    #[test]
     fn render_omits_anchor_rows_when_no_samples_and_humanizes_counts() {
         use crate::stats::summarize;
         let o = SwarmOutcome {
@@ -562,6 +601,9 @@ mod tests {
             tunnels_opened: 255,
             tunnels_claimed: 255,
             elapsed_ms: 8_400,
+            move_window_elapsed_ms: 8_400,
+            open_active_elapsed_ms: 8_400,
+            settle_active_elapsed_ms: 8_400,
             play_ns_total: 8_000_000_000,
             total_ns_total: 8_100_000_000,
             moves_dist: summarize(&[143.0, 143.0]),

@@ -31,7 +31,7 @@ pub mod move_strategy;
 pub use move_strategy::{random::RandomMoveStrategy, MoveStrategy};
 
 pub mod party_driver;
-pub use party_driver::{DriverOutcome, PartyDriver, SeatParts};
+pub use party_driver::{DriverOutcome, DriverRunControl, PartyDriver, SeatParts};
 
 pub mod observer;
 pub use observer::{DriverObserver, DriverStart, MoveCommitted};
