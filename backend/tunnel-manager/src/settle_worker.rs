@@ -36,6 +36,10 @@ pub struct SettleWorkerDeps {
     pub control: Arc<dyn ControlStore>,
     pub walrus: WalrusClient,
     pub bus: Arc<dyn Bus>,
+    /// S3 transcript archiver (ADR-0023), concurrent with Walrus; `None` disables it (dev/test).
+    pub archiver: Option<Arc<dyn crate::s3::TranscriptArchiver>>,
+    /// S3 object-key prefix for archived transcripts (e.g. "prod/"); empty when unset.
+    pub s3_prefix: String,
 }
 
 /// Run one worker forever: claim → settle batch → record/archive/ack. `flush_ms` is only the
@@ -153,8 +157,9 @@ pub(crate) async fn drain_once(
     Ok(n)
 }
 
-/// Archive the body to Walrus and publish the proof on `explorer:proofs` (the FE/indexer's fast
-/// path; the indexer also derives the close from chain, so a publish failure is not fatal).
+/// Archive the settle body (S3 per ADR-0023 + Walrus) and publish the proof on `explorer:proofs`
+/// (the FE/indexer fast path; the indexer also derives the close from chain, so a publish failure
+/// is not fatal). S3 and Walrus are independent — either failing does not block the other.
 async fn archive_and_publish(
     deps: &SettleWorkerDeps,
     close: &CloseArgs,
@@ -162,16 +167,33 @@ async fn archive_and_publish(
     digest: &str,
 ) {
     let root_hex = format!("0x{}", hex::encode(&close.transcript_root));
-    let (blob_id, proof_url) = match deps.queue.body(entry_id).await {
-        Ok(Some(body)) => deps
+    let body = deps.queue.body(entry_id).await.ok().flatten();
+
+    // S3 archival (ADR-0023): the object bytes are the settle body, byte-for-byte, under
+    // `<prefix>transcripts/…`. Independent of Walrus below; a failure is logged, not fatal.
+    if let (Some(archiver), Some(bytes)) = (deps.archiver.as_ref(), body.as_ref()) {
+        let key = crate::s3::archive_key(&deps.s3_prefix, &close.tunnel_id, digest);
+        let meta = crate::s3::ArchiveMeta {
+            tunnel_id: close.tunnel_id.clone(),
+            tx_digest: digest.to_string(),
+            transcript_root: root_hex.clone(),
+            settle_version: crate::routes::SETTLE_BODY_VERSION,
+        };
+        if let Err(e) = archiver.archive(&key, bytes, &meta).await {
+            tracing::warn!(%digest, error = %e, "s3 archive failed");
+        }
+    }
+
+    let (blob_id, proof_url) = match body {
+        Some(bytes) => deps
             .walrus
-            .upload_transcript(body)
+            .upload_transcript(bytes)
             .await
             .unwrap_or_else(|e| {
                 tracing::error!(%digest, error = %e, "walrus archival failed");
                 (String::new(), String::new())
             }),
-        _ => (String::new(), String::new()),
+        None => (String::new(), String::new()),
     };
     deps.control
         .push_recent_event(crate::routes::settled_event(
@@ -281,6 +303,8 @@ mod tests {
             control: control.clone(),
             walrus: WalrusClient::noop(),
             bus: Arc::new(LocalBus::new("test".into())),
+            archiver: None,
+            s3_prefix: String::new(),
         };
         (deps, queue, control)
     }
@@ -382,6 +406,45 @@ mod tests {
         );
     }
 
+    // On settle success the worker archives the identical body to S3 (ADR-0023), byte-for-byte,
+    // under a `transcripts/` key — the async-pipeline home of what #123 did in the sync handler.
+    #[tokio::test]
+    async fn settle_archives_body_to_s3_on_success() {
+        use crate::s3::FakeArchiver;
+        let fake = Arc::new(FakeBatchSettler::new());
+        let queue = Arc::new(InMemorySettleQueue::default());
+        let control = Arc::new(InMemoryControlStore::default());
+        let archiver = Arc::new(FakeArchiver::default());
+        let deps = SettleWorkerDeps {
+            queue: queue.clone(),
+            settler: fake.clone(),
+            control,
+            walrus: WalrusClient::noop(),
+            bus: Arc::new(LocalBus::new("test".into())),
+            archiver: Some(archiver.clone()),
+            s3_prefix: String::new(),
+        };
+        let (tunnel, body) = settle_body(3);
+        queue
+            .enqueue(&tunnel, body[..229].to_vec(), body.clone())
+            .await
+            .unwrap();
+        drain_once(&deps, "w1", 16, 0).await.unwrap();
+
+        let archived = archiver.archived.lock().unwrap().clone();
+        assert_eq!(archived.len(), 1, "one S3 archive on settle success");
+        assert_eq!(
+            archived[0].1,
+            body.to_vec(),
+            "archived bytes == settle body"
+        );
+        assert!(
+            archived[0].0.starts_with("transcripts/"),
+            "key under transcripts/: {}",
+            archived[0].0
+        );
+    }
+
     // A valid 229-byte settle body for a 2-byte tunnel suffix, plus the tunnel id the handler will
     // parse from it (so the path matches). Lets the e2e mint many distinct settlements.
     fn settle_body(suffix: u16) -> (String, Bytes) {
@@ -420,6 +483,8 @@ mod tests {
             control: state.control.clone(),
             walrus: WalrusClient::noop(),
             bus: state.bus.clone(),
+            archiver: None,
+            s3_prefix: String::new(),
         };
         let workers: Vec<_> = (0..4)
             .map(|i| tokio::spawn(run_settle_worker(deps.clone(), format!("w{i}"), 128, 20)))

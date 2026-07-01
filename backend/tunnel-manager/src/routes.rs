@@ -47,6 +47,8 @@ pub(crate) mod test_support {
             settle_queue: std::sync::Arc::new(crate::settle_queue::InMemorySettleQueue::default()),
             enoki: None,
             walrus,
+            archiver: None,
+            s3_prefix: "".into(),
             ollama,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
@@ -120,7 +122,7 @@ struct SettleBody {
     update_count: u32,
 }
 
-const SETTLE_BODY_VERSION: u8 = 0x01;
+pub(crate) const SETTLE_BODY_VERSION: u8 = 0x01;
 const SETTLE_BODY_HEADER_LEN: usize = 229;
 
 /// Parse the binary settle-body header (big-endian, fixed offsets — see the plan layout).

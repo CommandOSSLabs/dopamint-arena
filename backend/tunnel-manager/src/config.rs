@@ -54,6 +54,11 @@ pub struct Config {
     pub settle_max_concurrency: usize,
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
+    /// S3 transcript archival (ADR-0023). When set, the settle handler archives the
+    /// transcript body to this bucket alongside Walrus. Unset => archival disabled (dev).
+    pub s3_bucket: Option<String>,
+    /// Optional key prefix (e.g. "prod/"). Default empty.
+    pub s3_prefix: Option<String>,
     /// Co-located fleet (ADR-0024): in-process bots per game, registered into the `BotPool` and
     /// served over the relay bus instead of a `/v1/fleet` WebSocket. `0` (default) keeps the relay
     /// inert; only an explicit `FLEET_COLOCATED_COUNT > 0` (+ `FLEET_COLOCATED_GAMES`) spawns them.
@@ -121,6 +126,8 @@ impl Config {
                 .unwrap_or(32),
             ollama_url: opt("OLLAMA_URL"),
             ollama_model: opt("OLLAMA_MODEL"),
+            s3_bucket: opt("S3_TRANSCRIPTS_BUCKET"),
+            s3_prefix: opt("S3_TRANSCRIPTS_PREFIX"),
             colocated_fleet_count: std::env::var("FLEET_COLOCATED_COUNT")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -287,5 +294,16 @@ mod tests {
         let c = Config::from_env().unwrap();
         assert_eq!(c.ollama_url.as_deref(), Some("http://ollama:11434"));
         assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.5b"));
+    }
+
+    #[test]
+    fn from_env_reads_s3() {
+        let _b = EnvGuard("S3_TRANSCRIPTS_BUCKET");
+        let _p = EnvGuard("S3_TRANSCRIPTS_PREFIX");
+        std::env::set_var("S3_TRANSCRIPTS_BUCKET", "dopamint-dev-transcripts");
+        std::env::set_var("S3_TRANSCRIPTS_PREFIX", "x/");
+        let c = Config::from_env().unwrap();
+        assert_eq!(c.s3_bucket.as_deref(), Some("dopamint-dev-transcripts"));
+        assert_eq!(c.s3_prefix.as_deref(), Some("x/"));
     }
 }
