@@ -5,7 +5,13 @@
  * (co-signed bytes) and peer messages cross verbatim — structured-cloned, never re-encoded — so
  * co-signing stays byte-identical across the extra hop.
  */
-import type { MatchInfo, PeerMessage } from "@/pvp/mpClient";
+import type {
+  MatchInfo,
+  PeerMessage,
+  ResumeOkEvent,
+  PeerResumedEvent,
+  PeerDroppedEvent,
+} from "@/pvp/mpClient";
 import type { ConnStatus } from "@/engine/engineApi";
 
 /** Peer messages that ride the side-channel (everything a match sends that isn't an engine frame). */
@@ -20,15 +26,20 @@ export type BridgeRequest =
   | { k: "sendPeer"; matchId: string; msg: SidePeerMessage }
   | { k: "announce"; matchId: string; tunnelId: string }
   | { k: "release"; matchId: string }
-  | { k: "resume"; matchId: string };
+  | { k: "resume"; matchId: string }
+  | { k: "markActive"; matchId: string };
 
-/** Socket worker → game worker. */
+/** Socket worker → game worker. The resume-path events (`resumeOk`/`peerResumed`/`peerDropped`) are
+ *  routed by matchId to the owning game worker; `conn` broadcasts the shared socket's lifecycle. */
 export type BridgeEvent =
   | { k: "matchOk"; reqId: number; match: MatchInfo }
   | { k: "matchErr"; reqId: number; error: string }
   | { k: "frame"; matchId: string; bytes: Uint8Array }
   | { k: "peer"; matchId: string; msg: SidePeerMessage }
-  | { k: "conn"; status: ConnStatus };
+  | { k: "conn"; status: ConnStatus }
+  | { k: "resumeOk"; e: ResumeOkEvent }
+  | { k: "peerResumed"; e: PeerResumedEvent }
+  | { k: "peerDropped"; e: PeerDroppedEvent };
 
 /** The `MessagePort` surface both sides use — structural so a Node `MessageChannel` port (adapted to
  *  the `onmessage` shape) drives the same classes under `node:test` as a real browser port in prod. */

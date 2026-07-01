@@ -17,6 +17,19 @@ export class SocketHost {
     private readonly port: BridgePort,
   ) {
     port.onmessage = (ev) => this.#onRequest(ev.data as BridgeRequest);
+    // The MpClient fires resume/peer events GLOBALLY over the shared socket; forward only the ones
+    // for matches THIS worker owns (its `#channels`), so each game worker gets exactly its own.
+    mp.onResumeOk((e) => {
+      if (this.#channels.has(e.matchId)) port.postMessage({ k: "resumeOk", e });
+    });
+    mp.onPeerResumed((e) => {
+      if (this.#channels.has(e.matchId))
+        port.postMessage({ k: "peerResumed", e });
+    });
+    mp.onPeerDropped((e) => {
+      if (this.#channels.has(e.matchId))
+        port.postMessage({ k: "peerDropped", e });
+    });
   }
 
   /** Open the real relay channel for a match and pump its frames/peer down the port. Idempotent: a
@@ -74,6 +87,10 @@ export class SocketHost {
         // A cold-loaded match resumes onto the live socket, then routes to this worker's port.
         this.mp.resumeMatch(r.matchId);
         this.#setupChannel(r.matchId);
+        return;
+      case "markActive":
+        // Register with the reconnect loop; the channel (owner) is set up by the preceding openChannel.
+        this.mp.markActive(r.matchId);
         return;
     }
   }

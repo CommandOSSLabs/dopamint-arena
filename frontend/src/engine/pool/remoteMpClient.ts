@@ -5,8 +5,14 @@
  * the socket worker holds the real socket and demuxes inbound frames back by matchId. Because the
  * session touches nothing else, it runs unchanged with a `RemoteMpClient` in place of the shared one.
  */
-import type { PvpChannel } from "@/pvp/mpClient";
-import type { MatchInfo } from "@/pvp/mpClient";
+import type {
+  PvpChannel,
+  MatchInfo,
+  RelayClient,
+  ResumeOkEvent,
+  PeerResumedEvent,
+  PeerDroppedEvent,
+} from "@/pvp/mpClient";
 import type { ConnStatus } from "@/engine/engineApi";
 import type {
   BridgePort,
@@ -25,7 +31,7 @@ interface RemoteChannel {
   peerCbs: Set<PeerCb>;
 }
 
-export class RemoteMpClient {
+export class RemoteMpClient implements RelayClient {
   #reqId = 0;
   readonly #waiters = new Map<
     number,
@@ -36,6 +42,9 @@ export class RemoteMpClient {
    *  session reads this via its `connStatus` getter; `#onConn` lets the worker `refreshConn` on change. */
   #connStatus: ConnStatus = "connecting";
   #onConn: (() => void) | null = null;
+  readonly #resumeOkCbs = new Set<(e: ResumeOkEvent) => void>();
+  readonly #peerResumedCbs = new Set<(e: PeerResumedEvent) => void>();
+  readonly #peerDroppedCbs = new Set<(e: PeerDroppedEvent) => void>();
 
   constructor(private readonly port: BridgePort) {
     port.onmessage = (ev) => this.#onEvent(ev.data as BridgeEvent);
@@ -84,7 +93,18 @@ export class RemoteMpClient {
         return;
       }
       case "conn":
-        return; // socket lifecycle is broadcast + applied at the game-worker top level, not per-match
+        this.#connStatus = e.status;
+        this.#onConn?.();
+        return;
+      case "resumeOk":
+        this.#resumeOkCbs.forEach((cb) => cb(e.e));
+        return;
+      case "peerResumed":
+        this.#peerResumedCbs.forEach((cb) => cb(e.e));
+        return;
+      case "peerDropped":
+        this.#peerDroppedCbs.forEach((cb) => cb(e.e));
+        return;
     }
   }
 
@@ -152,5 +172,24 @@ export class RemoteMpClient {
 
   resumeMatch(matchId: string): void {
     this.#post({ k: "resume", matchId });
+  }
+
+  markActive(matchId: string): void {
+    this.#post({ k: "markActive", matchId });
+  }
+
+  onResumeOk(cb: (e: ResumeOkEvent) => void): () => void {
+    this.#resumeOkCbs.add(cb);
+    return () => this.#resumeOkCbs.delete(cb);
+  }
+
+  onPeerResumed(cb: (e: PeerResumedEvent) => void): () => void {
+    this.#peerResumedCbs.add(cb);
+    return () => this.#peerResumedCbs.delete(cb);
+  }
+
+  onPeerDropped(cb: (e: PeerDroppedEvent) => void): () => void {
+    this.#peerDroppedCbs.add(cb);
+    return () => this.#peerDroppedCbs.delete(cb);
   }
 }

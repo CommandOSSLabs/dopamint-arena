@@ -16,7 +16,12 @@ import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { decideReconcile } from "sui-tunnel-ts/core/reconcile";
 import type { ReconcileAction, ResyncView } from "sui-tunnel-ts/core/reconcile";
-import type { MpClient, PvpChannel, PeerMessage } from "./mpClient";
+import type {
+  MpClient,
+  RelayClient,
+  PvpChannel,
+  PeerMessage,
+} from "./mpClient";
 import {
   clearResumeRecord,
   evictExpiredRecords,
@@ -60,7 +65,7 @@ export interface ResumeIdentity {
 }
 
 export interface AttachResumeArgs<State, Move> {
-  mp: MpClient;
+  mp: RelayClient;
   channel: PvpChannel;
   tunnel: DistributedTunnel<State, Move>;
   adapter: ResumeAdapter<State, Move>;
@@ -170,7 +175,7 @@ function balancesFromCheckpoint(record: ResumeRecord): {
  * the attached driver once the peer is reachable) closes any ≤1-move gap.
  */
 export function rebuildTunnel<State, Move>(
-  mp: MpClient,
+  mp: RelayClient,
   record: ResumeRecord,
   spec: RebuildSpec<State, Move>,
   ctx: ResumeContext,

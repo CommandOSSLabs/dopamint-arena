@@ -18,7 +18,9 @@ import type {
 } from "./engineApi";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
+import { enginePoolEnabled } from "./flag";
 import { elog } from "./debug";
+import type { GameWorkerApi } from "./engine.game.worker";
 
 const IDLE_SNAPSHOT: MatchSnapshot = {
   status: "idle",
@@ -129,6 +131,8 @@ export function configureEngine(
   config = cfg;
   bridge = mainBridge;
   wireHub();
+  // Pool lane: hand the (possibly retroactive) config to the socket worker if it already spawned.
+  if (socketWorker) socketWorker.postMessage({ type: "config", config: cfg });
 }
 
 /** Fire a worker command without awaiting. The engine surfaces failures via the snapshot's
@@ -179,6 +183,76 @@ function ensurePvpWindow(windowId: string): PvpWindow {
   return w;
 }
 
+// --- Pool lane: one shared socket worker + one game worker per window (ADR-0029, ?enginepool) ------
+// Opt-in alternative to the shared hub: co-sign runs in a per-window isolate (parallel across cores,
+// fault-isolated), while ONE socket worker keeps the single-relay-socket invariant. A game worker's
+// `mp` is a RemoteMpClient proxying the narrow relay surface over a private MessagePort to the socket
+// worker, so the PvpMatchSession inside runs identically to the hub path.
+let socketWorker: Worker | null = null;
+const gameWorkers = new Map<
+  string,
+  { worker: Worker; api: Comlink.Remote<GameWorkerApi> }
+>();
+
+/** Spawn (once) the shared socket worker and hand it the config so it opens the one relay socket. */
+function ensureSocketWorker(): Worker {
+  if (socketWorker) return socketWorker;
+  socketWorker = new Worker(new URL("./socket.worker.ts", import.meta.url), {
+    type: "module",
+    name: "[pvp-socket] shared relay",
+  });
+  if (config) socketWorker.postMessage({ type: "config", config });
+  elog("client", "spawn socket worker");
+  return socketWorker;
+}
+
+/** Spawn (once per window) a game worker, wire its private port to the socket worker, and init its
+ *  session. `config`/`bridge` are set by `configureEngine` before any PvP command, so they're ready. */
+function ensureGameWorker(windowId: string): Comlink.Remote<GameWorkerApi> {
+  const existing = gameWorkers.get(windowId);
+  if (existing) return existing.api;
+  const sw = ensureSocketWorker();
+  const worker = new Worker(new URL("./engine.game.worker.ts", import.meta.url), {
+    type: "module",
+    name: `[pvp-game] ${windowId}`,
+  });
+  const api = Comlink.wrap<GameWorkerApi>(worker);
+  gameWorkers.set(windowId, { worker, api });
+  // Private channel game worker ↔ socket worker: transfer one end to each side.
+  const { port1, port2 } = new MessageChannel();
+  sw.postMessage({ type: "attach" }, [port2]);
+  const onSnapshot = (snap: MatchSnapshot): void => {
+    const w = pvpWindows.get(windowId);
+    if (!w) return;
+    deliverSnapshot(windowId, w.listeners, snap, (s) => {
+      w.snap = s;
+    });
+  };
+  if (config && bridge)
+    fire(
+      api.init(
+        config,
+        Comlink.proxy(bridge),
+        windowId,
+        Comlink.transfer(port1, [port1]),
+        Comlink.proxy(onSnapshot),
+      ),
+    );
+  else elog("client", "game worker spawned before configure", { windowId });
+  return api;
+}
+
+/** Push a window's visibility into its worker so it stops EMITTING snapshots while off-screen (Phase-1
+ *  `setWindowVisible` already gates the main-thread render; this saves the upstream postMessage too). */
+function propagateVisibility(windowId: string, visible: boolean): void {
+  if (enginePoolEnabled()) {
+    const gw = gameWorkers.get(windowId);
+    if (gw) fire(gw.api.setVisibility(visible));
+  } else if (hubApi) {
+    fire(hubApi.setVisibility(windowId, visible));
+  }
+}
+
 // --- dispose ------------------------------------------------------------------------------
 
 function disposeWindow(windowId: string): void {
@@ -186,6 +260,23 @@ function disposeWindow(windowId: string): void {
   if (!w) return;
   pvpWindows.delete(windowId);
   clearSnapThrottle(windowId);
+  if (enginePoolEnabled()) {
+    const gw = gameWorkers.get(windowId);
+    if (!gw) return;
+    gameWorkers.delete(windowId);
+    // Reset the session (releases its matchId from the shared socket), then reclaim the isolate; when
+    // the last game worker goes, terminate the shared socket worker so an idle arena holds no socket.
+    const finish = (): void => {
+      gw.api[Comlink.releaseProxy]();
+      gw.worker.terminate();
+      if (gameWorkers.size === 0 && socketWorker) {
+        socketWorker.terminate();
+        socketWorker = null;
+      }
+    };
+    gw.api.reset().then(finish, finish);
+    return;
+  }
   // Tear this window's match down inside the hub (cancels a queued open, releases the matchId from
   // the shared socket, and closes the socket if it was the last session). Then, if no PvP windows
   // remain, terminate the hub worker to reclaim its isolate (re-spawned on the next PvP command).
@@ -249,10 +340,18 @@ export const engineClient = {
   // PvP commands → shared hub.
   findMatch(windowId: string, gameId: GameId, setup?: unknown): void {
     ensurePvpWindow(windowId);
+    if (enginePoolEnabled()) {
+      fire(ensureGameWorker(windowId).findMatch(gameId, setup));
+      return;
+    }
     fire(ensureHub().findMatch(windowId, gameId, setup));
   },
   resume(windowId: string, gameId: GameId): void {
     ensurePvpWindow(windowId);
+    if (enginePoolEnabled()) {
+      fire(ensureGameWorker(windowId).resume(gameId));
+      return;
+    }
     fire(ensureHub().resume(windowId, gameId));
   },
   /** Arena entry (ADR-0028): hand the worker a fleet allocation (pre-opened tunnel + main-minted key)
@@ -263,18 +362,37 @@ export const engineClient = {
     entry: WorkerArenaEntry,
   ): void {
     ensurePvpWindow(windowId);
+    if (enginePoolEnabled()) {
+      fire(ensureGameWorker(windowId).enterArenaMatch(gameId, entry));
+      return;
+    }
     fire(ensureHub().enterArenaMatch(windowId, gameId, entry));
   },
   submitInput(windowId: string, input: unknown): void {
+    if (enginePoolEnabled()) {
+      const gw = gameWorkers.get(windowId);
+      if (gw) fire(gw.api.submitInput(input));
+      return;
+    }
     if (hubApi) fire(hubApi.submitInput(windowId, input));
   },
   setAuto(windowId: string, on: boolean): void {
+    if (enginePoolEnabled()) {
+      const gw = gameWorkers.get(windowId);
+      if (gw) fire(gw.api.setAuto(on));
+      return;
+    }
     if (hubApi) fire(hubApi.setAuto(windowId, on));
   },
   setVisibility(windowId: string, visible: boolean): void {
-    if (hubApi) fire(hubApi.setVisibility(windowId, visible));
+    propagateVisibility(windowId, visible);
   },
   reset(windowId: string): void {
+    if (enginePoolEnabled()) {
+      const gw = gameWorkers.get(windowId);
+      if (gw) fire(gw.api.reset());
+      return;
+    }
     if (hubApi) fire(hubApi.reset(windowId));
   },
   /** Terminate a window's match in the hub and reclaim (also auto-run on window close). */

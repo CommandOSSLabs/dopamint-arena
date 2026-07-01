@@ -12,7 +12,7 @@
  * absent in workers, and keeping records worker-side confines the ephemeral key + game secret to
  * this thread (design §5/§6); they never transit the main heap or the bridge.
  */
-import { type MpClient, type PvpChannel, type Role } from "@/pvp/mpClient";
+import { type RelayClient, type PvpChannel, type Role } from "@/pvp/mpClient";
 import {
   generateKeyPair,
   keyPairFromSecret,
@@ -63,8 +63,9 @@ interface ActivateInfo {
  *  (hub-owned) — a drop/resume affects every session at once. */
 export interface SessionDeps {
   windowId: string;
-  /** The hub's shared, already-connected `MpClient` (one socket for all PvP windows). */
-  mp: MpClient;
+  /** The relay client this session drives: the hub's shared `MpClient` (shared-hub path) or the
+   *  pool's `RemoteMpClient` over a MessagePort (per-window path). Same narrow surface either way. */
+  mp: RelayClient;
   config: EngineConfig;
   bridge: MainBridge;
   getSpec: (gameId: GameId) => AnySpec | undefined;

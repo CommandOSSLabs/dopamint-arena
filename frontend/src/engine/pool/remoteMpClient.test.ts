@@ -29,6 +29,10 @@ function makeFakeMp() {
     string,
     { onFrame: ((b: Uint8Array) => void) | null; peers: Set<(m: unknown) => void> }
   >();
+  const markedActive: string[] = [];
+  const resumeOkCbs = new Set<(e: unknown) => void>();
+  const peerResumedCbs = new Set<(e: unknown) => void>();
+  const peerDroppedCbs = new Set<(e: unknown) => void>();
   const mp = {
     quickMatch: async (game: string) => ({
       matchId: "m1",
@@ -65,6 +69,19 @@ function makeFakeMp() {
       announced.push({ matchId, tunnelId }),
     releaseMatch: (matchId: string) => released.push(matchId),
     resumeMatch: (matchId: string) => resumed.push(matchId),
+    markActive: (matchId: string) => markedActive.push(matchId),
+    onResumeOk: (cb: (e: unknown) => void) => {
+      resumeOkCbs.add(cb);
+      return () => resumeOkCbs.delete(cb);
+    },
+    onPeerResumed: (cb: (e: unknown) => void) => {
+      peerResumedCbs.add(cb);
+      return () => peerResumedCbs.delete(cb);
+    },
+    onPeerDropped: (cb: (e: unknown) => void) => {
+      peerDroppedCbs.add(cb);
+      return () => peerDroppedCbs.delete(cb);
+    },
   };
   return {
     mp,
@@ -73,10 +90,12 @@ function makeFakeMp() {
     announced,
     released,
     resumed,
+    markedActive,
     deliverFrame: (matchId: string, bytes: Uint8Array) =>
       chans.get(matchId)?.onFrame?.(bytes),
     deliverPeer: (matchId: string, msg: unknown) =>
       chans.get(matchId)?.peers.forEach((cb) => cb(msg)),
+    deliverResumeOk: (e: unknown) => resumeOkCbs.forEach((cb) => cb(e)),
   };
 }
 
@@ -165,6 +184,47 @@ test("bridge: announce / release / resume reach the shared MpClient", async () =
   assert.deepEqual(fake.announced, [{ matchId: "m7", tunnelId: "0xtunnel" }]);
   assert.deepEqual(fake.resumed, ["m7"]);
   assert.deepEqual(fake.released, ["m7"]);
+
+  port1.close();
+  port2.close();
+});
+
+test("bridge: resume path — markActive forwards, resumeOk routes only to the owning worker", async () => {
+  const { port1, port2 } = new MessageChannel();
+  const fake = makeFakeMp();
+  new SocketHost(fake.mp as unknown as MpClient, adapt(port1));
+  const remote = new RemoteMpClient(adapt(port2));
+
+  await remote.joinMatch("mR");
+  remote.channel("mR"); // registers the channel (this worker owns mR on the socket side)
+  await tick();
+  remote.markActive("mR");
+  await tick();
+  assert.deepEqual(fake.markedActive, ["mR"]);
+
+  const events: { matchId: string }[] = [];
+  remote.onResumeOk((e) => events.push(e));
+  fake.deliverResumeOk({
+    matchId: "mR",
+    role: "A",
+    opponentWallet: "0x",
+    game: "caro",
+    peerOnline: true,
+  });
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].matchId, "mR");
+
+  // An event for a match this worker does NOT own is filtered out at the socket host.
+  fake.deliverResumeOk({
+    matchId: "other",
+    role: "A",
+    opponentWallet: "0x",
+    game: "caro",
+    peerOnline: true,
+  });
+  await tick();
+  assert.equal(events.length, 1);
 
   port1.close();
   port2.close();
