@@ -2,12 +2,28 @@
 //!
 //! The payload shape is shared with `fleet-serve`, but bench windows by wall
 //! clock instead of the driver's synthetic deterministic timestamps.
+//!
+//! Telemetry must never perturb the benchmark it measures: posts are
+//! fire-and-forget, share one keep-alive client, carry hard timeouts, and are
+//! capped in flight so a slow/hung backend can't backpressure or exhaust the
+//! process's sockets and memory.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fleet_serve::HeartbeatPayload;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 use tunnel_harness::{DriverObserver, DriverOutcome, DriverStart, MoveCommitted};
+
+/// Total budget for a single heartbeat POST; a hung backend must not pin a task.
+const HEARTBEAT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Connect-phase budget, tighter than the overall request timeout.
+const HEARTBEAT_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Cap on concurrent in-flight posts. Sized well above what a healthy fast
+/// backend needs so normal runs never drop; it only bounds pathological
+/// (slow/hung) backends to avoid unbounded task/socket growth.
+const HEARTBEAT_MAX_INFLIGHT: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeartbeatSetup {
@@ -33,12 +49,12 @@ impl HeartbeatSetup {
             .await
             .map_err(|error| format!("heartbeat session registration response: {error}"))?;
 
-        Ok(HeartbeatConfig {
-            base_url: self.base_url.clone(),
-            session_id: response.session_id,
-            stats_token: response.stats_token,
-            flush_interval_ms: self.flush_interval_ms,
-        })
+        Ok(HeartbeatConfig::new(
+            self.base_url.clone(),
+            response.session_id,
+            response.stats_token,
+            self.flush_interval_ms,
+        ))
     }
 }
 
@@ -65,31 +81,69 @@ struct RegisterSessionResponse {
     stats_token: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Per-run heartbeat configuration. Holds the shared client and in-flight
+/// budget so every per-tunnel reporter is a cheap refcount clone rather than a
+/// fresh client (which would kill connection reuse) or an unbounded spawner.
+#[derive(Clone, Debug)]
 pub struct HeartbeatConfig {
-    pub base_url: String,
-    pub session_id: String,
-    pub stats_token: String,
+    pub base_url: Arc<str>,
+    pub session_id: Arc<str>,
+    pub stats_token: Arc<str>,
     pub flush_interval_ms: u64,
+    /// One keep-alive client per run; `reqwest::Client` is internally `Arc`.
+    http: reqwest::Client,
+    /// Precomputed once so dispatch never re-`format!`s the URL per flush.
+    heartbeat_url: Arc<str>,
+    /// Shared across all tunnels to bound total concurrent posts per run.
+    inflight: Arc<Semaphore>,
 }
 
 impl HeartbeatConfig {
+    pub(crate) fn new(
+        base_url: String,
+        session_id: String,
+        stats_token: String,
+        flush_interval_ms: u64,
+    ) -> Self {
+        let heartbeat_url: Arc<str> =
+            format!("{base_url}/v1/sessions/{session_id}/heartbeat").into();
+        Self {
+            base_url: base_url.into(),
+            session_id: session_id.into(),
+            stats_token: stats_token.into(),
+            flush_interval_ms,
+            http: build_client(),
+            heartbeat_url,
+            inflight: Arc::new(Semaphore::new(HEARTBEAT_MAX_INFLIGHT)),
+        }
+    }
+
     pub(crate) fn reporter(&self) -> BenchHeartbeatReporter {
         BenchHeartbeatReporter::new(
-            reqwest::Client::new(),
-            self.base_url.clone(),
-            self.session_id.clone(),
-            self.stats_token.clone(),
+            self.http.clone(),
+            Arc::clone(&self.stats_token),
+            Arc::clone(&self.heartbeat_url),
+            Arc::clone(&self.inflight),
             Duration::from_millis(self.flush_interval_ms.max(1)),
         )
     }
 }
 
+/// Build the shared client with hard timeouts so a stalled backend releases the
+/// task and socket instead of pinning them for the whole run.
+fn build_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HEARTBEAT_REQUEST_TIMEOUT)
+        .connect_timeout(HEARTBEAT_CONNECT_TIMEOUT)
+        .build()
+        .expect("heartbeat reqwest client builds with static timeouts")
+}
+
 pub(crate) struct BenchHeartbeatReporter {
     http: reqwest::Client,
-    base_url: String,
-    session_id: String,
-    stats_token: String,
+    stats_token: Arc<str>,
+    heartbeat_url: Arc<str>,
+    inflight: Arc<Semaphore>,
     flush_interval: Duration,
     tunnel_id: String,
     actions: u64,
@@ -100,16 +154,16 @@ pub(crate) struct BenchHeartbeatReporter {
 impl BenchHeartbeatReporter {
     fn new(
         http: reqwest::Client,
-        base_url: String,
-        session_id: String,
-        stats_token: String,
+        stats_token: Arc<str>,
+        heartbeat_url: Arc<str>,
+        inflight: Arc<Semaphore>,
         flush_interval: Duration,
     ) -> Self {
         Self {
             http,
-            base_url,
-            session_id,
             stats_token,
+            heartbeat_url,
+            inflight,
             flush_interval,
             tunnel_id: String::new(),
             actions: 0,
@@ -163,16 +217,22 @@ impl BenchHeartbeatReporter {
     }
 
     fn dispatch(&self, payload: HeartbeatPayload) {
+        // Reserve an in-flight slot before spawning. If the cap is saturated
+        // (only a slow/hung backend gets here), drop the sample: telemetry must
+        // never block or await on the driver's hot path.
+        let Ok(permit) = Arc::clone(&self.inflight).try_acquire_owned() else {
+            tracing::debug!("fleet-bench heartbeat dropped: in-flight cap reached");
+            return;
+        };
         let http = self.http.clone();
-        let url = format!(
-            "{}/v1/sessions/{}/heartbeat",
-            self.base_url, self.session_id
-        );
-        let stats_token = self.stats_token.clone();
+        let url = Arc::clone(&self.heartbeat_url);
+        let stats_token = Arc::clone(&self.stats_token);
         tokio::spawn(async move {
+            // Held for the request's lifetime, releasing the slot on completion.
+            let _permit = permit;
             let result = http
-                .post(url)
-                .bearer_auth(stats_token)
+                .post(url.as_ref())
+                .bearer_auth(stats_token.as_ref())
                 .json(&payload)
                 .send()
                 .await
@@ -209,10 +269,34 @@ impl DriverObserver for BenchHeartbeatReporter {
 }
 
 #[cfg(test)]
+impl BenchHeartbeatReporter {
+    /// Test-only constructor that injects a specific in-flight budget so the
+    /// drop-under-saturation path is observable without a full run.
+    fn for_test(http: reqwest::Client, heartbeat_url: Arc<str>, inflight: Arc<Semaphore>) -> Self {
+        Self::new(
+            http,
+            Arc::from("tok"),
+            heartbeat_url,
+            inflight,
+            Duration::from_millis(1),
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn sample_payload() -> HeartbeatPayload {
+        HeartbeatPayload {
+            tunnel_id: "tunnel-1".to_string(),
+            nonce: "1".to_string(),
+            actions_delta: 1,
+            window_ms: 1,
+        }
+    }
 
     #[tokio::test]
     async fn setup_registers_session_before_heartbeats() {
@@ -238,9 +322,67 @@ mod tests {
         };
         let config = setup.register("blackjack.v2").await.expect("register");
 
-        assert_eq!(config.base_url, server.uri());
-        assert_eq!(config.session_id, "sess-1");
-        assert_eq!(config.stats_token, "tok-1");
+        assert_eq!(&*config.base_url, server.uri());
+        assert_eq!(&*config.session_id, "sess-1");
+        assert_eq!(&*config.stats_token, "tok-1");
         assert_eq!(config.flush_interval_ms, 250);
+        // URL is precomputed once so dispatch never re-formats per flush.
+        assert_eq!(
+            &*config.heartbeat_url,
+            format!("{}/v1/sessions/sess-1/heartbeat", server.uri())
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_drops_instead_of_blocking_when_inflight_cap_reached() {
+        let inflight = Arc::new(Semaphore::new(1));
+        // Hold the only permit so the cap is saturated.
+        let held = Arc::clone(&inflight)
+            .try_acquire_owned()
+            .expect("initial permit");
+
+        let reporter = BenchHeartbeatReporter::for_test(
+            reqwest::Client::new(),
+            // Unreachable on purpose: a saturated cap must never spawn a post.
+            Arc::from("http://127.0.0.1:9/v1/sessions/x/heartbeat"),
+            Arc::clone(&inflight),
+        );
+
+        // Returns promptly without blocking; nothing is spawned.
+        reporter.dispatch(sample_payload());
+        assert_eq!(inflight.available_permits(), 0);
+
+        // The only outstanding permit is still the one we hold.
+        drop(held);
+        assert_eq!(inflight.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_releases_permit_after_post_completes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sess/heartbeat"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let inflight = Arc::new(Semaphore::new(1));
+        let url: Arc<str> = format!("{}/v1/sessions/sess/heartbeat", server.uri()).into();
+        let reporter =
+            BenchHeartbeatReporter::for_test(reqwest::Client::new(), url, Arc::clone(&inflight));
+
+        reporter.dispatch(sample_payload());
+
+        // The spawned task holds the permit until the POST resolves, then frees
+        // it. Poll (bounded) so a regression that leaks permits fails fast.
+        let mut released = false;
+        for _ in 0..200 {
+            if inflight.available_permits() == 1 {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(released, "permit was not released after the post completed");
     }
 }

@@ -180,7 +180,7 @@ impl StageWindowRecorder {
             StageId::Settle => &mut state.settle,
             _ => return,
         };
-        window.intervals.push((start, end.max(start)));
+        merge_interval(&mut window.intervals, start, end.max(start));
     }
 
     pub(crate) fn active_elapsed_ms(&self, stage: StageId) -> u128 {
@@ -193,22 +193,14 @@ impl StageWindowRecorder {
         if window.intervals.is_empty() {
             return 0;
         }
-        let mut intervals = window.intervals.clone();
-        intervals.sort_by_key(|(start, _)| *start);
-        let mut active = Duration::ZERO;
-        let (mut current_start, mut current_end) = intervals[0];
-        for (start, end) in intervals.into_iter().skip(1) {
-            if start <= current_end {
-                current_end = current_end.max(end);
-            } else {
-                active += current_end.saturating_sub(current_start);
-                current_start = start;
-                current_end = end;
-            }
-        }
-        active += current_end.saturating_sub(current_start);
-        let millis = active.as_millis();
-        millis.max(1)
+        // Intervals are kept sorted and disjoint on insert, so active time is a
+        // plain sum of their spans — no per-call clone or sort.
+        let active: Duration = window
+            .intervals
+            .iter()
+            .map(|(start, end)| end.saturating_sub(*start))
+            .sum();
+        active.as_millis().max(1)
     }
 
     fn record_play_started(&self, start: Instant) {
@@ -229,11 +221,33 @@ impl StageWindowRecorder {
 
     pub(crate) async fn wait_for_first_play_start(&self) -> Instant {
         loop {
+            // Register the Notified BEFORE the state check so a `notify_waiters`
+            // firing in the gap is observed rather than lost (mirrors the
+            // ordering in `submit_settle_when_ready`).
+            let notified = self.play_started.notified();
             if let Some(start) = self.first_play_started() {
                 return start;
             }
-            self.play_started.notified().await;
+            notified.await;
         }
+    }
+}
+
+/// Insert `[start, end]` into a set of sorted, disjoint intervals, coalescing any
+/// that overlap or touch. Keeps the set at O(#disjoint active regions) — ~1 under a
+/// saturated bench — rather than one entry per stage, so memory stays bounded and
+/// `active_elapsed_ms` is a plain sum with no per-call clone+sort.
+fn merge_interval(intervals: &mut Vec<(Duration, Duration)>, start: Duration, end: Duration) {
+    // Disjoint + sorted by start implies ends are sorted too, so both boundaries
+    // of the overlap range can be found by binary search.
+    let left = intervals.partition_point(|&(_, existing_end)| existing_end < start);
+    let right = intervals.partition_point(|&(existing_start, _)| existing_start <= end);
+    if left >= right {
+        intervals.insert(left, (start, end));
+    } else {
+        let merged_start = start.min(intervals[left].0);
+        let merged_end = end.max(intervals[right - 1].1);
+        intervals.splice(left..right, std::iter::once((merged_start, merged_end)));
     }
 }
 
@@ -1313,12 +1327,12 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
-                heartbeat: Some(HeartbeatConfig {
-                    base_url: server.uri(),
-                    session_id: "sess-1".into(),
-                    stats_token: "tok-1".into(),
-                    flush_interval_ms: 1,
-                }),
+                heartbeat: Some(HeartbeatConfig::new(
+                    server.uri(),
+                    "sess-1".into(),
+                    "tok-1".into(),
+                    1,
+                )),
             },
             None,
             None,
@@ -1420,6 +1434,22 @@ mod tests {
         );
 
         assert_eq!(recorder.active_elapsed_ms(StageId::Open), 150);
+    }
+
+    #[test]
+    fn stage_window_merge_is_order_independent_and_bounded() {
+        let recorder = StageWindowRecorder::new();
+        let base = recorder.origin;
+        let ms = Duration::from_millis;
+        // Overlapping intervals inserted out of order must union correctly and the
+        // retained set must collapse to the number of disjoint regions (here 1),
+        // proving memory does not grow with the number of records.
+        for (start, end) in [(50u64, 100u64), (0, 60), (90, 120), (10, 20)] {
+            recorder.record(StageId::Open, base + ms(start), base + ms(end));
+        }
+        assert_eq!(recorder.active_elapsed_ms(StageId::Open), 120);
+        let state = recorder.state.lock().expect("stage window mutex");
+        assert_eq!(state.open.intervals.len(), 1);
     }
 
     #[tokio::test]
