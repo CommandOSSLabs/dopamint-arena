@@ -141,7 +141,10 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
             Ok(body) => (
                 [
                     (CONTENT_TYPE, "application/octet-stream"),
-                    (HeaderName::from_static(TRANSCRIPT_FORMAT_HEADER), FORMAT_BODY),
+                    (
+                        HeaderName::from_static(TRANSCRIPT_FORMAT_HEADER),
+                        FORMAT_BODY,
+                    ),
                 ],
                 body,
             )

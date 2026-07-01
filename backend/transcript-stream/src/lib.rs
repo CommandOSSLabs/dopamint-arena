@@ -117,7 +117,9 @@ impl TranscriptUploader {
             .await
             .is_err()
         {
-            tracing::warn!("transcript uploader drain timed out; some queued chunks may be unflushed");
+            tracing::warn!(
+                "transcript uploader drain timed out; some queued chunks may be unflushed"
+            );
         }
     }
 }
@@ -432,7 +434,9 @@ mod tests {
             Some(Instant::now() - FLUSH_INTERVAL - Duration::from_millis(1));
         recorder.record(entry(2)).expect("record");
 
-        let up = rx.try_recv().expect("an aged buffer flushes on the next record");
+        let up = rx
+            .try_recv()
+            .expect("an aged buffer flushes on the next record");
         assert_eq!(up.seq, 0, "the time-based flush emits the first chunk");
     }
 
