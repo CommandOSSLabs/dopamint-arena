@@ -18,9 +18,10 @@ use tunnel_harness::instrument::{InstrumentedAnchor, InstrumentedRecorder, Instr
 use tunnel_harness::{
     Balances, DriverObserver, DriverRunControl, DriverStart, FrameCodec, HarnessError,
     InMemoryAnchor, InMemoryFrameTransport, InMemoryTranscriptRecorder, LocalSigner, MoveStrategy,
-    MoveStrategyContext, NullTranscriptRecorder, OpenedTunnel, PartyDriver, Protocol, Seat,
-    SeatParts, SettledTunnel, SettlementMode, Signer, Transcript, TranscriptEntry, TranscriptError,
-    TranscriptRecorder, TunnelAnchor, TunnelAnchorError, TunnelOpenRequest, TunnelSettleRequest,
+    MoveStrategyContext, NullTranscriptRecorder, OpenedTunnel, PartyDriver, Protocol,
+    RootOnlyTranscriptRecorder, Seat, SeatParts, SettledTunnel, SettlementMode, Signer, Transcript,
+    TranscriptEntry, TranscriptError, TranscriptRecorder, TunnelAnchor, TunnelAnchorError,
+    TunnelOpenRequest, TunnelSettleRequest,
 };
 use tunnel_telemetry::{CollectingSink, StageId, TelemetrySink};
 
@@ -779,13 +780,11 @@ impl TunnelAnchor for BenchAnchor {
 
 /// Per-seat transcript recorder chosen at runtime from the anchor's settlement
 /// mode. Both seats must share one concrete recorder type, so this is an enum
-/// rather than a generic: rootless anchors (memory) get the no-op recorder;
-/// root-settling anchors (sponsored Sui) get the in-memory recorder that builds
-/// the transcript root `settle` requires. Wiring the no-op recorder for a
-/// root-settling anchor makes `drive` reject the settle and the bench panic.
+/// rather than a generic.
 #[derive(Clone)]
 enum BenchRecorder<M> {
     Null(NullTranscriptRecorder),
+    RootOnly(RootOnlyTranscriptRecorder<M>),
     Memory(InMemoryTranscriptRecorder<M>),
 }
 
@@ -793,34 +792,52 @@ impl<M: Clone + Send + Sync> TranscriptRecorder<M> for BenchRecorder<M> {
     fn records_transcript(&self) -> bool {
         match self {
             Self::Null(r) => TranscriptRecorder::<M>::records_transcript(r),
+            Self::RootOnly(r) => r.records_transcript(),
             Self::Memory(r) => r.records_transcript(),
         }
     }
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
         match self {
             Self::Null(r) => r.record(entry),
+            Self::RootOnly(r) => r.record(entry),
             Self::Memory(r) => r.record(entry),
         }
     }
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
         match self {
             Self::Null(r) => TranscriptRecorder::<M>::snapshot(r),
+            Self::RootOnly(r) => r.snapshot(),
             Self::Memory(r) => r.snapshot(),
+        }
+    }
+    fn set_tunnel_id(&self, tunnel_id: &str) {
+        match self {
+            Self::Null(r) => TranscriptRecorder::<M>::set_tunnel_id(r, tunnel_id),
+            Self::RootOnly(r) => r.set_tunnel_id(tunnel_id),
+            Self::Memory(r) => r.set_tunnel_id(tunnel_id),
+        }
+    }
+    fn canonical_root_for_tunnel(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        match self {
+            Self::Null(r) => TranscriptRecorder::<M>::canonical_root_for_tunnel(r, tunnel_id),
+            Self::RootOnly(r) => r.canonical_root_for_tunnel(tunnel_id),
+            Self::Memory(r) => r.canonical_root_for_tunnel(tunnel_id),
         }
     }
 }
 
-/// Builds the per-seat recorder. A real (in-memory) recorder is wired when the
-/// caller asks to record transcripts (`--transcript-recorder memory`) OR the
-/// anchor settles against a transcript root (sponsored Sui, which requires one);
-/// otherwise the no-op recorder. So `--transcript-recorder none` truly disables
-/// recording and `memory` measures recorder cost even on the memory anchor.
+/// Builds the per-seat recorder. `memory` keeps full transcript entries for
+/// export/overhead measurement; transcript-root anchors with `none` keep only
+/// the derived Merkle frontier needed to sign settlement; rootless `none`
+/// discards everything.
 fn bench_recorder_for<M>(
     settlement_mode: SettlementMode,
     record_transcript: bool,
 ) -> BenchRecorder<M> {
-    if record_transcript || matches!(settlement_mode, SettlementMode::TranscriptRoot) {
+    if record_transcript {
         BenchRecorder::Memory(InMemoryTranscriptRecorder::new())
+    } else if matches!(settlement_mode, SettlementMode::TranscriptRoot) {
+        BenchRecorder::RootOnly(RootOnlyTranscriptRecorder::new())
     } else {
         BenchRecorder::Null(NullTranscriptRecorder)
     }
@@ -957,12 +974,17 @@ where
         rec_b,
         C::default(),
     );
-    let driver_a = if let Some(control) = run_control.as_ref() {
+    // One drain gate per tunnel: both seats share it, but it stays isolated from
+    // every other tunnel's in-flight moves so a busy neighbor can never wedge
+    // this tunnel's graceful stop. The run-level stop signal and move budget stay
+    // shared through `tunnel()`.
+    let tunnel_control = run_control.as_ref().map(DriverRunControl::tunnel);
+    let driver_a = if let Some(control) = tunnel_control.as_ref() {
         driver_a.with_run_control(control.clone())
     } else {
         driver_a
     };
-    let driver_b = if let Some(control) = run_control.as_ref() {
+    let driver_b = if let Some(control) = tunnel_control.as_ref() {
         driver_b.with_run_control(control.clone())
     } else {
         driver_b
@@ -1416,11 +1438,16 @@ mod tests {
 
     #[test]
     fn recorder_matches_anchor_settlement_mode() {
-        // Regression: a transcript-root anchor (sponsored Sui) needs a recorder
-        // that reports records_transcript()==true; wiring the no-op recorder made
-        // the engine reject settle and the bench panic on the join.
+        // A transcript-root anchor (sponsored Sui) needs a recorder that can
+        // provide a root; with `none`, it must not retain full move entries.
         let root = bench_recorder_for::<BjMove>(SettlementMode::TranscriptRoot, false);
         assert!(root.records_transcript());
+        assert!(
+            matches!(&root, BenchRecorder::RootOnly(_)),
+            "transcript-recorder none must keep only root state"
+        );
+        root.set_tunnel_id("0x1");
+        assert!(root.snapshot().entries().is_empty());
         let rootless = bench_recorder_for::<BjMove>(SettlementMode::Rootless, false);
         assert!(!rootless.records_transcript());
     }
@@ -1432,7 +1459,7 @@ mod tests {
         assert!(
             !bench_recorder_for::<BjMove>(SettlementMode::Rootless, false).records_transcript()
         );
-        // Root-settling anchors always get a real recorder regardless of the flag.
+        // Root-settling anchors always get root-capable recorder state.
         assert!(
             bench_recorder_for::<BjMove>(SettlementMode::TranscriptRoot, false)
                 .records_transcript()

@@ -8,7 +8,7 @@
 //! capped in flight so a slow/hung backend can't backpressure or exhaust the
 //! process's sockets and memory.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fleet_serve::HeartbeatPayload;
@@ -90,12 +90,9 @@ pub struct HeartbeatConfig {
     pub session_id: Arc<str>,
     pub stats_token: Arc<str>,
     pub flush_interval_ms: u64,
-    /// One keep-alive client per run; `reqwest::Client` is internally `Arc`.
-    http: reqwest::Client,
-    /// Precomputed once so dispatch never re-`format!`s the URL per flush.
-    heartbeat_url: Arc<str>,
-    /// Shared across all tunnels to bound total concurrent posts per run.
-    inflight: Arc<Semaphore>,
+    /// Shared across all per-tunnel observers so the cadence is per run, not
+    /// multiplied by tunnel concurrency.
+    sink: Arc<BenchHeartbeatSink>,
 }
 
 impl HeartbeatConfig {
@@ -105,27 +102,29 @@ impl HeartbeatConfig {
         stats_token: String,
         flush_interval_ms: u64,
     ) -> Self {
+        let http = build_client();
         let heartbeat_url: Arc<str> =
             format!("{base_url}/v1/sessions/{session_id}/heartbeat").into();
+        let stats_token: Arc<str> = stats_token.into();
+        let inflight = Arc::new(Semaphore::new(HEARTBEAT_MAX_INFLIGHT));
+        let sink = Arc::new(BenchHeartbeatSink::new(
+            http,
+            Arc::clone(&stats_token),
+            Arc::clone(&heartbeat_url),
+            Arc::clone(&inflight),
+            Duration::from_millis(flush_interval_ms.max(1)),
+        ));
         Self {
             base_url: base_url.into(),
             session_id: session_id.into(),
-            stats_token: stats_token.into(),
+            stats_token,
             flush_interval_ms,
-            http: build_client(),
-            heartbeat_url,
-            inflight: Arc::new(Semaphore::new(HEARTBEAT_MAX_INFLIGHT)),
+            sink,
         }
     }
 
     pub(crate) fn reporter(&self) -> BenchHeartbeatReporter {
-        BenchHeartbeatReporter::new(
-            self.http.clone(),
-            Arc::clone(&self.stats_token),
-            Arc::clone(&self.heartbeat_url),
-            Arc::clone(&self.inflight),
-            Duration::from_millis(self.flush_interval_ms.max(1)),
-        )
+        BenchHeartbeatReporter::new(Arc::clone(&self.sink))
     }
 }
 
@@ -139,19 +138,56 @@ fn build_client() -> reqwest::Client {
         .expect("heartbeat reqwest client builds with static timeouts")
 }
 
-pub(crate) struct BenchHeartbeatReporter {
+#[derive(Debug)]
+struct BenchHeartbeatSink {
     http: reqwest::Client,
     stats_token: Arc<str>,
     heartbeat_url: Arc<str>,
     inflight: Arc<Semaphore>,
     flush_interval: Duration,
-    tunnel_id: String,
-    actions: u64,
-    last_flush: Option<Instant>,
-    last_nonce: u64,
+    state: Mutex<BenchHeartbeatState>,
 }
 
-impl BenchHeartbeatReporter {
+#[derive(Debug)]
+struct BenchHeartbeatState {
+    tunnel_id: String,
+    actions: u64,
+    window_started: Instant,
+    last_nonce: u64,
+    flush_scheduled: bool,
+}
+
+impl BenchHeartbeatState {
+    fn new(now: Instant) -> Self {
+        Self {
+            tunnel_id: String::new(),
+            actions: 0,
+            window_started: now,
+            last_nonce: 0,
+            flush_scheduled: false,
+        }
+    }
+
+    fn payload(&mut self, now: Instant, window: Duration) -> Option<HeartbeatPayload> {
+        if self.actions == 0 {
+            self.window_started = now;
+            self.flush_scheduled = false;
+            return None;
+        }
+        let payload = HeartbeatPayload {
+            tunnel_id: self.tunnel_id.clone(),
+            nonce: self.last_nonce.to_string(),
+            actions_delta: self.actions,
+            window_ms: (window.as_millis() as u64).max(1),
+        };
+        self.actions = 0;
+        self.window_started = now;
+        self.flush_scheduled = false;
+        Some(payload)
+    }
+}
+
+impl BenchHeartbeatSink {
     fn new(
         http: reqwest::Client,
         stats_token: Arc<str>,
@@ -165,55 +201,84 @@ impl BenchHeartbeatReporter {
             heartbeat_url,
             inflight,
             flush_interval,
-            tunnel_id: String::new(),
-            actions: 0,
-            last_flush: None,
-            last_nonce: 0,
+            state: Mutex::new(BenchHeartbeatState::new(Instant::now())),
         }
     }
 
-    fn start(&mut self, tunnel_id: &str) {
-        self.tunnel_id = tunnel_id.to_string();
-        self.actions = 0;
-        self.last_flush = Some(Instant::now());
-        self.last_nonce = 0;
-    }
-
-    fn record(&mut self, ev: &MoveCommitted) -> Option<HeartbeatPayload> {
-        self.actions += 1;
-        self.last_nonce = ev.nonce;
+    fn record(&self, tunnel_id: &str, nonce: u64) -> Option<HeartbeatPayload> {
         let now = Instant::now();
-        let base = self.last_flush.get_or_insert(now);
-        let window = now.saturating_duration_since(*base);
+        let mut state = self.state.lock().expect("heartbeat state lock");
+        if state.actions == 0 {
+            state.window_started = now;
+        }
+        state.actions += 1;
+        state.tunnel_id = tunnel_id.to_string();
+        state.last_nonce = nonce;
+        let window = now.saturating_duration_since(state.window_started);
         if window >= self.flush_interval {
-            self.flush(now, window)
+            state.payload(now, window)
         } else {
             None
         }
     }
 
-    fn drain(&mut self) -> Option<HeartbeatPayload> {
-        if self.actions == 0 {
-            return None;
-        }
+    fn flush_if_due(&self) -> Option<HeartbeatPayload> {
         let now = Instant::now();
-        let base = self.last_flush.unwrap_or(now);
-        self.flush(now, now.saturating_duration_since(base))
+        let mut state = self.state.lock().expect("heartbeat state lock");
+        let window = now.saturating_duration_since(state.window_started);
+        if window >= self.flush_interval {
+            state.payload(now, window)
+        } else {
+            None
+        }
     }
 
-    fn flush(&mut self, now: Instant, window: Duration) -> Option<HeartbeatPayload> {
-        if self.actions == 0 {
-            return None;
-        }
-        let payload = HeartbeatPayload {
-            tunnel_id: self.tunnel_id.clone(),
-            nonce: self.last_nonce.to_string(),
-            actions_delta: self.actions,
-            window_ms: (window.as_millis() as u64).max(1),
+    fn schedule_flush(self: &Arc<Self>) {
+        let delay = {
+            let now = Instant::now();
+            let mut state = self.state.lock().expect("heartbeat state lock");
+            if state.actions == 0 || state.flush_scheduled {
+                return;
+            }
+            state.flush_scheduled = true;
+            let elapsed = now.saturating_duration_since(state.window_started);
+            self.flush_interval.saturating_sub(elapsed)
         };
-        self.actions = 0;
-        self.last_flush = Some(now);
-        Some(payload)
+        self.spawn_flush_after(delay);
+    }
+
+    fn spawn_flush_after(self: &Arc<Self>, delay: Duration) {
+        let sink = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            sink.flush_due_or_reschedule();
+        });
+    }
+
+    fn flush_due_or_reschedule(self: Arc<Self>) {
+        let now = Instant::now();
+        let mut retry_after = None;
+        let payload = {
+            let mut state = self.state.lock().expect("heartbeat state lock");
+            state.flush_scheduled = false;
+            if state.actions == 0 {
+                None
+            } else {
+                let window = now.saturating_duration_since(state.window_started);
+                if window >= self.flush_interval {
+                    state.payload(now, window)
+                } else {
+                    state.flush_scheduled = true;
+                    retry_after = Some(self.flush_interval.saturating_sub(window));
+                    None
+                }
+            }
+        };
+        if let Some(payload) = payload {
+            self.dispatch(payload);
+        } else if let Some(delay) = retry_after {
+            self.spawn_flush_after(delay);
+        }
     }
 
     fn dispatch(&self, payload: HeartbeatPayload) {
@@ -244,6 +309,36 @@ impl BenchHeartbeatReporter {
     }
 }
 
+pub(crate) struct BenchHeartbeatReporter {
+    sink: Arc<BenchHeartbeatSink>,
+    tunnel_id: String,
+}
+
+impl BenchHeartbeatReporter {
+    fn new(sink: Arc<BenchHeartbeatSink>) -> Self {
+        Self {
+            sink,
+            tunnel_id: String::new(),
+        }
+    }
+
+    fn start(&mut self, tunnel_id: &str) {
+        self.tunnel_id = tunnel_id.to_string();
+    }
+
+    fn record(&mut self, ev: &MoveCommitted) -> Option<HeartbeatPayload> {
+        self.sink.record(&self.tunnel_id, ev.nonce)
+    }
+
+    fn drain(&mut self) -> Option<HeartbeatPayload> {
+        self.sink.flush_if_due()
+    }
+
+    fn dispatch(&self, payload: HeartbeatPayload) {
+        self.sink.dispatch(payload);
+    }
+}
+
 impl DriverObserver for BenchHeartbeatReporter {
     fn on_started(&mut self, start: &DriverStart<'_>) {
         self.start(start.tunnel_id);
@@ -258,12 +353,16 @@ impl DriverObserver for BenchHeartbeatReporter {
     fn on_finished(&mut self, _outcome: &DriverOutcome) {
         if let Some(payload) = self.drain() {
             self.dispatch(payload);
+        } else {
+            self.sink.schedule_flush();
         }
     }
 
     fn on_aborted(&mut self) {
         if let Some(payload) = self.drain() {
             self.dispatch(payload);
+        } else {
+            self.sink.schedule_flush();
         }
     }
 }
@@ -273,19 +372,20 @@ impl BenchHeartbeatReporter {
     /// Test-only constructor that injects a specific in-flight budget so the
     /// drop-under-saturation path is observable without a full run.
     fn for_test(http: reqwest::Client, heartbeat_url: Arc<str>, inflight: Arc<Semaphore>) -> Self {
-        Self::new(
+        Self::new(Arc::new(BenchHeartbeatSink::new(
             http,
             Arc::from("tok"),
             heartbeat_url,
             inflight,
             Duration::from_millis(1),
-        )
+        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tunnel_harness::{Balances, Seat};
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -295,6 +395,23 @@ mod tests {
             nonce: "1".to_string(),
             actions_delta: 1,
             window_ms: 1,
+        }
+    }
+
+    fn committed(nonce: u64) -> MoveCommitted {
+        MoveCommitted {
+            by: Seat::A,
+            nonce,
+            move_index: nonce,
+            timestamp_ms: nonce,
+        }
+    }
+
+    fn finished(moves: u64) -> DriverOutcome {
+        DriverOutcome {
+            moves,
+            final_balances: Balances { a: 1, b: 1 },
+            play_ns: 1,
         }
     }
 
@@ -328,7 +445,7 @@ mod tests {
         assert_eq!(config.flush_interval_ms, 250);
         // URL is precomputed once so dispatch never re-formats per flush.
         assert_eq!(
-            &*config.heartbeat_url,
+            &*config.sink.heartbeat_url,
             format!("{}/v1/sessions/sess-1/heartbeat", server.uri())
         );
     }
@@ -384,5 +501,51 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(released, "permit was not released after the post completed");
+    }
+
+    #[tokio::test]
+    async fn reporters_share_cadence_instead_of_draining_per_tunnel() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sess/heartbeat"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let config = HeartbeatConfig::new(server.uri(), "sess".into(), "tok".into(), 100);
+        let mut first = config.reporter();
+        let mut second = config.reporter();
+
+        first.start("0x1");
+        second.start("0x2");
+        assert_eq!(first.record(&committed(1)), None);
+        assert_eq!(second.record(&committed(1)), None);
+
+        first.on_finished(&finished(1));
+        second.on_finished(&finished(1));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            0,
+            "finishing many tunnels inside one heartbeat window must not burst POSTs"
+        );
+
+        let mut requests = Vec::new();
+        for _ in 0..50 {
+            requests = server.received_requests().await.unwrap();
+            if requests.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(
+            requests.len(),
+            1,
+            "one shared flush should cover both tunnels"
+        );
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["actionsDelta"], 2);
+        assert!(body["windowMs"].as_u64().unwrap() >= 100);
     }
 }

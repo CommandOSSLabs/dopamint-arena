@@ -597,23 +597,8 @@ pub fn run_lifecycle_pipeline(
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                if run_control_for_tasks.moves() > 0 {
-                    run_control_for_tasks.request_stop();
-                    break Instant::now();
-                }
-                match tokio::time::timeout(Duration::from_millis(1), tasks.join_next()).await {
-                    Ok(Some(result)) => {
-                        if record_tunnel_join(&mut samples, result) {
-                            tunnels_aborted += 1;
-                        }
-                        if tasks.is_empty() {
-                            break Instant::now();
-                        }
-                    }
-                    Ok(None) => break Instant::now(),
-                    Err(_) => {}
-                }
-                continue;
+                run_control_for_tasks.request_stop();
+                break Instant::now();
             }
 
             let poll_window = remaining.min(Duration::from_millis(10));
@@ -1356,6 +1341,40 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_pipeline_settles_every_tunnel_under_high_concurrency() {
+        // Many tunnels in flight share one run-level graceful control. When the
+        // move target trips the run-wide stop, each tunnel must still reach its
+        // own close boundary and settle. Regression for the shared-drain deadlock
+        // that left one seat waiting and wedged large concurrent settlements.
+        let out = run_lifecycle_pipeline(
+            4,
+            3600,
+            Some(MoveTarget::Count(64)),
+            32,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+                heartbeat: None,
+            },
+            false,
+        );
+
+        assert!(out.moves >= 64);
+        assert!(out.tunnels_opened >= 32);
+        assert_eq!(out.tunnels_aborted, 0, "no tunnel may be left wedged");
+        assert_eq!(
+            out.tunnels_settled, out.tunnels_opened,
+            "every opened tunnel must settle"
+        );
+    }
+
+    #[test]
     fn lifecycle_pipeline_move_target_drains_concurrent_tunnels() {
         let out = run_lifecycle_pipeline(
             2,
@@ -1446,10 +1465,9 @@ mod tests {
 
         assert_eq!(out.tunnels_claimed, 1);
         assert_eq!(out.tunnels_settled, 1);
-        assert!(out.moves > 0);
         assert!(
-            out.moves < 143,
-            "duration=0 should stop at the first graceful close boundary, got {} moves",
+            out.moves <= 3,
+            "duration=0 should stop at the initial or first close boundary, got {} moves",
             out.moves
         );
         assert_eq!(out.tunnels_aborted, 0);

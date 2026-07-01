@@ -227,13 +227,22 @@ impl<M, R: TranscriptRecorder<M> + Send + Sync, S: TelemetrySink + Send> Transcr
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
         self.inner.snapshot()
     }
+
+    fn set_tunnel_id(&self, tunnel_id: &str) {
+        self.inner.set_tunnel_id(tunnel_id);
+    }
+
+    fn canonical_root_for_tunnel(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        self.inner.canonical_root_for_tunnel(tunnel_id)
+    }
 }
 
 #[cfg(test)]
 mod recorder_tests {
     use super::*;
     use crate::transcript::{
-        InMemoryTranscriptRecorder, JsonTranscriptCodec, TranscriptEntry, TranscriptRecorder,
+        InMemoryTranscriptRecorder, JsonTranscriptCodec, RootOnlyTranscriptRecorder,
+        TranscriptEntry, TranscriptRecorder,
     };
     use crate::Seat;
     use tunnel_telemetry::{CollectingSink, StageId};
@@ -273,6 +282,20 @@ mod recorder_tests {
             .samples()
             .iter()
             .any(|s| s.stage == StageId::RecorderRecord));
+    }
+
+    #[test]
+    fn instrumented_recorder_forwards_root_only_tunnel_id() {
+        let rec = InstrumentedRecorder::new(
+            RootOnlyTranscriptRecorder::<u8>::default(),
+            CollectingSink::with_capacity(4),
+        );
+
+        rec.set_tunnel_id("0x1");
+        rec.record(entry(0)).unwrap();
+
+        assert!(rec.canonical_root_for_tunnel("0x1").is_ok());
+        assert!(rec.snapshot().entries().is_empty());
     }
 }
 

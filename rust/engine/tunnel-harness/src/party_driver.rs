@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::watch;
 use tunnel_core::protocol_id::ProtocolId;
 use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Settlement};
@@ -39,23 +39,48 @@ pub struct SeatParts<P: Protocol, S: Signer> {
     pub seat: Seat,
 }
 
-#[derive(Clone)]
-pub struct DriverRunControl {
-    inner: Arc<DriverRunControlInner>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DriverStopMode {
     Hard,
     Graceful,
 }
 
-struct DriverRunControlInner {
+/// Run-level state shared by *every* tunnel in a run: the stop signal and the
+/// global committed-move budget. Cloning a [`DriverRunControl`] shares this, so
+/// one `request_stop` / move target governs the whole swarm at once.
+struct RunLevelControl {
     move_limit: Option<u64>,
     stop_mode: DriverStopMode,
-    move_reservations: AtomicU64,
+    /// Monotonic count of reserved proposals, consulted only to cap total moves
+    /// at `move_limit` under a hard stop. Graceful mode enforces the limit via
+    /// committed moves and never reads this.
+    reservations: AtomicU64,
+    /// Committed moves across all tunnels — the run's move budget. Reaching
+    /// `move_limit` requests the run-wide stop.
     moves: AtomicU64,
     stop_tx: watch::Sender<bool>,
+}
+
+/// Per-seat-pair drain state. Each tunnel owns its own gate (see
+/// [`DriverRunControl::tunnel`]), so one tunnel's in-flight move can never block
+/// another tunnel from honoring a stop. Both seats of a tunnel share one gate.
+#[derive(Default)]
+struct TunnelGate {
+    /// Moves proposed by one seat but not yet committed by the other — a frame
+    /// is on the wire that the receiver still owes an ack for. The proposer
+    /// increments it on reserve; the receiver decrements it on commit.
+    inflight: AtomicU64,
+}
+
+/// A driver's handle onto the run-wide stop and its single opponent's drain
+/// coordination. Cloning shares *both* the run-level state and the per-tunnel
+/// gate — that is how the two seats of one tunnel pair up.
+/// [`tunnel`](Self::tunnel) mints a fresh gate over the same run-level state for
+/// a *different* tunnel.
+#[derive(Clone)]
+pub struct DriverRunControl {
+    run: Arc<RunLevelControl>,
+    gate: Arc<TunnelGate>,
 }
 
 impl Default for DriverRunControl {
@@ -65,99 +90,110 @@ impl Default for DriverRunControl {
 }
 
 impl DriverRunControl {
+    fn from_run(run: RunLevelControl) -> Self {
+        Self {
+            run: Arc::new(run),
+            gate: Arc::new(TunnelGate::default()),
+        }
+    }
+
     pub fn unbounded() -> Self {
         let (stop_tx, _) = watch::channel(false);
-        Self {
-            inner: Arc::new(DriverRunControlInner {
-                move_limit: None,
-                stop_mode: DriverStopMode::Hard,
-                move_reservations: AtomicU64::new(0),
-                moves: AtomicU64::new(0),
-                stop_tx,
-            }),
-        }
+        Self::from_run(RunLevelControl {
+            move_limit: None,
+            stop_mode: DriverStopMode::Hard,
+            reservations: AtomicU64::new(0),
+            moves: AtomicU64::new(0),
+            stop_tx,
+        })
     }
 
     pub fn with_move_limit(move_limit: u64) -> Self {
         let (stop_tx, _) = watch::channel(move_limit == 0);
-        Self {
-            inner: Arc::new(DriverRunControlInner {
-                move_limit: Some(move_limit),
-                stop_mode: DriverStopMode::Hard,
-                move_reservations: AtomicU64::new(0),
-                moves: AtomicU64::new(0),
-                stop_tx,
-            }),
-        }
+        Self::from_run(RunLevelControl {
+            move_limit: Some(move_limit),
+            stop_mode: DriverStopMode::Hard,
+            reservations: AtomicU64::new(0),
+            moves: AtomicU64::new(0),
+            stop_tx,
+        })
     }
 
     pub fn graceful_unbounded() -> Self {
         let (stop_tx, _) = watch::channel(false);
-        Self {
-            inner: Arc::new(DriverRunControlInner {
-                move_limit: None,
-                stop_mode: DriverStopMode::Graceful,
-                move_reservations: AtomicU64::new(0),
-                moves: AtomicU64::new(0),
-                stop_tx,
-            }),
-        }
+        Self::from_run(RunLevelControl {
+            move_limit: None,
+            stop_mode: DriverStopMode::Graceful,
+            reservations: AtomicU64::new(0),
+            moves: AtomicU64::new(0),
+            stop_tx,
+        })
     }
 
     pub fn with_graceful_move_limit(move_limit: u64) -> Self {
         let (stop_tx, _) = watch::channel(move_limit == 0);
+        Self::from_run(RunLevelControl {
+            move_limit: Some(move_limit),
+            stop_mode: DriverStopMode::Graceful,
+            reservations: AtomicU64::new(0),
+            moves: AtomicU64::new(0),
+            stop_tx,
+        })
+    }
+
+    /// Mint a handle for a *new* tunnel: the same run-level stop/budget, but a
+    /// fresh per-tunnel drain gate. Both seats of that tunnel must share the
+    /// returned handle (clone it once per seat).
+    pub fn tunnel(&self) -> Self {
         Self {
-            inner: Arc::new(DriverRunControlInner {
-                move_limit: Some(move_limit),
-                stop_mode: DriverStopMode::Graceful,
-                move_reservations: AtomicU64::new(0),
-                moves: AtomicU64::new(0),
-                stop_tx,
-            }),
+            run: Arc::clone(&self.run),
+            gate: Arc::new(TunnelGate::default()),
         }
     }
 
     pub fn request_stop(&self) {
-        self.inner.stop_tx.send_replace(true);
+        self.run.stop_tx.send_replace(true);
     }
 
     pub fn stopped(&self) -> bool {
-        *self.inner.stop_tx.borrow()
+        *self.run.stop_tx.borrow()
     }
 
     pub fn moves(&self) -> u64 {
-        self.inner.moves.load(Ordering::Relaxed)
+        self.run.moves.load(Ordering::Relaxed)
     }
 
     fn subscribe(&self) -> watch::Receiver<bool> {
-        self.inner.stop_tx.subscribe()
-    }
-
-    fn has_outstanding_reserved_move(&self) -> bool {
-        self.inner.move_reservations.load(Ordering::Acquire)
-            > self.inner.moves.load(Ordering::Acquire)
+        self.run.stop_tx.subscribe()
     }
 
     fn is_graceful(&self) -> bool {
-        self.inner.stop_mode == DriverStopMode::Graceful
+        self.run.stop_mode == DriverStopMode::Graceful
     }
 
-    fn is_hard_stopped(&self) -> bool {
-        self.stopped() && !self.is_graceful()
+    /// True while this tunnel has a move on the wire that its receiver has not
+    /// yet committed. Reads only this tunnel's gate, so concurrent tunnels never
+    /// interfere with each other's stop decisions.
+    fn has_inflight_move(&self) -> bool {
+        self.gate.inflight.load(Ordering::Acquire) > 0
     }
 
+    /// Reserve the right to propose a move. Returns false when the run has
+    /// stopped or a hard move-limit cap is reached, in which case the caller
+    /// must not send. On success the tunnel gate records the move as in flight.
     fn reserve_move_proposal(&self) -> bool {
         if self.is_graceful() {
-            self.inner.move_reservations.fetch_add(1, Ordering::AcqRel);
+            // Graceful drains keep proposing until a close boundary; the limit is
+            // enforced through committed moves, not by capping reservations.
+            self.gate.inflight.fetch_add(1, Ordering::AcqRel);
             return true;
         }
 
-        let Some(move_limit) = self.inner.move_limit else {
-            self.inner.move_reservations.fetch_add(1, Ordering::AcqRel);
+        let Some(move_limit) = self.run.move_limit else {
             if self.stopped() {
-                self.inner.move_reservations.fetch_sub(1, Ordering::AcqRel);
                 return false;
             }
+            self.gate.inflight.fetch_add(1, Ordering::AcqRel);
             return true;
         };
 
@@ -165,13 +201,13 @@ impl DriverRunControl {
             if self.stopped() {
                 return false;
             }
-            let reservations = self.inner.move_reservations.load(Ordering::Acquire);
+            let reservations = self.run.reservations.load(Ordering::Acquire);
             if reservations >= move_limit {
                 return false;
             }
             if self
-                .inner
-                .move_reservations
+                .run
+                .reservations
                 .compare_exchange_weak(
                     reservations,
                     reservations + 1,
@@ -180,19 +216,25 @@ impl DriverRunControl {
                 )
                 .is_ok()
             {
+                self.gate.inflight.fetch_add(1, Ordering::AcqRel);
                 return true;
             }
         }
     }
 
+    /// Record a committed transition. `observer` is the seat reporting it;
+    /// `mover` authored the move. The proposer's own ack (`observer == mover`)
+    /// is ignored so each move counts exactly once — on the receiver, which is
+    /// also where this tunnel's in-flight move clears.
     fn record_committed_move(&self, observer: Seat, mover: Seat) {
         if observer == mover {
             return;
         }
 
-        let moves = self.inner.moves.fetch_add(1, Ordering::Relaxed) + 1;
+        self.gate.inflight.fetch_sub(1, Ordering::AcqRel);
+        let moves = self.run.moves.fetch_add(1, Ordering::Relaxed) + 1;
         if self
-            .inner
+            .run
             .move_limit
             .is_some_and(|move_limit| moves >= move_limit)
         {
@@ -384,6 +426,7 @@ where
                 seat: our_seat,
             },
         );
+        recorder.set_tunnel_id(seat.tunnel_id());
 
         let ctx = MoveStrategyContext {
             tunnel_id: String::new(),
@@ -407,62 +450,43 @@ where
             if seat.is_terminal() {
                 break;
             }
-            if run_control.as_ref().is_some_and(|control| {
-                control.stopped()
-                    && control.is_graceful()
-                    && moves > 0
-                    && seat.can_gracefully_close()
-            }) {
-                break;
-            }
-            if run_control
+
+            // A stop request winds the seat down. A hard stop halts at once; a
+            // graceful stop keeps playing only until the protocol reaches a safe
+            // close boundary. `boundary_ok` is a pure function of this seat's
+            // committed state, so it stays valid even while parked in recv.
+            let (stopped, graceful) = run_control
                 .as_ref()
-                .is_some_and(DriverRunControl::is_hard_stopped)
-            {
-                match Self::recv_or_stop(frame_transport, run_control.as_ref(), false).await? {
-                    DriverRecv::Frame(bytes) => {
-                        let out = seat.handle_frame(&bytes)?;
-                        for f in out {
-                            frame_transport.send(f).await?;
-                        }
-                        moves += 1;
-                        let ev = MoveCommitted {
-                            by: our_seat.other(),
-                            nonce: seat.nonce(),
-                            move_index: moves,
-                            timestamp_ms: next_timestamp(),
-                        };
-                        for o in observers.iter_mut() {
-                            o.on_move_committed(&ev);
-                        }
-                        if let Some(entry) = seat.take_last_committed() {
-                            last_timestamp = entry.timestamp;
-                            recorder.record(entry)?;
-                        }
-                        if let Some(control) = run_control.as_ref() {
-                            control.record_committed_move(our_seat, our_seat.other());
-                        }
-                        continue;
-                    }
-                    DriverRecv::Closed | DriverRecv::Stopped => break,
-                }
-            }
+                .map_or((false, false), |c| (c.stopped(), c.is_graceful()));
+            let boundary_ok = moves == 0 || seat.can_gracefully_close();
+            let winding_down = stopped && (!graceful || boundary_ok);
+
             if moves >= max_moves {
                 return Err(HarnessError::Verification(
                     "max moves reached before terminal".into(),
                 ));
             }
 
-            let planned_move = move_strategy.plan_move(seat.state(), our_seat, &ctx).await;
+            // Never open a new move while settling here; fall through to the
+            // receiver arm to drain any in-flight move and then stop.
+            let planned_move = if winding_down {
+                None
+            } else {
+                move_strategy.plan_move(seat.state(), our_seat, &ctx).await
+            };
 
             if let Some(mv) = planned_move {
                 if let Some(control) = run_control.as_ref() {
                     if !control.reserve_move_proposal() {
-                        break;
+                        // Stop won the race, or the hard move cap is reached; loop
+                        // back to re-evaluate the stop and settle.
+                        continue;
                     }
                 }
                 let frame = seat.propose(mv, next_timestamp())?;
                 frame_transport.send(frame).await?;
+                // The opponent must ack a move it has seen in flight before it can
+                // honor a stop, so this recv cannot hang on a cooperative shutdown.
                 match frame_transport.recv().await? {
                     Some(bytes) => {
                         let out = seat.handle_frame(&bytes)?;
@@ -493,12 +517,9 @@ where
                 continue;
             }
 
-            let allow_graceful_stop = run_control.as_ref().is_some_and(|control| {
-                control.is_graceful() && moves > 0 && seat.can_gracefully_close()
-            });
-            match Self::recv_or_stop(frame_transport, run_control.as_ref(), allow_graceful_stop)
-                .await?
-            {
+            // Receiver turn, or winding down with nothing left to propose: take
+            // the opponent's move, or stop once it is safe to.
+            match Self::recv_or_stop(frame_transport, run_control.as_ref(), boundary_ok).await? {
                 DriverRecv::Frame(bytes) => {
                     let out = seat.handle_frame(&bytes)?;
                     for f in out {
@@ -557,8 +578,8 @@ where
                         "anchor requires transcript recorder".into(),
                     ));
                 }
+                let root = recorder.canonical_root_for_tunnel(seat.tunnel_id())?;
                 let transcript = recorder.snapshot();
-                let root = transcript.canonical_root_for_tunnel(seat.tunnel_id())?;
                 let msg = serialize_settlement_with_root(&settlement, &root);
                 let entries = transcript
                     .entries()
@@ -595,10 +616,14 @@ where
         Ok(outcome)
     }
 
+    /// Wait for the opponent's next move, or return `Stopped` once a cooperative
+    /// shutdown is safe to honor. `boundary_ok` reports whether this seat's
+    /// committed state sits at a protocol close boundary; it is stable while
+    /// parked, so re-checking it on a stop wake is sound.
     async fn recv_or_stop(
         frame_transport: &Ch,
         run_control: Option<&DriverRunControl>,
-        allow_graceful_stop: bool,
+        boundary_ok: bool,
     ) -> Result<DriverRecv, HarnessError> {
         let Some(run_control) = run_control else {
             return match frame_transport.recv().await? {
@@ -607,54 +632,41 @@ where
             };
         };
 
+        // A stop is honorable once the run has stopped and this seat is at a safe
+        // point: a close boundary for graceful stops, or with nothing in flight
+        // for hard stops. The per-tunnel gate keeps `has_inflight_move` scoped to
+        // this seat-pair, so a busy neighbor tunnel never blocks the decision.
+        let may_stop = || {
+            run_control.stopped()
+                && !run_control.has_inflight_move()
+                && (!run_control.is_graceful() || boundary_ok)
+        };
+
+        if may_stop() {
+            return Ok(DriverRecv::Stopped);
+        }
+
         let mut stop_rx = run_control.subscribe();
         loop {
-            let graceful_stop_allowed =
-                allow_graceful_stop && run_control.stopped() && run_control.is_graceful();
-            if graceful_stop_allowed {
-                return Ok(DriverRecv::Stopped);
-            }
-            if run_control.is_hard_stopped() {
-                if !run_control.has_outstanding_reserved_move() {
-                    return Ok(DriverRecv::Stopped);
-                }
-                match tokio::time::timeout(Duration::from_millis(1), frame_transport.recv()).await {
-                    Ok(frame) => {
-                        return match frame? {
-                            Some(bytes) => Ok(DriverRecv::Frame(bytes)),
-                            None if run_control.is_hard_stopped()
-                                && !run_control.has_outstanding_reserved_move() =>
-                            {
-                                Ok(DriverRecv::Stopped)
-                            }
-                            None => Ok(DriverRecv::Closed),
-                        };
-                    }
-                    Err(_) => continue,
-                }
-            }
-
             tokio::select! {
                 biased;
 
                 frame = frame_transport.recv() => {
                     return match frame? {
                         Some(bytes) => Ok(DriverRecv::Frame(bytes)),
-                        None if run_control.is_hard_stopped() => Ok(DriverRecv::Stopped),
-                        None if allow_graceful_stop && run_control.stopped() && run_control.is_graceful() => {
-                            Ok(DriverRecv::Stopped)
-                        }
+                        // Peer closed its end. If we are already stopping this is
+                        // the coordinated shutdown; otherwise it is an unexpected
+                        // mid-play EOF that must abort.
+                        None if run_control.stopped() => Ok(DriverRecv::Stopped),
                         None => Ok(DriverRecv::Closed),
                     };
                 }
                 changed = stop_rx.changed() => {
-                    if changed.is_err()
-                        || (allow_graceful_stop
-                            && run_control.stopped()
-                            && run_control.is_graceful())
-                    {
+                    if changed.is_err() || may_stop() {
                         return Ok(DriverRecv::Stopped);
                     }
+                    // Stopped but not yet safe (a move is still in flight): keep
+                    // waiting for the frame that clears the drain.
                 }
             }
         }
@@ -924,6 +936,28 @@ mod tests {
         }
     }
 
+    struct StopAfterNthSendTransport<T> {
+        inner: T,
+        run_control: DriverRunControl,
+        sends: Arc<AtomicU64>,
+        stop_after_send: u64,
+    }
+
+    impl<T: FrameTransport> FrameTransport for StopAfterNthSendTransport<T> {
+        async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+            self.inner.send(bytes).await?;
+            let sends = self.sends.fetch_add(1, Ordering::Relaxed) + 1;
+            if sends == self.stop_after_send {
+                self.run_control.request_stop();
+            }
+            Ok(())
+        }
+
+        async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+            self.inner.recv().await
+        }
+    }
+
     struct StopBeforeSendTransport<T> {
         inner: T,
         run_control: DriverRunControl,
@@ -960,6 +994,22 @@ mod tests {
                 tokio::task::yield_now().await;
             }
             self.inner.recv().await
+        }
+    }
+
+    struct ReadyFrameTransport {
+        frame: Vec<u8>,
+        recv_calls: Arc<AtomicU64>,
+    }
+
+    impl FrameTransport for ReadyFrameTransport {
+        async fn send(&self, _bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+            Ok(())
+        }
+
+        async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+            self.recv_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Some(self.frame.clone()))
         }
     }
 
@@ -1106,6 +1156,56 @@ mod tests {
         assert_eq!(settled.load(Ordering::Relaxed), 2);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn graceful_stop_after_peer_close_boundary_still_acks_reserved_move() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::graceful_unbounded();
+        let sends = Arc::new(AtomicU64::new(0));
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            StopAfterNthSendTransport {
+                inner: ch_a,
+                run_control: run_control.clone(),
+                sends,
+                stop_after_send: 4,
+            },
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("reserved move should be acked before graceful stop is honored");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 6);
+        assert_eq!(out_b.moves, 6);
+        assert_eq!(run_control.moves(), 6);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+    }
+
     #[test]
     fn run_control_reserves_move_limit_exactly() {
         let run_control = DriverRunControl::with_move_limit(1);
@@ -1118,6 +1218,162 @@ mod tests {
 
         assert_eq!(run_control.moves(), 1);
         assert!(run_control.stopped());
+    }
+
+    #[tokio::test]
+    async fn graceful_stop_waits_for_outstanding_reserved_move() {
+        let run_control = DriverRunControl::graceful_unbounded();
+        assert!(run_control.reserve_move_proposal());
+        run_control.request_stop();
+        assert!(run_control.has_inflight_move());
+
+        let recv_calls = Arc::new(AtomicU64::new(0));
+        let transport = ReadyFrameTransport {
+            frame: vec![42],
+            recv_calls: Arc::clone(&recv_calls),
+        };
+
+        let received = PartyDriver::<
+            RepeatingProtocol,
+            RepeatingStrategy,
+            ReadyFrameTransport,
+            LocalSigner,
+            InMemoryAnchor,
+            NullTranscriptRecorder,
+        >::recv_or_stop(&transport, Some(&run_control), true)
+        .await
+        .unwrap();
+
+        assert!(matches!(received, DriverRecv::Frame(bytes) if bytes == vec![42]));
+        assert_eq!(recv_calls.load(Ordering::Relaxed), 1);
+    }
+
+    async fn run_repeating_tunnel_to_settlement(control: DriverRunControl) -> u64 {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(control);
+        let (out_a, out_b) = tokio::join!(driver_a.run(100, || 1), driver_b.run(100, || 1));
+        out_a.expect("seat A settles");
+        out_b.expect("seat B settles");
+        settled.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn tunnels_isolate_inflight_from_one_another() {
+        // One run-wide control governs every tunnel's stop, yet each tunnel must
+        // drain on its own: a move in flight in one tunnel must not pin another
+        // tunnel's graceful stop. Regression for the shared-counter deadlock that
+        // wedged large concurrent settlements.
+        let run = DriverRunControl::graceful_unbounded();
+        let tunnel_a = run.tunnel();
+        let tunnel_b = run.tunnel();
+
+        assert!(tunnel_a.reserve_move_proposal());
+        assert!(tunnel_a.has_inflight_move());
+
+        run.request_stop();
+        assert!(tunnel_a.stopped() && tunnel_b.stopped());
+
+        assert!(
+            !tunnel_b.has_inflight_move(),
+            "tunnel B must not observe tunnel A's in-flight move"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_tunnels_all_settle_under_shared_graceful_stop() {
+        // Two tunnels share one run-level graceful control, exactly as the swarm
+        // does. The shared move budget stops both, and each must reach its own
+        // close boundary and settle — neither wedged by the other's in-flight
+        // move. Under the old shared-counter drain this deadlocked.
+        let run_control = DriverRunControl::with_graceful_move_limit(1);
+
+        let settled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                run_repeating_tunnel_to_settlement(run_control.tunnel()),
+                run_repeating_tunnel_to_settlement(run_control.tunnel()),
+            )
+        })
+        .await
+        .expect("both tunnels must settle without deadlock");
+
+        assert_eq!(settled.0, 2, "tunnel 1 must settle both seats");
+        assert_eq!(settled.1, 2, "tunnel 2 must settle both seats");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn graceful_stop_before_first_move_settles_initial_state() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::graceful_unbounded();
+        run_control.request_stop();
+
+        let driver_a = PartyDriver::new(
+            parts(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::A,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            parts(Seat::B, &secret_b, pk_a),
+            TrackingStrategy::new(
+                Seat::B,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("drivers should settle initial state when graceful stop precedes play");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 0);
+        assert_eq!(out_b.moves, 0);
+        assert_eq!(run_control.moves(), 0);
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
