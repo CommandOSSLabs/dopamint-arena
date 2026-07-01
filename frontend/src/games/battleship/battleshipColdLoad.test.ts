@@ -4,8 +4,13 @@ import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 import { makeFleetSecret, randomFleetSecret } from "./engine/selfPlay";
 import { placementsToBoard, type Placement } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
-import { proposeDue } from "./engine/pvpDriver";
-import { BattleshipProtocol, battleshipMoveCodec } from "./protocol/battleship";
+import { proposeDue, canFireShot } from "./engine/pvpDriver";
+import {
+  BattleshipProtocol,
+  battleshipMoveCodec,
+  type BattleshipState,
+  type BattleshipMove,
+} from "./protocol/battleship";
 import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
 import {
   writeResumeRecord,
@@ -202,4 +207,110 @@ test("battleship cold-load: rebuilt defender reveals the next move byte-identica
     "rebuilt defender reveals byte-identically to the in-memory reference",
   );
   clearResumeRecord(tid);
+});
+
+// Regression: cold-load resume re-seats the seat's OWN in-flight shoot (proposed but not yet ACKed
+// when the tab closed). The confirmed state then reads "my turn, nothing pending a reveal", so a
+// second shoot — from a manual click OR from toggling Auto on (autopilot is OFF after every reload)
+// — used to slip past the state-only guard and throw "a proposal is already awaiting ACK". `fire`
+// now gates on `canFireShot`, which refuses while a proposal awaits its ACK.
+test("cold-load with an in-flight shoot: canFireShot refuses a second shoot instead of throwing", () => {
+  const proto = new BattleshipProtocol(100n) as never;
+  const secretA = randomFleetSecret(mkRng(0x3333));
+  const secretB = randomFleetSecret(mkRng(0x4444));
+  const ka = generateKeyPair();
+  const kb = generateKeyPair();
+  const tid = `0x${"73".repeat(32)}`;
+
+  // Confirmed checkpoint: both fleets committed, A to fire, nothing pending a reveal (nonce 2).
+  const sp = OffchainTunnel.selfPlay(
+    proto,
+    tid,
+    ka as never,
+    kb as never,
+    "0xA",
+    "0xB",
+    { a: 500n, b: 500n },
+  );
+  sp.step({ type: "commit", root: secretA.commitment.root }, "A");
+  sp.step({ type: "commit", root: secretB.commitment.root }, "B");
+
+  // Seat A's record carries an in-flight `shoot` (proposed, un-ACKed) as its pending move.
+  const capStore = {
+    secret: secretA as unknown,
+    placements: [] as Placement[],
+  };
+  const capAdapter = bsAdapter(capStore);
+  const freshCell = 12;
+  const record = {
+    matchId: "match-bs-a",
+    tunnelId: tid,
+    role: "A" as const,
+    game: "battleship",
+    opponentWallet: "0xB",
+    opponentPubkeyHex: toHex(kb.publicKey),
+    selfEphemeralSecretHex: toHex(ka.secretKey),
+    latestCoSigned: toWireCoSigned(sp.latest!),
+    latestState: capAdapter.serializeState(sp.state as never),
+    pending: {
+      move: battleshipMoveCodec.encode({ type: "shoot", cell: freshCell }),
+      timestamp: "0",
+    },
+    secret: capAdapter.captureSecret!(),
+    updatedAt: Date.now(),
+  };
+
+  // Rebuild seat A and re-seat the in-flight shoot exactly as the cold-load path does.
+  const backend = defaultBackend();
+  const dt = new DistributedTunnel(
+    proto,
+    {
+      tunnelId: tid,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+      moveCodec: battleshipMoveCodec,
+    },
+    { send() {}, onFrame() {} },
+    { a: 500n, b: 500n },
+  ) as unknown as DistributedTunnel<BattleshipState, BattleshipMove>;
+  const restoreStore = {
+    secret: null as unknown,
+    placements: [] as Placement[],
+  };
+  restoreInto(dt as never, record as never, bsAdapter(restoreStore) as never);
+
+  // The confirmed state still reads "A's turn, nothing pending a reveal" — the trap the old guard hit.
+  const st = dt.state;
+  assert.equal(st.phase, "playing");
+  assert.equal(st.turn, "A");
+  assert.equal(st.pendingShot, null);
+
+  const hasPending = dt.displayState !== dt.state; // the signal fire()/autoFire pass to canFireShot
+  assert.equal(hasPending, true, "a re-seated shoot is an in-flight proposal");
+  assert.equal(
+    canFireShot(st, "A", freshCell, hasPending),
+    false,
+    "must not fire while a proposal awaits its ACK",
+  );
+  assert.equal(
+    canFireShot(st, "A", freshCell, false),
+    true,
+    "hasPending is the sole blocker — the confirmed state alone would allow the shot",
+  );
+  // Proof the guard prevents a REAL throw: proposing the second shoot hits the pending proposal.
+  assert.throws(
+    () => dt.propose({ type: "shoot", cell: freshCell }, 0n),
+    /already awaiting ACK/,
+  );
 });
