@@ -13,7 +13,7 @@
  * NEITHER signal is available do we default to Mid.
  */
 
-type DeviceTier = "low" | "mid" | "high" | "max";
+export type DeviceTier = "low" | "mid" | "high" | "max";
 
 /** Concurrent live worker-windows permitted per tier (design §2.1). */
 const LIVE_WINDOW_CAP: Record<DeviceTier, number> = {
@@ -56,8 +56,8 @@ type DeviceMemoryNavigator = Navigator & { deviceMemory?: number };
  * tier. With only one (e.g. Firefox/Safari, which never report `deviceMemory`): that signal
  * alone. With neither (SSR / locked-down navigator): Mid.
  */
-export function maxLiveWindows(): number {
-  if (typeof navigator === "undefined") return LIVE_WINDOW_CAP.mid;
+function resolveTier(): DeviceTier {
+  if (typeof navigator === "undefined") return "mid";
   const nav = navigator as DeviceMemoryNavigator;
   const cores = nav.hardwareConcurrency;
   const mem = nav.deviceMemory;
@@ -67,9 +67,34 @@ export function maxLiveWindows(): number {
   const memTier: DeviceTier | null =
     typeof mem === "number" && mem > 0 ? tierFromMemory(mem) : null;
 
-  if (coresTier && memTier) return LIVE_WINDOW_CAP[lowerTier(coresTier, memTier)];
+  if (coresTier && memTier) return lowerTier(coresTier, memTier);
   // Only one signal present → tier off it alone (don't synthesize a Mid that caps the other).
-  if (coresTier) return LIVE_WINDOW_CAP[coresTier];
-  if (memTier) return LIVE_WINDOW_CAP[memTier];
-  return LIVE_WINDOW_CAP.mid; // neither signal → Mid
+  return coresTier ?? memTier ?? "mid"; // neither signal → Mid
+}
+
+export function maxLiveWindows(): number {
+  return LIVE_WINDOW_CAP[resolveTier()];
+}
+
+/** Device capacity for the game pickers' hint: the tier, its concurrent live-window cap, and the raw
+ *  signals it derived from (either may be null — `deviceMemory` is absent in Firefox/Safari). The cap
+ *  is a MEMORY budget for per-window worker isolates (`?enginepool`); the shared hub uses less memory
+ *  but a single co-sign thread, so many flat-out auto-games saturate that thread before this cap. */
+export function deviceTierInfo(): {
+  tier: DeviceTier;
+  cap: number;
+  cores: number | null;
+  memoryGiB: number | null;
+} {
+  const nav =
+    typeof navigator === "undefined"
+      ? null
+      : (navigator as DeviceMemoryNavigator);
+  const tier = resolveTier();
+  return {
+    tier,
+    cap: LIVE_WINDOW_CAP[tier],
+    cores: nav?.hardwareConcurrency ?? null,
+    memoryGiB: typeof nav?.deviceMemory === "number" ? nav.deviceMemory : null,
+  };
 }
