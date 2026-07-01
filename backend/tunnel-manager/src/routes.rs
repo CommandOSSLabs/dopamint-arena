@@ -124,7 +124,7 @@ struct SettleBody {
 }
 
 pub(crate) const SETTLE_BODY_VERSION: u8 = 0x01;
-const SETTLE_BODY_HEADER_LEN: usize = 229;
+pub(crate) const SETTLE_BODY_HEADER_LEN: usize = 229;
 
 /// Parse the binary settle-body header (big-endian, fixed offsets — see the plan layout).
 /// Returns `Err` on a short body or a wrong version byte; the handler maps that to 422 before

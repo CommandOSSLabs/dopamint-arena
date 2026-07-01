@@ -167,7 +167,18 @@ async fn archive_and_publish(
     digest: &str,
 ) {
     let root_hex = format!("0x{}", hex::encode(&close.transcript_root));
-    let body = deps.queue.body(entry_id).await.ok().flatten();
+    // A header-only settle carries no entries in the POST body: the transcript lives in the streamed
+    // S3 chunks, so there is nothing to archive to the one-object store or Walrus. Detect it by the
+    // body having no bytes past the fixed header and drop it to `None`, which skips both archives
+    // below. The live-feed event still fires — root/balances come from the header/chain, and the
+    // explorer serves the transcript from chunks.
+    let body = deps
+        .queue
+        .body(entry_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|b| b.len() > crate::routes::SETTLE_BODY_HEADER_LEN);
 
     // S3 archival (ADR-0023): the object bytes are the settle body, byte-for-byte, under
     // `<prefix>transcripts/…`. Independent of Walrus below; a failure is logged, not fatal.
@@ -424,7 +435,7 @@ mod tests {
             archiver: Some(archiver.clone()),
             s3_prefix: String::new(),
         };
-        let (tunnel, body) = settle_body(3);
+        let (tunnel, body) = settle_body_with_entries(3);
         queue
             .enqueue(&tunnel, body[..229].to_vec(), body.clone())
             .await
@@ -445,6 +456,43 @@ mod tests {
         );
     }
 
+    // A header-only settle (no entries in the POST) closes on-chain but archives nothing: its
+    // transcript is the bot's streamed S3 chunks, so re-archiving a bare header to the one-object
+    // store / Walrus would be dead weight. This is what lets the browser eventually POST 229 bytes.
+    #[tokio::test]
+    async fn header_only_settle_skips_body_archive() {
+        use crate::s3::FakeArchiver;
+        let fake = Arc::new(FakeBatchSettler::new());
+        let queue = Arc::new(InMemorySettleQueue::default());
+        let control = Arc::new(InMemoryControlStore::default());
+        let archiver = Arc::new(FakeArchiver::default());
+        let deps = SettleWorkerDeps {
+            queue: queue.clone(),
+            settler: fake.clone(),
+            control,
+            walrus: WalrusClient::noop(),
+            bus: Arc::new(LocalBus::new("test".into())),
+            archiver: Some(archiver.clone()),
+            s3_prefix: String::new(),
+        };
+        let (tunnel, body) = settle_body(3); // exactly 229 bytes: header only, no entries
+        queue
+            .enqueue(&tunnel, body[..229].to_vec(), body.clone())
+            .await
+            .unwrap();
+        drain_once(&deps, "w1", 16, 0).await.unwrap();
+
+        assert_eq!(
+            fake.batch_sizes.lock().unwrap().as_slice(),
+            &[1],
+            "the tunnel still closes on-chain"
+        );
+        assert!(
+            archiver.archived.lock().unwrap().is_empty(),
+            "a header-only settle archives no body (transcript is in S3 chunks)"
+        );
+    }
+
     // A valid 229-byte settle body for a 2-byte tunnel suffix, plus the tunnel id the handler will
     // parse from it (so the path matches). Lets the e2e mint many distinct settlements.
     fn settle_body(suffix: u16) -> (String, Bytes) {
@@ -453,6 +501,17 @@ mod tests {
         b[31] = (suffix >> 8) as u8;
         b[32] = (suffix & 0xff) as u8;
         let tunnel_id = format!("0x{}", hex::encode(&b[1..33]));
+        (tunnel_id, Bytes::from(b))
+    }
+
+    // A full settle body: the 229-byte header plus one entry's worth of opaque bytes (the worker
+    // archives the raw body without parsing entries), with `update_count` set to match. Used to
+    // exercise the archival path now that a bare header is treated as "transcript is in chunks".
+    fn settle_body_with_entries(suffix: u16) -> (String, Bytes) {
+        let (tunnel_id, header) = settle_body(suffix);
+        let mut b = header.to_vec();
+        b[225..229].copy_from_slice(&1u32.to_be_bytes());
+        b.extend_from_slice(&[0xEE; 130]);
         (tunnel_id, Bytes::from(b))
     }
 
