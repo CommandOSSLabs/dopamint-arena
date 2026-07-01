@@ -364,7 +364,7 @@ fn balance(state: &PokerState, by: Seat) -> u64 {
     }
 }
 
-fn available_for(state: &PokerState, by: Seat) -> u64 {
+pub(crate) fn available_for(state: &PokerState, by: Seat) -> u64 {
     let effective = state.balance_a.min(state.balance_b);
     effective.saturating_sub(total_bet(state, by))
 }

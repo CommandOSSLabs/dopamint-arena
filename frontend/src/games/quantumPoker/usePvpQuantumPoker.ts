@@ -352,6 +352,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     const self = selfPartyRef.current;
     if (!dt || !driver || !self) return;
     if (settlingRef.current) return;
+    // A proposal is already awaiting its ACK (e.g. a re-seated pending after cold-load resume) —
+    // proposing again would throw "a proposal is already awaiting ACK".
+    if (dt.displayState !== dt.state) return;
     // Ending early: don't deal a new hand — settle at this clean hand boundary instead.
     if (endRef.current && dt.state.phase === "hand_over") return;
     const targetNonce = dt.nonce + 1n;
@@ -394,6 +397,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
       if (settlingRef.current) return;
+      if (live.displayState !== live.state) return; // a proposal is already awaiting its ACK
       try {
         live.propose(move, 0n);
         sync();
@@ -418,7 +422,12 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const dt = dtRef.current;
       const self = selfPartyRef.current;
       if (!dt || !self) return;
-      if (!BET_PHASES.has(dt.state.phase) || dt.state.toAct !== self) return;
+      if (
+        !BET_PHASES.has(dt.state.phase) ||
+        dt.state.toAct !== self ||
+        dt.displayState !== dt.state // a proposal is already awaiting its ACK
+      )
+        return;
       try {
         dt.propose(move, 0n);
         sync();
@@ -1160,7 +1169,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       setSecondsLeft(null);
       const dt = dtRef.current;
       const me = selfPartyRef.current;
-      if (dt && me && BET_PHASES.has(dt.state.phase) && dt.state.toAct === me) {
+      if (
+        dt &&
+        me &&
+        BET_PHASES.has(dt.state.phase) &&
+        dt.state.toAct === me &&
+        dt.displayState === dt.state // skip if a proposal is already awaiting its ACK
+      ) {
         const lg = legalFor(dt.state, me);
         try {
           dt.propose(lg.canCheck ? { kind: "check" } : { kind: "fold" }, 0n);

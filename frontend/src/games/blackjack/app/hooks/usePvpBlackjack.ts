@@ -999,7 +999,8 @@ export function usePvpBlackjack(): PvpView {
     if (!t) return;
     if (
       roleRef.current !== getPlayerParty(t.state.round) ||
-      t.state.phase !== "player"
+      t.state.phase !== "player" ||
+      t.displayState !== t.state // a proposal is already awaiting its ACK (e.g. a re-seated resume move)
     )
       return;
     try {
@@ -1019,7 +1020,8 @@ export function usePvpBlackjack(): PvpView {
       if (
         roleRef.current !== getPlayerParty(t.state.round + 1n) ||
         t.state.phase !== "round_over" ||
-        proto.isTerminal(t.state)
+        proto.isTerminal(t.state) ||
+        t.displayState !== t.state // a proposal is already awaiting its ACK
       )
         return;
       lastBetRef.current = amount; // remember it so auto reuses this stake next round
