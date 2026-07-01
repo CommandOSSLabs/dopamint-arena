@@ -1205,15 +1205,13 @@ mod tests {
 
     // A settler whose faucet is configured (admin cap set) but whose RPC is unreachable — so the
     // config guards pass while any actual mint fails fast (connection refused).
-    fn settler_with_admin_cap(rpc_url: &str) -> std::sync::Arc<crate::sui::SuiSettler> {
+    fn settler_with_admin_cap(rpc_url: &str) -> crate::sui::SuiSettler {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
         let rpc =
             crate::sui_rpc::GovernedRpc::new(rpc_url.into(), crate::sui_rpc::RpcLimits::default());
-        std::sync::Arc::new(
-            crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, Some("0x5"))
-                .expect("settler with admin cap"),
-        )
+        crate::sui::SuiSettler::new(rpc, "0x2", "0x2::sui::SUI", None, None, &key, Some("0x5"))
+            .expect("settler with admin cap")
     }
 
     // The public faucet is 503 when the on-chain faucet is unconfigured (no AdminCap) — it never
@@ -1240,7 +1238,7 @@ mod tests {
         let mut state = test_state();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
-            .settler = settler_with_admin_cap("http://127.0.0.1:9999");
+            .settler = std::sync::Arc::new(settler_with_admin_cap("http://127.0.0.1:9999"));
         let recipient = crate::sui::canonical_address("0x9").unwrap();
         for _ in 0..state.faucet_max_per_window {
             assert!(
@@ -1279,7 +1277,7 @@ mod tests {
         let mut state = test_state();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
-            .settler = settler_with_admin_cap("http://127.0.0.1:9999");
+            .settler = std::sync::Arc::new(settler_with_admin_cap("http://127.0.0.1:9999"));
         let recipient = crate::sui::canonical_address("0x9").unwrap();
         let resp = faucet(
             State(state.clone()),
@@ -1340,7 +1338,7 @@ mod tests {
         {
             let s = std::sync::Arc::get_mut(&mut state).expect("unique test arc");
             s.faucet_admin_token = Some("tok".into());
-            s.settler = settler_with_admin_cap("http://127.0.0.1:9999");
+            s.settler = std::sync::Arc::new(settler_with_admin_cap("http://127.0.0.1:9999"));
         }
         let mut headers = HeaderMap::new();
         headers.insert(

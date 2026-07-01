@@ -2912,10 +2912,11 @@ dependencies = [
  "clap",
  "getrandom 0.2.17",
  "hex",
- "rayon",
  "sui-tunnel-anchor",
  "sysinfo",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "tunnel-api-credits",
  "tunnel-battleship",
  "tunnel-blackjack",
@@ -7418,6 +7419,7 @@ dependencies = [
  "sui-sdk-types 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio",
  "tonic",
+ "tracing",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -8326,6 +8328,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tunnel-core",
+ "tunnel-telemetry",
 ]
 
 [[package]]

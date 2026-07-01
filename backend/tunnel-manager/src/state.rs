@@ -9,8 +9,9 @@ pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
-    /// Shared (`Arc`) so the async settle-worker pool can hold it as a `BatchSettler` while the
-    /// faucet/sponsor handlers also call it.
+    /// Shared (`Arc`): the arena opener has the settler sponsor each bot open's gas (ADR-0028) and
+    /// the async settle-worker pool holds it as a `BatchSettler` — one settler instance (and one
+    /// `sponsor_nonce`) backs opens, faucet, `/settle`, and user sponsors.
     pub settler: std::sync::Arc<crate::sui::SuiSettler>,
     /// Durable settle queue (ADR-0029): `/settle` enqueues here and returns 202; the worker pool
     /// drains it, coalescing many closes into one PTB.

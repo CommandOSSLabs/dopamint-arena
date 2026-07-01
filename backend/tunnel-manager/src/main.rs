@@ -48,7 +48,10 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = config.bind_addr.clone();
 
     // One governed RPC client for all fullnode traffic (settler + arena opener): a single
-    // process-wide throttle + retry/backoff against the one rate-limited node.
+    // process-wide throttle + retry/backoff against the one rate-limited node. The settler is shared
+    // via Arc so the opener can have it sponsor each bot open's gas (ADR-0028) and the settle-worker
+    // pool can hold it as a BatchSettler — one settler (one `sponsor_nonce`) behind opens, faucet,
+    // `/settle`, and user sponsors.
     let governed_rpc = sui_rpc::GovernedRpc::new(
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
         config.rpc_limits(),
@@ -171,6 +174,7 @@ async fn main() -> anyhow::Result<()> {
                 pkg,
                 &config.coin_type,
                 pool.clone(),
+                settler.clone(),
             )
             .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
         ),

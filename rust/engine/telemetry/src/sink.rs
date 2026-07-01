@@ -2,6 +2,7 @@
 //! so `NullSink` monomorphizes to nothing on the hot path (no `dyn`, no branch).
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum StageId {
     Open,
     Settle,

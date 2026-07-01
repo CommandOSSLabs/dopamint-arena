@@ -1,91 +1,50 @@
-use super::{play_with_strategies, CREATED_AT, DEFAULT_BALANCE, MAX_MOVES};
-use crate::cli::{AnchorMode, FrameCodecKind, TranscriptRecorderMode};
-use crate::party_driver::SuiSponsoredBenchContext;
-use crate::party_driver::{play_protocol_match_with_strategies, MatchResult, SeatKit};
+use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use crate::cli::{AnchorMode, FrameCodecKind};
+use crate::party_driver::SeatKit;
+use crate::party_driver::TunnelTelemetry;
+use crate::party_driver::{SeededBlackjack, SuiSponsoredBenchContext, TunnelOutcome};
 use tunnel_blackjack::duel::BlackjackDuel;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
-use tunnel_blackjack::{BjMove, Blackjack, BlackjackDuelStrategy, BlackjackStrategy};
-use tunnel_harness::{BcsFrameCodec, FrameCodec, JsonFrameCodec, PostcardFrameCodec};
+use tunnel_blackjack::{BlackjackDuelStrategy, BlackjackStrategy};
 
-pub(crate) fn play_bet(
+pub(crate) async fn play_bet(
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult {
-    match codec {
-        FrameCodecKind::Json => play_bet_with_codec::<JsonFrameCodec>(
-            card_seed,
-            kit,
-            tunnel_id,
-            anchor_mode,
-            sui_context,
-            transcript_recorder,
-        ),
-        FrameCodecKind::Bcs => play_bet_with_codec::<BcsFrameCodec>(
-            card_seed,
-            kit,
-            tunnel_id,
-            anchor_mode,
-            sui_context,
-            transcript_recorder,
-        ),
-        FrameCodecKind::Postcard => play_bet_with_codec::<PostcardFrameCodec>(
-            card_seed,
-            kit,
-            tunnel_id,
-            anchor_mode,
-            sui_context,
-            transcript_recorder,
-        ),
-    }
-}
-
-fn play_bet_with_codec<C>(
-    card_seed: Option<u64>,
-    kit: &SeatKit,
-    tunnel_id: &str,
-    anchor_mode: AnchorMode,
-    sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult
-where
-    C: FrameCodec<BjMove> + Default,
-{
-    play_protocol_match_with_strategies::<Blackjack, C, BlackjackStrategy, BlackjackStrategy>(
-        Blackjack,
+    telemetry: TunnelTelemetry,
+) -> TunnelOutcome {
+    // SeededBlackjack injects the card_seed into Protocol::initial_state,
+    // replacing the old configure-hook approach.
+    play_with_strategies(
+        SeededBlackjack { card_seed },
         BlackjackStrategy,
         BlackjackStrategy,
+        codec,
+        anchor_mode,
+        sui_context,
+        card_seed.unwrap_or(0),
         kit,
         tunnel_id,
         DEFAULT_BALANCE,
         DEFAULT_BALANCE,
-        CREATED_AT,
         MAX_MOVES,
-        anchor_mode,
-        sui_context,
-        transcript_recorder,
-        |a, b| {
-            if card_seed.is_some() {
-                a.with_state_mut(|s| s.card_seed = card_seed);
-                b.with_state_mut(|s| s.card_seed = card_seed);
-            }
-        },
+        telemetry,
     )
+    .await
 }
 
-pub(crate) fn play_duel(
+pub(crate) async fn play_duel(
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult {
+    telemetry: TunnelTelemetry,
+) -> TunnelOutcome {
     play_with_strategies(
         BlackjackDuel,
         BlackjackDuelStrategy,
@@ -93,25 +52,26 @@ pub(crate) fn play_duel(
         codec,
         anchor_mode,
         sui_context,
-        transcript_recorder,
         card_seed.unwrap_or(0),
         kit,
         tunnel_id,
         20_000_000,
         20_000_000,
         MAX_MOVES,
+        telemetry,
     )
+    .await
 }
 
-pub(crate) fn play_v2(
+pub(crate) async fn play_v2(
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
-    transcript_recorder: TranscriptRecorderMode,
-) -> MatchResult {
+    telemetry: TunnelTelemetry,
+) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
         BlackjackV2,
@@ -120,12 +80,13 @@ pub(crate) fn play_v2(
         codec,
         anchor_mode,
         sui_context,
-        transcript_recorder,
         seed,
         kit,
         tunnel_id,
         DEFAULT_BALANCE,
         DEFAULT_BALANCE,
         MAX_MOVES,
+        telemetry,
     )
+    .await
 }

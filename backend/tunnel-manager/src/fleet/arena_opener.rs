@@ -4,16 +4,16 @@
 //! the user's open is a deposit-only PTB and the tunnel activates on a single signature. This trait
 //! is that on-chain step. [`NoopArenaOpener`] returns a deterministic placeholder id so the allocate
 //! contract and the FE deposit path can be built and tested without chain access; [`SuiArenaOpener`]
-//! is the real impl: the bot self-signs `create` (party A = user, party B = bot) + `deposit_party_b`
-//! (funding seat B from the bot's SIP-58 MTPS address balance) + `share`, then reads back the shared
-//! tunnel id from the tx effects.
+//! is the real impl: it builds `create` (party A = user, party B = bot) + `deposit_party_b` (funding
+//! seat B from the bot's SIP-58 MTPS address balance) + `share`, has the settler sponsor the gas
+//! (sponsor flow — the bot holds only MTPS, zero SUI), co-signs as the bot, executes, and reads back
+//! the shared tunnel id from the tx effects.
 //!
 //! Per ADR-0028 this makes `allocate` commit the house before the user — so the endpoint that drives
 //! it must be authenticated + rate-limited before this ships at scale.
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -21,13 +21,11 @@ use base64::Engine;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::{
-    Address, Digest, Identifier, Transaction, TransactionExpiration, TypeTag, UserSignature,
+    Address, Digest, Identifier, Transaction, TransactionKind, TypeTag, UserSignature,
 };
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
-use crate::sui::{
-    canonical_address, dryrun_effects_ok, CHAIN_DIGEST_B58, CLOCK_ADDRESS, GAS_BUDGET,
-};
+use crate::sui::{canonical_address, SuiSettler, CLOCK_ADDRESS, GAS_BUDGET};
 
 /// What the fleet puts on-chain before the user joins: a tunnel naming the user party A and the bot
 /// party B, seat B funded. Both ephemeral pubkeys are baked in at create (the Move `create` requires
@@ -89,10 +87,11 @@ const ARENA_TUNNEL_TIMEOUT_MS: u64 = 86_400_000;
 /// Ed25519 signature scheme code — both party ephemeral keys are ed25519 (the FE's only scheme).
 const SIG_SCHEME_ED25519: u8 = 0;
 
-/// The real on-chain opener (ADR-0028). The bot is the sender AND the gas owner (SIP-58 address
-/// balance gas, like `submit_close`), so it self-signs the whole PTB — no sponsor, no user
-/// signature needed for the open. Seat B is funded from the bot's own MTPS address balance via
-/// `coin::redeem_funds`, mirroring the FE's SIP-58 stake path (ADR-0013).
+/// The real on-chain opener (ADR-0028). The bot is the tx sender (its SIP-58 MTPS address balance
+/// funds seat B via `coin::redeem_funds`, mirroring the FE's stake path — ADR-0013), while the
+/// SETTLER sponsors the gas (sponsor flow): so the bot holds only MTPS, zero SUI, and the 1M-wallet
+/// pool never needs per-wallet SUI funding. The open is co-signed (bot = sender, settler = gas owner)
+/// and submitted with both signatures.
 ///
 /// One opener serves every game (the stake differs per `ArenaOpenRequest`, threaded by the caller);
 /// the bot key + RPC/package config are shared across games. Per-game bot accounts are a later
@@ -102,40 +101,34 @@ pub struct SuiArenaOpener {
     rpc_url: String,
     package_id: Address,
     coin_type: TypeTag,
-    /// Funded seat-B wallet pool (PR #124). Each open self-signs as the member whose address is party
-    /// B (`req.bot_address`), so funding + signing spread across the pool instead of one shared key —
-    /// removing the single-account nonce bottleneck at the connect spike. Replaces `FLEET_BOT_KEY`.
+    /// Funded seat-B wallet pool (PR #124). Each open signs as sender with the member whose address
+    /// is party B (`req.bot_address`), so funding + signing spread across the pool instead of one
+    /// shared key — removing the single-account nonce bottleneck at the connect spike.
     wallet_pool: std::sync::Arc<crate::wallet::WalletPoolSource>,
-    /// Per-open nonce for the `ValidDuring` FundsWithdrawal replay guard. Same seed rationale as
-    /// `SuiSettler::sponsor_nonce` (two restarts in one epoch shouldn't collide).
-    open_nonce: AtomicU32,
+    /// Gas sponsor for every open. The settler owns the SIP-58 gas (and stamps the `ValidDuring`
+    /// nonce from its own `sponsor_nonce`), so all settler-gas withdrawals — bot opens, faucet,
+    /// `/settle`, user sponsors — share one monotonic nonce source and never collide.
+    settler: Arc<SuiSettler>,
 }
 
 impl SuiArenaOpener {
-    /// Build from the shared tunnel config + the funded wallet pool. The per-seat stake is passed per
-    /// request (`ArenaOpenRequest::stake_each`), so one opener serves all games; the seat-B signer is
-    /// resolved per open from `req.bot_address` (the checked-out pool member).
+    /// Build from the shared tunnel config, the funded wallet pool, and the gas-sponsoring settler.
+    /// The per-seat stake is passed per request (`ArenaOpenRequest::stake_each`), so one opener serves
+    /// all games; the seat-B signer is resolved per open from `req.bot_address`.
     pub fn new(
         rpc_url: String,
         package_id: &str,
         coin_type: &str,
         wallet_pool: std::sync::Arc<crate::wallet::WalletPoolSource>,
+        settler: Arc<SuiSettler>,
     ) -> anyhow::Result<Self> {
-        let nonce_seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| {
-                (d.as_secs() as u32)
-                    .wrapping_mul(2_654_435_761)
-                    .wrapping_add(d.subsec_nanos())
-            })
-            .unwrap_or(0);
         Ok(Self {
             http: reqwest::Client::new(),
             rpc_url,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
             wallet_pool,
-            open_nonce: AtomicU32::new(nonce_seed),
+            settler,
         })
     }
 
@@ -163,52 +156,22 @@ impl SuiArenaOpener {
             .unwrap_or(serde_json::Value::Null))
     }
 
-    async fn epoch_and_gas_price(&self) -> anyhow::Result<(u64, u64)> {
-        let r = self
-            .rpc("suix_getLatestSuiSystemState", serde_json::json!({}))
-            .await?;
-        let epoch = r
-            .pointer("/epoch")
-            .and_then(|v| {
-                v.as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| v.as_u64())
-            })
-            .ok_or_else(|| anyhow!("no epoch in system state"))?;
-        let gas = r
-            .pointer("/referenceGasPrice")
-            .and_then(|v| {
-                v.as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| v.as_u64())
-            })
-            .unwrap_or(1);
-        Ok((epoch, gas))
-    }
-
-    async fn dry_run(&self, tx: &Transaction) -> anyhow::Result<()> {
-        let tx_b64 =
-            base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(tx).context("bcs tx")?);
-        let r = self
-            .rpc("sui_dryRunTransactionBlock", serde_json::json!([tx_b64]))
-            .await?;
-        dryrun_effects_ok(&r).map_err(|e| anyhow!("arena open dry-run failed: {e}"))
-    }
-
-    /// Execute + return the tx digest AND the shared tunnel object id from the effects' object
+    /// Execute the co-signed open + return the shared tunnel object id from the effects' object
     /// changes. The tunnel is the one `shared` object created by this tx (type `...::tunnel::Tunnel<...>`).
+    /// `sigs` carries both signatures of the sponsored open — the bot (sender) and the settler (gas
+    /// owner); a sponsored tx is rejected unless both are present.
     async fn execute_and_read_tunnel(
         &self,
         tx: &Transaction,
-        sig: &UserSignature,
+        sigs: &[UserSignature],
     ) -> anyhow::Result<String> {
         let b64 = base64::engine::general_purpose::STANDARD;
         let tx_b64 = b64.encode(bcs::to_bytes(tx).context("bcs tx")?);
-        let sig_b64 = sig.to_base64();
+        let sigs_b64: Vec<String> = sigs.iter().map(|s| s.to_base64()).collect();
         let r = self
             .rpc(
                 "sui_executeTransactionBlock",
-                serde_json::json!([tx_b64, [sig_b64], {"showEffects": true, "showObjectChanges": true}, "WaitForLocalExecution"]),
+                serde_json::json!([tx_b64, sigs_b64, {"showEffects": true, "showObjectChanges": true}, "WaitForLocalExecution"]),
             )
             .await?;
         if let Some(status) = r.pointer("/effects/status/status").and_then(|v| v.as_str()) {
@@ -258,9 +221,9 @@ impl ArenaTunnelOpener for SuiArenaOpener {
         let user_addr =
             Address::from_str(&canonical_address(req.user_address)?).context("bad user address")?;
         // Seat B is the pool member the fleet checked out (`req.bot_address`). Resolve its key from the
-        // funded pool and self-sign the create+deposit PTB as that member: it is both sender and gas
-        // owner (SIP-58), and `deposit_party_b` asserts `ctx.sender() == tunnel.party_b.address`, so
-        // sender == party_b == this member. Funding thus spreads across the pool, not one shared key.
+        // funded pool: it is the tx SENDER (its SIP-58 MTPS balance funds seat B, and `deposit_party_b`
+        // asserts `ctx.sender() == tunnel.party_b.address`, so sender == party_b == this member), while
+        // the settler sponsors the gas — the bot needs no SUI. Signing spreads across the pool.
         let signer = Ed25519PrivateKey::new(
             self.wallet_pool
                 .keypair_for_address(req.bot_address)?
@@ -277,32 +240,31 @@ impl ArenaTunnelOpener for SuiArenaOpener {
         );
         anyhow::ensure!(bot_pk.len() == 32, "bot ephemeral pubkey must be 32 bytes");
 
-        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
-        let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
-        let nonce = self.open_nonce.fetch_add(1, Ordering::Relaxed);
-
-        let tx = build_arena_open_tx(
+        // Build the open/fund PTB KIND (offline), then hand it to the settler's sponsor wrap — the
+        // same allowlist + per-command budget + `sponsor_nonce` as the user `/v1/sponsor` path, so all
+        // settler-gas withdrawals share one monotonic nonce. The settler dry-runs (verify-before-gas:
+        // bad pubkeys, insufficient bot MTPS, or a drained settler gas balance surface here, before
+        // either party pays — the caller then omits this game, ADR-0028) and signs the gas; the bot
+        // co-signs as sender.
+        let kind = build_arena_open_kind(
             self.package_id,
             self.coin_type.clone(),
-            bot_addr,
             user_addr,
             user_pk,
             bot_addr,
             bot_pk,
             req.stake_each,
-            gas_price,
-            epoch,
-            chain,
-            nonce,
         )?;
-
-        // Verify-before-execute: a dry-run failure (bad pubkeys, insufficient bot balance, wrong
-        // package) surfaces here before the bot pays gas.
-        self.dry_run(&tx).await?;
-        let sig = signer
+        let kind_bytes = bcs::to_bytes(&kind).context("bcs arena open kind")?;
+        let (tx, settler_sig) = self
+            .settler
+            .sponsor_arena_open(bot_addr, &kind_bytes)
+            .await?;
+        let bot_sig = signer
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign arena open tx: {e}"))?;
-        self.execute_and_read_tunnel(&tx, &sig).await
+        self.execute_and_read_tunnel(&tx, &[bot_sig, settler_sig])
+            .await
     }
 
     async fn read_created_at_ms(&self, tunnel_id: &str) -> anyhow::Result<u64> {
@@ -324,26 +286,21 @@ impl ArenaTunnelOpener for SuiArenaOpener {
     }
 }
 
-/// PURE core: build the bot's seat-B open PTB (offline, no RPC). `create` (party A = user, party B
-/// = bot, both ed25519 pubkeys) + `coin::redeem_funds<T>` (seat-B stake from the bot's SIP-58
-/// balance) + `deposit_party_b` + `transfer::public_share_object`. SIP-58 address-balance gas
-/// (empty gas payment, like `build_close_tx`); the bot is sender AND gas owner. Extracted so the
-/// PTB shape is unit-testable without a live node.
-#[allow(clippy::too_many_arguments)] // mirrors `build_close_tx`'s offline-build parameter list
-fn build_arena_open_tx(
+/// PURE core: build the bot's seat-B open PTB KIND (offline, no RPC). `create` (party A = user, party
+/// B = bot, both ed25519 pubkeys) + `coin::redeem_funds<T>` (seat-B stake withdrawn from the SENDER's
+/// SIP-58 balance — the bot) + `deposit_party_b` + `transfer::public_share_object`. Returns only the
+/// `TransactionKind`: the settler's sponsor wrap supplies the real sender (bot), SIP-58 gas owner
+/// (settler), budget, and expiration — so this is exactly the sponsorable open/fund shape the
+/// `/v1/sponsor` allowlist accepts. `pub(crate)` so the sponsorability test can build it.
+pub(crate) fn build_arena_open_kind(
     package_id: Address,
     coin_type: TypeTag,
-    sender: Address,
     user_addr: Address,
     user_pk: Vec<u8>,
     bot_addr: Address,
     bot_pk: Vec<u8>,
     stake_each: u64,
-    gas_price: u64,
-    epoch: u64,
-    chain: Digest,
-    nonce: u32,
-) -> anyhow::Result<Transaction> {
+) -> anyhow::Result<TransactionKind> {
     let mut tb = TransactionBuilder::new();
     // 1. tunnel::create<T>(party_a=user, party_a_pk, sig, party_b=bot, party_b_pk, sig, timeout, penalty, clock)
     // Extract all args first (the builder borrows mutably per call, so inline `tb.pure(..)` inside
@@ -408,25 +365,17 @@ fn build_arena_open_tx(
         vec![tunnel],
     );
 
-    // Placeholder gas satisfies try_build's non-empty-gas check; cleared below (SIP-58
-    // address-balance gas, same as build_close_tx — empty objects => withdraw from sender).
+    // Minimal sender/gas/price only to satisfy try_build (it rejects a missing sender/gas); only the
+    // resolved `.kind` is kept — the settler re-wraps the real sender, SIP-58 gas owner, budget, and
+    // ValidDuring nonce. Sender == bot so the `WithdrawFrom::Sender` stake redeems from the bot.
     tb.add_gas_objects([ObjectInput::owned(Address::ZERO, 1, Digest::ZERO)]);
-    tb.set_sender(sender);
+    tb.set_sender(bot_addr);
     tb.set_gas_budget(GAS_BUDGET);
-    tb.set_gas_price(gas_price.max(1));
-    tb.set_expiration(TransactionExpiration::ValidDuring {
-        min_epoch: Some(epoch),
-        max_epoch: Some(epoch),
-        min_timestamp: None,
-        max_timestamp: None,
-        chain,
-        nonce,
-    });
-    let mut tx = tb
+    tb.set_gas_price(1);
+    let tx = tb
         .try_build()
-        .map_err(|e| anyhow!("build arena open tx: {e}"))?;
-    tx.gas_payment.objects.clear();
-    Ok(tx)
+        .map_err(|e| anyhow!("build arena open kind: {e}"))?;
+    Ok(tx.kind)
 }
 
 #[cfg(test)]
@@ -471,31 +420,26 @@ mod tests {
         assert!(a.starts_with("0xnoop"), "placeholder, not a real object id");
     }
 
-    // The PTB must carry exactly: create, redeem_funds, deposit_party_b, public_share_object — in
-    // that order — and the sender is the bot. Catches a wrong call/target or a reordered open that
-    // the Move module would reject on-chain. Offline (no RPC); mirrors build_close_tx's build test.
+    // The KIND must carry exactly: create, redeem_funds, deposit_party_b, public_share_object — in
+    // that order. Catches a wrong call/target or a reordered open that the Move module would reject
+    // on-chain. Offline (no RPC). Sponsorability (sender-sourced stake, settler gas) is proved by
+    // `arena_open_kind_is_sponsorable_*` in `sui.rs`, where the sponsor validator lives.
     #[test]
-    fn build_arena_open_tx_has_the_four_expected_calls_in_order() {
+    fn build_arena_open_kind_has_the_four_expected_calls_in_order() {
         use sui_sdk_types::{Command, MoveCall, TransactionKind};
-        let sender = Address::from_str("0xb0b").unwrap();
         let pkg = Address::from_str("0xabc").unwrap();
-        let tx = build_arena_open_tx(
+        let bot = Address::from_str("0xb0b").unwrap();
+        let kind = build_arena_open_kind(
             pkg,
             "0xabc::mtps::MTPS".parse().unwrap(),
-            sender,
             Address::from_str("0x11").unwrap(),
             vec![0xaa; 32],
-            sender,
+            bot,
             vec![0xbb; 32],
             1000,
-            1000,
-            1135,
-            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
-            0,
         )
         .unwrap();
-        assert_eq!(tx.sender, sender, "bot is the sender (party B deposits)");
-        let ptb = match tx.kind {
+        let ptb = match kind {
             TransactionKind::ProgrammableTransaction(p) => p,
             _ => panic!("arena open must be a programmable tx"),
         };
@@ -522,34 +466,5 @@ mod tests {
         assert_eq!(calls[3].module.to_string(), "transfer");
         assert_eq!(calls[3].function.to_string(), "public_share_object");
         assert_eq!(calls[3].package, fw);
-    }
-
-    // SIP-58 address-balance gas: the built open tx must carry an EMPTY gas payment so the node
-    // charges gas as a FundsWithdrawal from the bot's SUI balance — no owned gas coin to lock, so
-    // concurrent opens never equivocate (same invariant as build_close_tx).
-    #[test]
-    fn build_arena_open_tx_uses_address_balance_gas() {
-        let bot = Address::from_str("0xb0b").unwrap();
-        let tx = build_arena_open_tx(
-            Address::from_str("0xabc").unwrap(),
-            "0xabc::mtps::MTPS".parse().unwrap(),
-            bot,
-            Address::from_str("0x11").unwrap(),
-            vec![0xaa; 32],
-            bot,
-            vec![0xbb; 32],
-            1000,
-            1000,
-            1135,
-            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
-            0,
-        )
-        .unwrap();
-        assert!(
-            tx.gas_payment.objects.is_empty(),
-            "address-balance gas: gas payment must be empty, got {:?}",
-            tx.gas_payment.objects
-        );
-        assert_eq!(tx.gas_payment.owner, bot);
     }
 }

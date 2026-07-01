@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,20 +12,20 @@ use bech32::FromBase32;
 use serde::{Deserialize, Serialize};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
-use sui_rpc::client::Client as GrpcClient;
+use sui_rpc::client::{Client as GrpcClient, ResponseExt};
 use sui_rpc::field::{FieldMask, FieldMaskUtil};
 use sui_rpc::proto::sui::rpc::v2::{
-    ExecuteTransactionRequest, GetObjectRequest, GetTransactionRequest,
+    ExecuteTransactionRequest, GetEpochRequest, GetObjectRequest, GetTransactionRequest,
     Transaction as ProtoTransaction, UserSignature as ProtoUserSignature,
 };
 use sui_sdk_types::{
     Address, Argument, Command, Digest, Ed25519PublicKey, ExecutionStatus, FundsWithdrawal,
-    Identifier, Input, MoveCall, Object, ObjectOut, ObjectReference, ObjectType,
+    GasPayment, Identifier, Input, MoveCall, Object, ObjectOut, ObjectReference, ObjectType, Owner,
     ProgrammableTransaction, SharedInput, SplitCoins, StructTag, Transaction, TransactionEffects,
-    TransactionKind, TypeTag, UserSignature, WithdrawFrom,
+    TransactionExpiration, TransactionKind, TypeTag, UserSignature, WithdrawFrom,
 };
 use tokio::sync::{mpsc, oneshot};
-use tunnel_core::crypto::verify;
+use tunnel_core::crypto::{blake2b256, verify};
 use tunnel_core::wire::{encode_settle_body, SettleBodyEntry, Settlement};
 use tunnel_harness::{
     Balances, OpenedTunnel, Seat, SettledTunnel, SettlementMode, TunnelAnchor, TunnelAnchorError,
@@ -36,6 +37,49 @@ const ED25519_SCHEME_FLAG: u8 = 0x00;
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const MAX_SPONSORED_OPEN_BATCH_SIZE: usize = 255;
+const DEFAULT_DIRECT_GAS_BUDGET_MIST: u64 = 1_000_000_000;
+
+/// Accumulated gas spend (MIST) split by who paid: the funder wallet
+/// (`SingleFunder`) or the backend sponsor.
+#[derive(Debug, Default)]
+struct CostMeter {
+    gas_funder_mist: AtomicU64,
+    gas_sponsor_mist: AtomicU64,
+}
+
+impl CostMeter {
+    fn add(&self, paid_by_funder: bool, mist: u64) {
+        if paid_by_funder {
+            self.gas_funder_mist.fetch_add(mist, Ordering::Relaxed);
+        } else {
+            self.gas_sponsor_mist.fetch_add(mist, Ordering::Relaxed);
+        }
+    }
+
+    fn snapshot(&self) -> AnchorCostSnapshot {
+        AnchorCostSnapshot {
+            gas_funder_mist: self.gas_funder_mist.load(Ordering::Relaxed),
+            gas_sponsor_mist: self.gas_sponsor_mist.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Point-in-time view of cumulative gas spend on a `SuiSponsoredAnchor`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AnchorCostSnapshot {
+    /// MIST charged to the funder wallet (open transactions when
+    /// `SuiFundingProfile::SingleFunder` pays).
+    pub gas_funder_mist: u64,
+    /// MIST charged to the backend sponsor (all settle transactions and open
+    /// transactions paid by the sponsor).
+    pub gas_sponsor_mist: u64,
+}
+
+/// Net MIST consumed by a transaction: computation + storage − rebate.
+fn net_gas_mist(effects: &TransactionEffects) -> u64 {
+    let g = effects.gas_summary();
+    (g.computation_cost + g.storage_cost).saturating_sub(g.storage_rebate)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuiOpenBatchingConfig {
@@ -65,11 +109,14 @@ pub enum SuiStakeSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SuiOpenMode {
     SponsoredCreateAndFund,
+    DirectCreateAndFund,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SuiSettleMode {
     BackendSettle,
+    SponsoredSettle,
+    DirectSettle,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,6 +151,7 @@ pub struct SuiSponsoredAnchorConfig {
     pub settle_mode: SuiSettleMode,
     pub funding_profile: SuiFundingProfile,
     pub open_batching: SuiOpenBatchingConfig,
+    pub settle_batching: SuiOpenBatchingConfig,
 }
 
 #[derive(Clone)]
@@ -115,6 +163,36 @@ pub struct SuiSponsoredAnchor {
     backend: Arc<dyn SuiBackendClient>,
     inner: Arc<Mutex<AnchorState>>,
     open_batch_executor: Option<SuiOpenBatchExecutor>,
+    settle_batch_executor: Option<SuiSettleBatchExecutor>,
+    cost: Arc<CostMeter>,
+    direct_tx_nonce: Arc<AtomicU64>,
+}
+
+/// Stable pre-chain identity for one open intent. The confirmed Sui `tunnel_id`
+/// remains the canonical settlement id; this only scopes open idempotency.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct SuiOpenIntentId([u8; 32]);
+
+impl SuiOpenIntentId {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn from_label(label: impl AsRef<[u8]>) -> Self {
+        Self(blake2b256(label.as_ref()))
+    }
+}
+
+#[derive(Clone)]
+pub struct SuiOpenIntentAnchor {
+    inner: Arc<SuiSponsoredAnchor>,
+    intent_id: SuiOpenIntentId,
+}
+
+impl SuiOpenIntentAnchor {
+    pub fn intent_id(&self) -> SuiOpenIntentId {
+        self.intent_id
+    }
 }
 
 #[derive(Clone)]
@@ -125,6 +203,15 @@ struct SuiSponsoredAnchorShared {
     chain: Arc<dyn SuiChainClient>,
     backend: Arc<dyn SuiBackendClient>,
     inner: Arc<Mutex<AnchorState>>,
+    cost: Arc<CostMeter>,
+    direct_tx_nonce: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AddressBalanceGasContext {
+    pub reference_gas_price: u64,
+    pub epoch: u64,
+    pub chain_id: Digest,
 }
 
 #[derive(Default)]
@@ -136,9 +223,7 @@ struct AnchorState {
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct OpenKey {
-    protocol: String,
-    party_a: [u8; 32],
-    party_b: [u8; 32],
+    intent_id: SuiOpenIntentId,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -171,6 +256,26 @@ struct OpenRecord {
     party_b: [u8; 32],
     onchain_nonce: u64,
     created_at_ms: u64,
+    request: OpenRequestFingerprint,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct OpenRequestFingerprint {
+    protocol: String,
+    party_a: [u8; 32],
+    party_b: [u8; 32],
+    initial: Balances,
+}
+
+impl OpenRequestFingerprint {
+    fn from_request(request: &TunnelOpenRequest) -> Self {
+        Self {
+            protocol: request.protocol.as_str().to_string(),
+            party_a: request.party_a,
+            party_b: request.party_b,
+            initial: request.initial,
+        }
+    }
 }
 
 struct PendingSettle {
@@ -182,6 +287,23 @@ struct OpenBatchItem {
     key: OpenKey,
     request: TunnelOpenRequest,
     responder: oneshot::Sender<Result<OpenedTunnel, TunnelAnchorError>>,
+    enqueued_at: Instant,
+}
+
+#[derive(Clone)]
+struct PreparedSettle {
+    tunnel_id: String,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    timestamp: u64,
+    root: [u8; 32],
+    sig_a: [u8; 64],
+    sig_b: [u8; 64],
+}
+
+struct SettleBatchItem {
+    prepared: PreparedSettle,
+    responder: oneshot::Sender<Result<SettledTunnel, TunnelAnchorError>>,
     enqueued_at: Instant,
 }
 
@@ -208,10 +330,16 @@ struct SuiOpenBatchExecutor {
     sender: mpsc::UnboundedSender<OpenBatchItem>,
 }
 
+#[derive(Clone)]
+struct SuiSettleBatchExecutor {
+    sender: mpsc::UnboundedSender<SettleBatchItem>,
+}
+
 #[async_trait]
 pub trait SuiChainClient: Send + Sync {
     async fn get_object_ref(&self, object_id: Address) -> Result<ObjectReference, String>;
     async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String>;
+    async fn address_balance_gas_context(&self) -> Result<AddressBalanceGasContext, String>;
     async fn execute_transaction(
         &self,
         transaction: &Transaction,
@@ -404,6 +532,34 @@ impl SuiChainClient for GrpcSuiChainClient {
         Ok(Some(object))
     }
 
+    async fn address_balance_gas_context(&self) -> Result<AddressBalanceGasContext, String> {
+        let request = GetEpochRequest::latest()
+            .with_read_mask(FieldMask::from_paths(["epoch", "reference_gas_price"]));
+        let response = self
+            .client()
+            .await?
+            .ledger_client()
+            .get_epoch(request)
+            .await
+            .map_err(|status| status.to_string())?;
+        let chain_id = response
+            .chain_id()
+            .ok_or_else(|| "get_epoch response missing chain id".to_string())?;
+        let header_epoch = response.epoch();
+        let epoch = response.into_inner().epoch;
+        let epoch = epoch.ok_or_else(|| "get_epoch response missing epoch".to_string())?;
+        Ok(AddressBalanceGasContext {
+            reference_gas_price: epoch
+                .reference_gas_price_opt()
+                .ok_or_else(|| "get_epoch response missing reference gas price".to_string())?,
+            epoch: epoch
+                .epoch_opt()
+                .or(header_epoch)
+                .ok_or_else(|| "get_epoch response missing current epoch number".to_string())?,
+            chain_id,
+        })
+    }
+
     async fn execute_transaction(
         &self,
         transaction: &Transaction,
@@ -502,11 +658,18 @@ impl SuiSponsoredAnchorShared {
             backend: self.backend.clone(),
             inner: self.inner.clone(),
             open_batch_executor: None,
+            settle_batch_executor: None,
+            cost: self.cost.clone(),
+            direct_tx_nonce: self.direct_tx_nonce.clone(),
         }
     }
 
     async fn flush_open_batch(&self, items: Vec<OpenBatchItem>) {
         self.anchor_for_executor().execute_open_batch(items).await;
+    }
+
+    async fn flush_settle_batch(&self, items: Vec<SettleBatchItem>) {
+        self.anchor_for_executor().execute_settle_batch(items).await;
     }
 }
 
@@ -550,6 +713,41 @@ impl SuiOpenBatchExecutor {
     }
 }
 
+impl SuiSettleBatchExecutor {
+    fn new(shared: SuiSponsoredAnchorShared) -> Result<Self, TunnelAnchorError> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name("sui-settle-batch-executor".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build Sui settle batch runtime");
+                runtime.block_on(run_settle_batch_worker(shared, receiver));
+            })
+            .map_err(|e| {
+                TunnelAnchorError::Unavailable(format!("start settle batch executor: {e}"))
+            })?;
+        Ok(Self { sender })
+    }
+
+    async fn submit(&self, prepared: PreparedSettle) -> Result<SettledTunnel, TunnelAnchorError> {
+        let (responder, receiver) = oneshot::channel();
+        self.sender
+            .send(SettleBatchItem {
+                prepared,
+                responder,
+                enqueued_at: Instant::now(),
+            })
+            .map_err(|_| TunnelAnchorError::Unavailable("settle batch executor stopped".into()))?;
+        receiver.await.unwrap_or_else(|_| {
+            Err(TunnelAnchorError::Unavailable(
+                "settle batch executor stopped".into(),
+            ))
+        })
+    }
+}
+
 async fn run_open_batch_worker(
     shared: SuiSponsoredAnchorShared,
     mut receiver: mpsc::UnboundedReceiver<OpenBatchItem>,
@@ -588,7 +786,57 @@ async fn run_open_batch_worker(
     }
 }
 
+async fn run_settle_batch_worker(
+    shared: SuiSponsoredAnchorShared,
+    mut receiver: mpsc::UnboundedReceiver<SettleBatchItem>,
+) {
+    let mut pending = Vec::new();
+    let max_batch_size = shared.config.settle_batching.max_batch_size.max(1);
+
+    loop {
+        if pending.is_empty() {
+            let Some(item) = receiver.recv().await else {
+                break;
+            };
+            pending.push(item);
+        }
+
+        if pending.len() >= max_batch_size {
+            shared
+                .flush_settle_batch(std::mem::take(&mut pending))
+                .await;
+            continue;
+        }
+
+        let deadline = settle_batch_deadline(&pending, &shared.config.settle_batching);
+        tokio::select! {
+            maybe_item = receiver.recv() => {
+                match maybe_item {
+                    Some(item) => pending.push(item),
+                    None => {
+                        shared.flush_settle_batch(std::mem::take(&mut pending)).await;
+                        break;
+                    }
+                }
+            }
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                shared.flush_settle_batch(std::mem::take(&mut pending)).await;
+            }
+        }
+    }
+}
+
 fn open_batch_deadline(items: &[OpenBatchItem], config: &SuiOpenBatchingConfig) -> Instant {
+    let oldest = items
+        .first()
+        .map(|item| item.enqueued_at)
+        .unwrap_or_else(Instant::now);
+    let flush_at = oldest + Duration::from_millis(config.flush_interval_ms);
+    let max_wait_at = oldest + Duration::from_millis(config.max_wait_ms);
+    flush_at.min(max_wait_at)
+}
+
+fn settle_batch_deadline(items: &[SettleBatchItem], config: &SuiOpenBatchingConfig) -> Instant {
     let oldest = items
         .first()
         .map(|item| item.enqueued_at)
@@ -663,6 +911,8 @@ impl SuiSponsoredAnchor {
                 .map_err(TunnelAnchorError::Rejected)?;
         let funder_address = funder.public_key().derive_address();
         let inner = Arc::new(Mutex::new(AnchorState::default()));
+        let cost = Arc::new(CostMeter::default());
+        let direct_tx_nonce = Arc::new(AtomicU64::new(0));
         let shared = SuiSponsoredAnchorShared {
             config: config.clone(),
             funder: funder.clone(),
@@ -670,9 +920,18 @@ impl SuiSponsoredAnchor {
             chain: chain.clone(),
             backend: backend.clone(),
             inner: inner.clone(),
+            cost: cost.clone(),
+            direct_tx_nonce: direct_tx_nonce.clone(),
         };
         let open_batch_executor = if config.open_batching.enabled {
-            Some(SuiOpenBatchExecutor::new(shared)?)
+            Some(SuiOpenBatchExecutor::new(shared.clone())?)
+        } else {
+            None
+        };
+        let settle_batch_executor = if config.settle_batching.enabled
+            && config.settle_mode != SuiSettleMode::BackendSettle
+        {
+            Some(SuiSettleBatchExecutor::new(shared)?)
         } else {
             None
         };
@@ -684,6 +943,9 @@ impl SuiSponsoredAnchor {
             backend,
             inner,
             open_batch_executor,
+            settle_batch_executor,
+            cost,
+            direct_tx_nonce,
         })
     }
 
@@ -691,22 +953,34 @@ impl SuiSponsoredAnchor {
         self.funder_address
     }
 
-    async fn open_once(
+    /// Returns a point-in-time snapshot of cumulative gas spend.
+    pub fn cost_snapshot(&self) -> AnchorCostSnapshot {
+        self.cost.snapshot()
+    }
+
+    pub fn for_open_intent(self: &Arc<Self>, intent_id: SuiOpenIntentId) -> SuiOpenIntentAnchor {
+        SuiOpenIntentAnchor {
+            inner: self.clone(),
+            intent_id,
+        }
+    }
+
+    fn open_gas_paid_by_funder(&self) -> bool {
+        matches!(self.config.open_mode, SuiOpenMode::DirectCreateAndFund)
+    }
+
+    fn settle_gas_paid_by_funder(&self) -> bool {
+        matches!(self.config.settle_mode, SuiSettleMode::DirectSettle)
+    }
+
+    async fn open_with_intent(
         &self,
+        intent_id: SuiOpenIntentId,
         request: TunnelOpenRequest,
     ) -> Result<OpenedTunnel, TunnelAnchorError> {
-        let key = OpenKey {
-            protocol: request.protocol.as_str().to_string(),
-            party_a: request.party_a,
-            party_b: request.party_b,
-        };
-        if let Some(opened) = self.inner.lock().unwrap().opens.get(&key).cloned() {
-            return Ok(OpenedTunnel {
-                tunnel_id: opened.tunnel_id,
-                onchain_nonce: opened.onchain_nonce,
-                created_at_ms: Some(opened.created_at_ms),
-                created: false,
-            });
+        let key = OpenKey { intent_id };
+        if let Some(opened) = self.cached_open(&key, &request)? {
+            return Ok(opened);
         }
 
         if self.config.open_batching.enabled {
@@ -725,7 +999,9 @@ impl SuiSponsoredAnchor {
         request: TunnelOpenRequest,
     ) -> Result<OpenedTunnel, TunnelAnchorError> {
         let kind = self.build_open_kind_for_config(&request).await?;
-        let effects = self.execute_sponsored_kind(kind).await?;
+        let effects = self.execute_open_kind(kind).await?;
+        self.cost
+            .add(self.open_gas_paid_by_funder(), net_gas_mist(&effects));
         let (tunnel_id, created_at_ms) = self.opened_from_effects(&effects).await?;
         let record = OpenRecord {
             tunnel_id: tunnel_id.clone(),
@@ -733,6 +1009,7 @@ impl SuiSponsoredAnchor {
             party_b: request.party_b,
             onchain_nonce: 0,
             created_at_ms,
+            request: OpenRequestFingerprint::from_request(&request),
         };
         self.inner.lock().unwrap().opens.insert(key, record);
         Ok(OpenedTunnel {
@@ -744,16 +1021,26 @@ impl SuiSponsoredAnchor {
     }
 
     async fn execute_open_batch(&self, items: Vec<OpenBatchItem>) {
+        let started = Instant::now();
+        tracing::debug!(items = items.len(), "sui open batch start");
         let mut uncached_items = Vec::new();
         for item in items {
-            if let Some(opened) = self.cached_open(&item.key) {
-                let _ = item.responder.send(Ok(opened));
-            } else {
-                uncached_items.push(item);
+            match self.cached_open(&item.key, &item.request) {
+                Ok(Some(opened)) => {
+                    let _ = item.responder.send(Ok(opened));
+                }
+                Ok(None) => uncached_items.push(item),
+                Err(error) => {
+                    let _ = item.responder.send(Err(error));
+                }
             }
         }
 
         if uncached_items.is_empty() {
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "sui open batch satisfied from cache"
+            );
             return;
         }
 
@@ -761,7 +1048,15 @@ impl SuiSponsoredAnchor {
         let mut group_indexes: HashMap<OpenKey, usize> = HashMap::new();
         for item in uncached_items {
             if let Some(index) = group_indexes.get(&item.key).copied() {
-                groups[index].responders.push(item.responder);
+                if OpenRequestFingerprint::from_request(&groups[index].request)
+                    == OpenRequestFingerprint::from_request(&item.request)
+                {
+                    groups[index].responders.push(item.responder);
+                } else {
+                    let _ = item.responder.send(Err(TunnelAnchorError::Rejected(
+                        "open intent reused with different open request".into(),
+                    )));
+                }
             } else {
                 let index = groups.len();
                 group_indexes.insert(item.key.clone(), index);
@@ -791,12 +1086,23 @@ impl SuiSponsoredAnchor {
             }
         }
 
+        let single_group_count = single_groups.len();
         for group in single_groups {
             let result = self.open_single_uncached(group.key, group.request).await;
             send_open_group_result(group.responders, result);
         }
 
+        tracing::debug!(
+            safe_groups = safe_groups.len(),
+            single_groups = single_group_count,
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch grouped"
+        );
         self.execute_open_groups_or_split(safe_groups).await;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch done"
+        );
     }
 
     fn execute_open_groups_or_split(
@@ -823,17 +1129,30 @@ impl SuiSponsoredAnchor {
 
                     match self.open_batched_uncached(&keys, &requests).await {
                         Ok(opened) => {
+                            tracing::debug!(
+                                groups = groups.len(),
+                                "sui open batch attempt resolved"
+                            );
                             for (group, opened) in groups.into_iter().zip(opened) {
                                 send_open_group_result(group.responders, Ok(opened));
                             }
                         }
                         Err(OpenBatchAttemptError::Retryable(error)) => {
-                            drop(error);
+                            tracing::debug!(
+                                groups = groups.len(),
+                                ?error,
+                                "sui open batch attempt retryable; splitting"
+                            );
                             let right_groups = groups.split_off(groups.len() / 2);
                             self.execute_open_groups_or_split(groups).await;
                             self.execute_open_groups_or_split(right_groups).await;
                         }
                         Err(OpenBatchAttemptError::Final(error)) => {
+                            tracing::warn!(
+                                groups = groups.len(),
+                                ?error,
+                                "sui open batch attempt failed"
+                            );
                             for group in groups {
                                 send_open_group_result(group.responders, Err(error.clone()));
                             }
@@ -844,19 +1163,26 @@ impl SuiSponsoredAnchor {
         })
     }
 
-    fn cached_open(&self, key: &OpenKey) -> Option<OpenedTunnel> {
-        self.inner
-            .lock()
-            .unwrap()
-            .opens
-            .get(key)
-            .cloned()
-            .map(|opened| OpenedTunnel {
-                tunnel_id: opened.tunnel_id,
-                onchain_nonce: opened.onchain_nonce,
-                created_at_ms: Some(opened.created_at_ms),
-                created: false,
-            })
+    fn cached_open(
+        &self,
+        key: &OpenKey,
+        request: &TunnelOpenRequest,
+    ) -> Result<Option<OpenedTunnel>, TunnelAnchorError> {
+        let opened = self.inner.lock().unwrap().opens.get(key).cloned();
+        let Some(opened) = opened else {
+            return Ok(None);
+        };
+        if opened.request != OpenRequestFingerprint::from_request(request) {
+            return Err(TunnelAnchorError::Rejected(
+                "open intent reused with different open request".into(),
+            ));
+        }
+        Ok(Some(OpenedTunnel {
+            tunnel_id: opened.tunnel_id,
+            onchain_nonce: opened.onchain_nonce,
+            created_at_ms: Some(opened.created_at_ms),
+            created: false,
+        }))
     }
 
     async fn open_batched_uncached(
@@ -864,19 +1190,38 @@ impl SuiSponsoredAnchor {
         keys: &[OpenKey],
         requests: &[TunnelOpenRequest],
     ) -> Result<Vec<OpenedTunnel>, OpenBatchAttemptError> {
+        let started = Instant::now();
+        tracing::debug!(requests = requests.len(), "sui open batch build start");
         let kind = self
             .build_batched_open_kind_for_config(requests)
             .await
             .map_err(OpenBatchAttemptError::Final)?;
+        tracing::debug!(
+            requests = requests.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch execute start"
+        );
         let effects = self
-            .execute_sponsored_kind(kind)
+            .execute_open_kind(kind)
             .await
             .map_err(open_batch_attempt_error)?;
+        self.cost
+            .add(self.open_gas_paid_by_funder(), net_gas_mist(&effects));
+        tracing::debug!(
+            requests = requests.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch execute done"
+        );
         ensure_success(&effects).map_err(OpenBatchAttemptError::Retryable)?;
         let opened = self
             .map_created_tunnels_to_open_requests(&effects, requests)
             .await
             .map_err(OpenBatchAttemptError::Final)?;
+        tracing::debug!(
+            requests = requests.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch map done"
+        );
 
         let mut results = Vec::with_capacity(requests.len());
         let mut state = self.inner.lock().unwrap();
@@ -889,6 +1234,7 @@ impl SuiSponsoredAnchor {
                 party_b: request.party_b,
                 onchain_nonce: 0,
                 created_at_ms,
+                request: OpenRequestFingerprint::from_request(request),
             };
             state.opens.insert(key, record);
             results.push(OpenedTunnel {
@@ -899,6 +1245,16 @@ impl SuiSponsoredAnchor {
             });
         }
         Ok(results)
+    }
+
+    async fn execute_open_kind(
+        &self,
+        kind: TransactionKind,
+    ) -> Result<TransactionEffects, TunnelAnchorError> {
+        match self.config.open_mode {
+            SuiOpenMode::SponsoredCreateAndFund => self.execute_sponsored_kind(kind).await,
+            SuiOpenMode::DirectCreateAndFund => self.execute_direct_kind(kind).await,
+        }
     }
 
     async fn execute_sponsored_kind(
@@ -919,7 +1275,7 @@ impl SuiSponsoredAnchor {
         let user_sig = self
             .funder
             .sign_transaction(&tx)
-            .map_err(|e| TunnelAnchorError::Rejected(format!("sign open tx: {e}")))?;
+            .map_err(|e| TunnelAnchorError::Rejected(format!("sign sponsored tx: {e}")))?;
         Ok(match sponsor.provider.as_str() {
             "settler" => {
                 let sponsor_sig = sponsor
@@ -958,6 +1314,51 @@ impl SuiSponsoredAnchor {
         })
     }
 
+    async fn execute_direct_kind(
+        &self,
+        kind: TransactionKind,
+    ) -> Result<TransactionEffects, TunnelAnchorError> {
+        let gas = self
+            .chain
+            .address_balance_gas_context()
+            .await
+            .map_err(TunnelAnchorError::Unavailable)?;
+        let nonce = self.next_direct_tx_nonce()?;
+        let tx = Transaction {
+            kind,
+            sender: self.funder_address,
+            gas_payment: GasPayment {
+                objects: Vec::new(),
+                owner: self.funder_address,
+                price: gas.reference_gas_price,
+                budget: DEFAULT_DIRECT_GAS_BUDGET_MIST,
+            },
+            expiration: TransactionExpiration::ValidDuring {
+                min_epoch: Some(gas.epoch),
+                max_epoch: Some(gas.epoch),
+                min_timestamp: None,
+                max_timestamp: None,
+                chain: gas.chain_id,
+                nonce,
+            },
+        };
+        let user_sig = self
+            .funder
+            .sign_transaction(&tx)
+            .map_err(|e| TunnelAnchorError::Rejected(format!("sign direct tx: {e}")))?;
+        self.chain
+            .execute_transaction(&tx, &[user_sig])
+            .await
+            .map_err(TunnelAnchorError::Unavailable)
+    }
+
+    fn next_direct_tx_nonce(&self) -> Result<u32, TunnelAnchorError> {
+        let nonce = self.direct_tx_nonce.fetch_add(1, Ordering::Relaxed);
+        u32::try_from(nonce).map_err(|_| {
+            TunnelAnchorError::Rejected("direct address-balance gas nonce exhausted".into())
+        })
+    }
+
     async fn opened_from_effects(
         &self,
         effects: &TransactionEffects,
@@ -983,6 +1384,7 @@ impl SuiSponsoredAnchor {
         effects: &TransactionEffects,
         requests: &[TunnelOpenRequest],
     ) -> Result<Vec<(String, u64)>, TunnelAnchorError> {
+        let started = Instant::now();
         ensure_success(effects)?;
         let tx_digest = transaction_digest(effects);
         let created_at_ms = self
@@ -996,9 +1398,16 @@ impl SuiSponsoredAnchor {
                 ))
             })?;
 
+        let created_ids = created_object_ids(effects);
+        tracing::debug!(
+            requests = requests.len(),
+            created_objects = created_ids.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch object mapping start"
+        );
         let mut matched_results = vec![None; requests.len()];
         let mut tunnel_count = 0usize;
-        for object_id in created_object_ids(effects) {
+        for object_id in created_ids {
             let Some(object) = self
                 .chain
                 .get_object(object_id)
@@ -1045,6 +1454,12 @@ impl SuiSponsoredAnchor {
                 requests.len()
             )));
         }
+        tracing::debug!(
+            requests = requests.len(),
+            tunnel_count,
+            elapsed_ms = started.elapsed().as_millis(),
+            "sui open batch object mapping done"
+        );
 
         matched_results
             .into_iter()
@@ -1069,6 +1484,9 @@ impl SuiSponsoredAnchor {
         &self,
         request: &TunnelOpenRequest,
     ) -> Result<TransactionKind, TunnelAnchorError> {
+        if self.config.open_mode == SuiOpenMode::DirectCreateAndFund {
+            return self.build_open_kind_from_address_balance(request);
+        }
         match self.config.funding_profile.stake_source() {
             SuiStakeSource::CoinObject { coin_id } => {
                 let stake_coin_id = parse_address(coin_id)?;
@@ -1087,6 +1505,9 @@ impl SuiSponsoredAnchor {
         &self,
         requests: &[TunnelOpenRequest],
     ) -> Result<TransactionKind, TunnelAnchorError> {
+        if self.config.open_mode == SuiOpenMode::DirectCreateAndFund {
+            return self.build_batched_open_kind_from_address_balance(requests);
+        }
         match self.config.funding_profile.stake_source() {
             SuiStakeSource::CoinObject { coin_id } => {
                 let stake_coin_id = parse_address(coin_id)?;
@@ -1595,7 +2016,47 @@ impl SuiSponsoredAnchor {
             })
             .collect();
         let body = encode_settle_body(&settlement, &root, &sig_a, &sig_b, &entries);
+        if self.config.settle_mode != SuiSettleMode::BackendSettle {
+            let prepared = PreparedSettle {
+                tunnel_id: first.tunnel_id.clone(),
+                party_a_balance: first.party_a_balance,
+                party_b_balance: first.party_b_balance,
+                timestamp: first.timestamp,
+                root,
+                sig_a,
+                sig_b,
+            };
+            if let Some(executor) = &self.settle_batch_executor {
+                return executor.submit(prepared).await;
+            }
+            let mut settled = self.execute_prepared_settle_batch(vec![prepared]).await?;
+            return settled
+                .pop()
+                .ok_or_else(|| TunnelAnchorError::Unavailable("empty settle batch result".into()));
+        }
         let body = self.backend.settle(first.tunnel_id.clone(), body).await?;
+        // Settle gas is metered post-hoc from the on-chain effects. If they
+        // can't be fetched (RPC error, or not yet indexed), warn instead of
+        // silently dropping the spend — an unmetered settle understates the gas
+        // total, and a silent gap is worse than a visible one.
+        match self.chain.get_transaction_effects(&body.tx_digest).await {
+            Ok(Some(settle_effects)) => {
+                self.cost.add(false, net_gas_mist(&settle_effects));
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    tx_digest = %body.tx_digest,
+                    "settle gas unmetered: transaction effects not yet available"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    tx_digest = %body.tx_digest,
+                    error = ?err,
+                    "settle gas unmetered: failed to fetch transaction effects"
+                );
+            }
+        }
         Ok(SettledTunnel {
             digest: body.tx_digest,
             final_balances: Balances {
@@ -1603,6 +2064,134 @@ impl SuiSponsoredAnchor {
                 b: first.party_b_balance,
             },
         })
+    }
+
+    async fn execute_settle_batch(&self, items: Vec<SettleBatchItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let prepared = items
+            .iter()
+            .map(|item| item.prepared.clone())
+            .collect::<Vec<_>>();
+        let result = self.execute_prepared_settle_batch(prepared).await;
+        match result {
+            Ok(settled) => {
+                for (item, settled) in items.into_iter().zip(settled) {
+                    let _ = item.responder.send(Ok(settled));
+                }
+            }
+            Err(error) => {
+                for item in items {
+                    let _ = item.responder.send(Err(error.clone()));
+                }
+            }
+        }
+    }
+
+    async fn execute_prepared_settle_batch(
+        &self,
+        prepared: Vec<PreparedSettle>,
+    ) -> Result<Vec<SettledTunnel>, TunnelAnchorError> {
+        let kind = self.build_batched_settle_kind(&prepared).await?;
+        let effects = match self.config.settle_mode {
+            SuiSettleMode::BackendSettle => unreachable!(),
+            SuiSettleMode::SponsoredSettle => self.execute_sponsored_kind(kind).await?,
+            SuiSettleMode::DirectSettle => self.execute_direct_kind(kind).await?,
+        };
+        ensure_success(&effects)?;
+        self.cost
+            .add(self.settle_gas_paid_by_funder(), net_gas_mist(&effects));
+        let digest = transaction_digest(&effects);
+        Ok(prepared
+            .into_iter()
+            .map(|settle| SettledTunnel {
+                digest: digest.clone(),
+                final_balances: Balances {
+                    a: settle.party_a_balance,
+                    b: settle.party_b_balance,
+                },
+            })
+            .collect())
+    }
+
+    async fn build_batched_settle_kind(
+        &self,
+        prepared: &[PreparedSettle],
+    ) -> Result<TransactionKind, TunnelAnchorError> {
+        if prepared.is_empty() {
+            return Err(TunnelAnchorError::Rejected("settle batch is empty".into()));
+        }
+        if prepared.len() >= 1024 {
+            return Err(TunnelAnchorError::Rejected(
+                "settle batch exceeds PTB command limit".into(),
+            ));
+        }
+
+        let package = parse_address(&self.config.package_id)?;
+        let coin_type = self.tunnel_coin_type()?;
+        let clock = Address::from_str(CLOCK_ADDRESS).expect("static clock address");
+        let mut inputs = Vec::with_capacity(prepared.len() * 7 + 1);
+        for settle in prepared {
+            let tunnel_id = parse_address(&settle.tunnel_id)?;
+            let tunnel = self
+                .chain
+                .get_object(tunnel_id)
+                .await
+                .map_err(TunnelAnchorError::Unavailable)?
+                .ok_or_else(|| {
+                    TunnelAnchorError::Unavailable(format!(
+                        "settle tunnel object {} not found",
+                        settle.tunnel_id
+                    ))
+                })?;
+            let Owner::Shared(initial_shared_version) = *tunnel.owner() else {
+                return Err(TunnelAnchorError::Rejected(format!(
+                    "settle tunnel object {} is not shared",
+                    settle.tunnel_id
+                )));
+            };
+            inputs.push(Input::Shared(SharedInput::new(
+                tunnel_id,
+                initial_shared_version,
+                true,
+            )));
+            inputs.push(pure(&settle.party_a_balance)?);
+            inputs.push(pure(&settle.party_b_balance)?);
+            inputs.push(pure(&settle.sig_a.to_vec())?);
+            inputs.push(pure(&settle.sig_b.to_vec())?);
+            inputs.push(pure(&settle.timestamp)?);
+            inputs.push(pure(&settle.root.to_vec())?);
+        }
+        let clock_input = inputs.len();
+        inputs.push(Input::Shared(SharedInput::new(clock, 1, false)));
+
+        let mut commands = Vec::with_capacity(prepared.len());
+        for settle_index in 0..prepared.len() {
+            let input_start = settle_index * 7;
+            commands.push(Command::MoveCall(MoveCall {
+                package,
+                module: Identifier::new("tunnel")
+                    .map_err(|e| TunnelAnchorError::Rejected(e.to_string()))?,
+                function: Identifier::new("entry_close_cooperative_with_root")
+                    .map_err(|e| TunnelAnchorError::Rejected(e.to_string()))?,
+                type_arguments: vec![coin_type.clone()],
+                arguments: vec![
+                    input_argument(input_start)?,
+                    input_argument(input_start + 1)?,
+                    input_argument(input_start + 2)?,
+                    input_argument(input_start + 3)?,
+                    input_argument(input_start + 4)?,
+                    input_argument(input_start + 5)?,
+                    input_argument(input_start + 6)?,
+                    input_argument(clock_input)?,
+                ],
+            }));
+        }
+
+        Ok(TransactionKind::ProgrammableTransaction(
+            ProgrammableTransaction { inputs, commands },
+        ))
     }
 
     fn open_record_for(&self, tunnel_id: &str) -> Result<OpenRecord, TunnelAnchorError> {
@@ -1617,20 +2206,20 @@ impl SuiSponsoredAnchor {
     }
 }
 
-impl TunnelAnchor for SuiSponsoredAnchor {
+impl TunnelAnchor for SuiOpenIntentAnchor {
     fn settlement_mode(&self) -> SettlementMode {
         SettlementMode::TranscriptRoot
     }
 
     async fn open(&self, request: TunnelOpenRequest) -> Result<OpenedTunnel, TunnelAnchorError> {
-        self.open_once(request).await
+        self.inner.open_with_intent(self.intent_id, request).await
     }
 
     async fn settle(
         &self,
         request: TunnelSettleRequest,
     ) -> Result<SettledTunnel, TunnelAnchorError> {
-        self.settle_once(request).await
+        self.inner.settle_once(request).await
     }
 }
 
@@ -1929,7 +2518,7 @@ fn ensure_success(effects: &TransactionEffects) -> Result<(), TunnelAnchorError>
     match effects.status() {
         ExecutionStatus::Success => Ok(()),
         other => Err(TunnelAnchorError::Rejected(format!(
-            "open transaction failed: {other:?}"
+            "Sui transaction failed: {other:?}"
         ))),
     }
 }
@@ -2003,6 +2592,9 @@ mod tests {
         effects_queue: StdMutex<VecDeque<TransactionEffects>>,
         transaction_effects: StdMutex<Option<TransactionEffects>>,
         transaction_timestamp_ms: StdMutex<Option<u64>>,
+        gas_selection: StdMutex<Option<(Address, u64, Vec<Address>)>>,
+        executed_transaction: StdMutex<Option<Transaction>>,
+        execute_call_count: StdMutex<usize>,
         execute_signature_count: StdMutex<Option<usize>>,
         transaction_digest_read: StdMutex<Option<String>>,
         timestamp_digest_read: StdMutex<Option<String>>,
@@ -2022,11 +2614,21 @@ mod tests {
             Ok(self.objects.lock().unwrap().get(&object_id).cloned())
         }
 
+        async fn address_balance_gas_context(&self) -> Result<AddressBalanceGasContext, String> {
+            Ok(AddressBalanceGasContext {
+                reference_gas_price: 1,
+                epoch: 7,
+                chain_id: Digest::ZERO,
+            })
+        }
+
         async fn execute_transaction(
             &self,
-            _transaction: &Transaction,
+            transaction: &Transaction,
             signatures: &[UserSignature],
         ) -> Result<TransactionEffects, String> {
+            *self.executed_transaction.lock().unwrap() = Some(transaction.clone());
+            *self.execute_call_count.lock().unwrap() += 1;
             *self.execute_signature_count.lock().unwrap() = Some(signatures.len());
             if let Some(effects) = self.effects_queue.lock().unwrap().pop_front() {
                 return Ok(effects);
@@ -2140,6 +2742,7 @@ mod tests {
                 },
             },
             open_batching: SuiOpenBatchingConfig::default(),
+            settle_batching: SuiOpenBatchingConfig::default(),
         }
     }
 
@@ -2172,6 +2775,77 @@ mod tests {
 
     fn object_ref(id: Address) -> ObjectReference {
         ObjectReference::new(id, 1, Digest::ZERO)
+    }
+
+    fn assert_address_balance_gas_transaction(chain: &FakeChain, owner: Address) {
+        assert!(
+            chain.gas_selection.lock().unwrap().is_none(),
+            "direct modes must not select explicit gas coins"
+        );
+        let tx = chain
+            .executed_transaction
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("executed transaction");
+        assert!(tx.gas_payment.objects.is_empty());
+        assert_eq!(tx.gas_payment.owner, owner);
+        assert_eq!(tx.gas_payment.budget, DEFAULT_DIRECT_GAS_BUDGET_MIST);
+        assert!(matches!(
+            tx.expiration,
+            TransactionExpiration::ValidDuring {
+                min_epoch: Some(7),
+                max_epoch: Some(7),
+                chain: Digest::ZERO,
+                ..
+            }
+        ));
+    }
+
+    fn executed_move_call_count(chain: &FakeChain, function_name: &str) -> usize {
+        let tx = chain
+            .executed_transaction
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("executed transaction");
+        let TransactionKind::ProgrammableTransaction(ptb) = tx.kind else {
+            panic!("expected PTB");
+        };
+        ptb.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    Command::MoveCall(call) if call.function.as_str() == function_name
+                )
+            })
+            .count()
+    }
+
+    fn sponsored_kind_move_call_count(backend: &FakeBackend, function_name: &str) -> usize {
+        let tx_kind_bytes = backend
+            .tx_kind_bytes
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("sponsored tx kind");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(tx_kind_bytes)
+            .expect("decode tx kind");
+        let kind: TransactionKind = bcs::from_bytes(&bytes).expect("tx kind bcs");
+        let TransactionKind::ProgrammableTransaction(ptb) = kind else {
+            panic!("expected PTB");
+        };
+        ptb.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    Command::MoveCall(call) if call.function.as_str() == function_name
+                )
+            })
+            .count()
     }
 
     fn tunnel_object(id: Address) -> Object {
@@ -2287,6 +2961,22 @@ mod tests {
         SuiSponsoredAnchor::with_clients(config(), chain, backend)
     }
 
+    fn intent(byte: u8) -> SuiOpenIntentId {
+        SuiOpenIntentId::from_bytes([byte; 32])
+    }
+
+    fn scoped_anchor(anchor: SuiSponsoredAnchor, byte: u8) -> SuiOpenIntentAnchor {
+        Arc::new(anchor).for_open_intent(intent(byte))
+    }
+
+    fn scoped_pair(anchor: SuiSponsoredAnchor) -> (SuiOpenIntentAnchor, SuiOpenIntentAnchor) {
+        let shared = Arc::new(anchor);
+        (
+            shared.for_open_intent(intent(1)),
+            shared.for_open_intent(intent(2)),
+        )
+    }
+
     fn open_request_with_secrets(
         party_a_secret: [u8; 32],
         party_b_secret: [u8; 32],
@@ -2317,6 +3007,11 @@ mod tests {
             TransactionKind::ProgrammableTransaction(ptb) => ptb,
             other => panic!("expected PTB, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn direct_ptb_default_gas_budget_is_large_enough_for_batches() {
+        const { assert!(DEFAULT_DIRECT_GAS_BUDGET_MIST >= 1_000_000_000) };
     }
 
     #[test]
@@ -2583,7 +3278,8 @@ mod tests {
         let tunnel_id = Address::from_str("0x42").unwrap();
         let (chain, backend) = settler_open_fixture(tunnel_id, 1_770_000_000_123);
 
-        let anchor = anchor_with(chain.clone(), backend.clone()).expect("anchor");
+        let shared = Arc::new(anchor_with(chain.clone(), backend.clone()).expect("anchor"));
+        let anchor = shared.for_open_intent(intent(1));
         let opened = anchor.open(open_request()).await.expect("open");
 
         assert_eq!(opened.tunnel_id, tunnel_id.to_string());
@@ -2596,7 +3292,7 @@ mod tests {
         assert!(backend.tx_kind_bytes.lock().unwrap().as_ref().is_some());
         assert_eq!(
             *backend.sponsor_sender.lock().unwrap(),
-            Some(anchor.funder_address().to_string())
+            Some(shared.funder_address().to_string())
         );
     }
 
@@ -2610,13 +3306,209 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor");
+        let anchor = scoped_anchor(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
+            1,
+        );
         let opened = anchor.open(open_request()).await.expect("open");
 
         assert_eq!(opened.tunnel_id, tunnel_id.to_string());
         assert_eq!(opened.created_at_ms, Some(1_770_000_000_123));
         assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn direct_open_executes_with_funder_gas_and_skips_sponsor_api() {
+        let tunnel_id = Address::from_str("0x42").unwrap();
+        let chain = Arc::new(FakeChain::default());
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects(tunnel_id));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
+
+        let backend = Arc::new(FakeBackend::default());
+        let mut config = config();
+        config.open_mode = SuiOpenMode::DirectCreateAndFund;
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
+                .expect("anchor"),
+        );
+        let anchor = shared.for_open_intent(intent(1));
+
+        let opened = anchor.open(open_request()).await.expect("open");
+
+        assert_eq!(opened.tunnel_id, tunnel_id.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
+        assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 1);
+        assert_address_balance_gas_transaction(&chain, shared.funder_address());
+    }
+
+    #[tokio::test]
+    async fn direct_open_batches_create_and_fund_ptbs() {
+        let first_tunnel = Address::from_str("0x42").unwrap();
+        let second_tunnel = Address::from_str("0x43").unwrap();
+        let first_request =
+            open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+        let second_request =
+            open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 });
+
+        let chain = Arc::new(FakeChain::default());
+        chain.objects.lock().unwrap().insert(
+            first_tunnel,
+            tunnel_object_for_request(first_tunnel, &first_request),
+        );
+        chain.objects.lock().unwrap().insert(
+            second_tunnel,
+            tunnel_object_for_request(second_tunnel, &second_request),
+        );
+        *chain.effects.lock().unwrap() = Some(success_effects_with_created(vec![
+            first_tunnel,
+            second_tunnel,
+        ]));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
+
+        let backend = Arc::new(FakeBackend::default());
+        let mut config = config();
+        config.open_mode = SuiOpenMode::DirectCreateAndFund;
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 60_000,
+            max_wait_ms: 60_000,
+        };
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
+                .expect("anchor"),
+        );
+        let first_anchor = shared.for_open_intent(intent(1));
+        let second_anchor = shared.for_open_intent(intent(2));
+
+        let (first, second) = tokio::join!(
+            first_anchor.open(first_request),
+            second_anchor.open(second_request),
+        );
+
+        assert_eq!(
+            first.expect("first open").tunnel_id,
+            first_tunnel.to_string()
+        );
+        assert_eq!(
+            second.expect("second open").tunnel_id,
+            second_tunnel.to_string()
+        );
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
+        assert_eq!(*chain.execute_call_count.lock().unwrap(), 1);
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
+        assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 2);
+        assert_address_balance_gas_transaction(&chain, shared.funder_address());
+    }
+
+    #[tokio::test]
+    async fn scoped_open_intent_distinguishes_same_parties_and_protocol() {
+        let first_tunnel = Address::from_str("0x42").unwrap();
+        let second_tunnel = Address::from_str("0x43").unwrap();
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(first_tunnel, tunnel_object(first_tunnel));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(second_tunnel, tunnel_object(second_tunnel));
+        chain
+            .effects_queue
+            .lock()
+            .unwrap()
+            .push_back(success_effects(first_tunnel));
+        chain
+            .effects_queue
+            .lock()
+            .unwrap()
+            .push_back(success_effects(second_tunnel));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
+
+        let backend = Arc::new(FakeBackend::default());
+        backend
+            .sponsor_queue
+            .lock()
+            .unwrap()
+            .push_back(SponsorResponse {
+                provider: "settler".into(),
+                tx_bytes: base64::engine::general_purpose::STANDARD
+                    .encode(bcs::to_bytes(&tx).unwrap()),
+                sponsor_signature: Some(sponsor_signature.clone()),
+                digest: None,
+            });
+        backend
+            .sponsor_queue
+            .lock()
+            .unwrap()
+            .push_back(SponsorResponse {
+                provider: "settler".into(),
+                tx_bytes: base64::engine::general_purpose::STANDARD
+                    .encode(bcs::to_bytes(&tx).unwrap()),
+                sponsor_signature: Some(sponsor_signature),
+                digest: None,
+            });
+
+        let shared = Arc::new(anchor_with(chain, backend.clone()).expect("anchor"));
+        let first = shared
+            .for_open_intent(intent(1))
+            .open(open_request())
+            .await
+            .expect("first open");
+        let second = shared
+            .for_open_intent(intent(2))
+            .open(open_request())
+            .await
+            .expect("second open");
+
+        assert_ne!(first.tunnel_id, second.tunnel_id);
+        assert_eq!(
+            *backend.sponsor_call_count.lock().unwrap(),
+            2,
+            "distinct scoped intents must execute distinct opens"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_scoped_intent_with_different_request_is_rejected() {
+        let tunnel_id = Address::from_str("0x42").unwrap();
+        let (chain, backend) = settler_open_fixture(tunnel_id, 1_770_000_000_123);
+        let anchor = scoped_anchor(anchor_with(chain, backend).expect("anchor"), 1);
+
+        let first = open_request();
+        let _ = anchor.open(first).await.expect("first open");
+
+        let mut changed = open_request();
+        changed.initial = Balances { a: 700, b: 300 };
+        let err = match anchor.open(changed).await {
+            Ok(_) => panic!("changed request unexpectedly opened"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            TunnelAnchorError::Rejected(message) if message.contains("open intent reused")
+        ));
     }
 
     #[tokio::test]
@@ -2660,10 +3552,11 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let (anchor_a, anchor_b) = scoped_pair(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+        );
 
-        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let (opened_a, opened_b) = tokio::join!(anchor_a.open(req_a), anchor_b.open(req_b));
         let opened_a = opened_a.expect("open a");
         let opened_b = opened_b.expect("open b");
 
@@ -2713,10 +3606,11 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let (anchor_a, anchor_b) = scoped_pair(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+        );
 
-        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let (opened_a, opened_b) = tokio::join!(anchor_a.open(req_a), anchor_b.open(req_b));
         let opened_a = opened_a.expect("open a");
         let opened_b = opened_b.expect("open b");
 
@@ -2774,10 +3668,11 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let (anchor_a, anchor_b) = scoped_pair(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+        );
 
-        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let (opened_a, opened_b) = tokio::join!(anchor_a.open(req_a), anchor_b.open(req_b));
         let opened_a = opened_a.expect("open a");
         let opened_b = opened_b.expect("open b");
 
@@ -2818,8 +3713,10 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let anchor = scoped_anchor(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+            1,
+        );
         let req_a = open_request();
         let req_b = open_request();
 
@@ -2877,10 +3774,11 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let (anchor_a, anchor_b) = scoped_pair(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+        );
 
-        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let (opened_a, opened_b) = tokio::join!(anchor_a.open(req_a), anchor_b.open(req_b));
 
         assert_eq!(opened_a.unwrap().tunnel_id, tunnel_a.to_string());
         let Err(error_b) = opened_b else {
@@ -2939,10 +3837,11 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let (anchor_a, anchor_b) = scoped_pair(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+        );
 
-        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let (opened_a, opened_b) = tokio::join!(anchor_a.open(req_a), anchor_b.open(req_b));
 
         assert_eq!(opened_a.unwrap().tunnel_id, tunnel_a.to_string());
         assert_eq!(opened_b.unwrap().tunnel_id, tunnel_b.to_string());
@@ -2980,10 +3879,11 @@ mod tests {
             flush_interval_ms: 10_000,
             max_wait_ms: 10_000,
         };
-        let anchor =
-            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor");
+        let (anchor_a, anchor_b) = scoped_pair(
+            SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
+        );
 
-        let (opened_a, opened_b) = tokio::join!(anchor.open(req_a), anchor.open(req_b));
+        let (opened_a, opened_b) = tokio::join!(anchor_a.open(req_a), anchor_b.open(req_b));
 
         assert!(opened_a.is_err());
         assert!(opened_b.is_err());
@@ -3013,7 +3913,10 @@ mod tests {
         });
         *backend.enoki_digest.lock().unwrap() = Some("EXECUTED".into());
 
-        let anchor = anchor_with(chain.clone(), backend.clone()).expect("anchor");
+        let anchor = scoped_anchor(
+            anchor_with(chain.clone(), backend.clone()).expect("anchor"),
+            1,
+        );
         let opened = anchor.open(open_request()).await.expect("open");
 
         assert_eq!(opened.tunnel_id, tunnel_id.to_string());
@@ -3047,6 +3950,12 @@ mod tests {
             party_b: signer_b.public_key(),
             onchain_nonce: 0,
             created_at_ms: 1_234,
+            request: OpenRequestFingerprint {
+                protocol: "blackjack.bet.v1".into(),
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                initial: Balances { a: 7, b: 3 },
+            },
         };
 
         let root = [0xaa; 32];
@@ -3092,20 +4001,171 @@ mod tests {
         assert_eq!(sig_b, signer_b.sign(&msg));
     }
 
+    fn success_effects_with_nonzero_gas(tunnel_id: Address) -> TransactionEffects {
+        let gas_object = ObjectReferenceWithOwner {
+            reference: object_ref(Address::ZERO),
+            owner: Owner::Address(Address::ZERO),
+        };
+        TransactionEffects::V1(Box::new(TransactionEffectsV1 {
+            status: ExecutionStatus::Success,
+            epoch: 0,
+            gas_used: GasCostSummary {
+                computation_cost: 500_000,
+                storage_cost: 1_000_000,
+                storage_rebate: 200_000,
+                non_refundable_storage_fee: 0,
+            },
+            modified_at_versions: Vec::new(),
+            consensus_objects: Vec::new(),
+            transaction_digest: Digest::ZERO,
+            created: vec![ObjectReferenceWithOwner {
+                reference: object_ref(tunnel_id),
+                owner: Owner::Shared(1),
+            }],
+            mutated: Vec::new(),
+            unwrapped: Vec::new(),
+            deleted: Vec::new(),
+            unwrapped_then_deleted: Vec::new(),
+            wrapped: Vec::new(),
+            gas_object,
+            events_digest: None,
+            dependencies: Vec::new(),
+        }))
+    }
+
+    fn paired_settle_requests(
+        tunnel_id: &str,
+    ) -> (
+        TunnelSettleRequest,
+        TunnelSettleRequest,
+        LocalSigner,
+        LocalSigner,
+    ) {
+        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
+        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+        let root = [0xaa; 32];
+        let settlement = Settlement {
+            tunnel_id: tunnel_id.into(),
+            party_a_balance: 7,
+            party_b_balance: 3,
+            final_nonce: 1,
+            timestamp: 1234,
+        };
+        let msg = serialize_settlement_with_root(&settlement, &root);
+        let entry = tunnel_harness::TranscriptSettleEntry {
+            message: vec![0x33; 4],
+            sig_a: [0x44; 64],
+            sig_b: [0x55; 64],
+        };
+        let half_a = TunnelSettleRequest {
+            tunnel_id: tunnel_id.into(),
+            by: Seat::A,
+            party_a_balance: 7,
+            party_b_balance: 3,
+            final_nonce: 1,
+            timestamp: 1234,
+            signature: signer_a.sign(&msg),
+            transcript_root: Some(root),
+            transcript_entries: vec![entry.clone()],
+        };
+        let half_b = TunnelSettleRequest {
+            tunnel_id: tunnel_id.into(),
+            by: Seat::B,
+            party_a_balance: 7,
+            party_b_balance: 3,
+            final_nonce: 1,
+            timestamp: 1234,
+            signature: signer_b.sign(&msg),
+            transcript_root: Some(root),
+            transcript_entries: vec![entry],
+        };
+        (half_a, half_b, signer_a, signer_b)
+    }
+
+    fn insert_open_record(
+        anchor: &SuiSponsoredAnchor,
+        intent_id: SuiOpenIntentId,
+        tunnel_id: &str,
+        signer_a: &LocalSigner,
+        signer_b: &LocalSigner,
+    ) {
+        anchor.inner.lock().unwrap().opens.insert(
+            OpenKey { intent_id },
+            OpenRecord {
+                tunnel_id: tunnel_id.into(),
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                onchain_nonce: 0,
+                created_at_ms: 1_234,
+                request: OpenRequestFingerprint {
+                    protocol: "blackjack.bet.v1".into(),
+                    party_a: signer_a.public_key(),
+                    party_b: signer_b.public_key(),
+                    initial: Balances { a: 7, b: 3 },
+                },
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn open_accumulates_gas_into_meter() {
+        let tunnel_id = Address::from_str("0x42").unwrap();
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+
+        let chain = Arc::new(FakeChain::default());
+        *chain.object_ref.lock().unwrap() = Some(object_ref(Address::from_str("0x7").unwrap()));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects_with_nonzero_gas(tunnel_id));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_000);
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let shared =
+            Arc::new(SuiSponsoredAnchor::with_clients(config, chain, backend).expect("anchor"));
+        let anchor = shared.for_open_intent(intent(1));
+
+        let before = shared.cost_snapshot();
+        let _ = anchor.open(open_request()).await.expect("open");
+        let after = shared.cost_snapshot();
+
+        assert!(
+            after.gas_funder_mist + after.gas_sponsor_mist
+                > before.gas_funder_mist + before.gas_sponsor_mist,
+            "meter must advance after open: before={:?} after={:?}",
+            before,
+            after,
+        );
+    }
+
     #[tokio::test]
     async fn settle_posts_ts_compatible_binary_body_to_backend() {
         let chain = Arc::new(FakeChain::default());
         let backend = Arc::new(FakeBackend::default());
         *backend.settle_digest.lock().unwrap() = Some("DiG".into());
-        let anchor = anchor_with(chain, backend.clone()).expect("anchor");
+        let shared = Arc::new(anchor_with(chain, backend.clone()).expect("anchor"));
 
         let signer_a = LocalSigner::from_secret(&[1u8; 32]);
         let signer_b = LocalSigner::from_secret(&[2u8; 32]);
-        anchor.inner.lock().unwrap().opens.insert(
+        shared.inner.lock().unwrap().opens.insert(
             OpenKey {
-                protocol: "blackjack.bet.v1".into(),
-                party_a: signer_a.public_key(),
-                party_b: signer_b.public_key(),
+                intent_id: intent(1),
             },
             OpenRecord {
                 tunnel_id: "0x1".into(),
@@ -3113,8 +4173,15 @@ mod tests {
                 party_b: signer_b.public_key(),
                 onchain_nonce: 0,
                 created_at_ms: 1_234,
+                request: OpenRequestFingerprint {
+                    protocol: "blackjack.bet.v1".into(),
+                    party_a: signer_a.public_key(),
+                    party_b: signer_b.public_key(),
+                    initial: Balances { a: 7, b: 3 },
+                },
             },
         );
+        let anchor = shared.for_open_intent(intent(1));
 
         let root = [0xaa; 32];
         let settlement = Settlement {
@@ -3167,5 +4234,216 @@ mod tests {
         assert_eq!(u64::from_be_bytes(body[41..49].try_into().unwrap()), 3);
         assert_eq!(body[65..97], root);
         assert_eq!(u32::from_be_bytes(body[225..229].try_into().unwrap()), 1);
+    }
+
+    #[tokio::test]
+    async fn sponsored_settle_builds_ptb_and_uses_sponsor_api() {
+        let tunnel_id = Address::from_str("0x1").unwrap();
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let chain = Arc::new(FakeChain::default());
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects_with_created(Vec::new()));
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.settle_mode = SuiSettleMode::SponsoredSettle;
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
+                .expect("anchor"),
+        );
+        let (half_a, half_b, signer_a, signer_b) = paired_settle_requests("0x1");
+        insert_open_record(&shared, intent(1), "0x1", &signer_a, &signer_b);
+        let anchor = shared.for_open_intent(intent(1));
+
+        let (a, b) = tokio::join!(anchor.settle(half_a), anchor.settle(half_b));
+
+        assert_eq!(a.expect("settle A").digest, Digest::ZERO.to_string());
+        assert_eq!(b.expect("settle B").digest, Digest::ZERO.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 1);
+        assert!(backend.settle_body.lock().unwrap().is_none());
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(2));
+        assert!(backend.tx_kind_bytes.lock().unwrap().as_ref().is_some());
+    }
+
+    #[tokio::test]
+    async fn direct_settle_builds_ptb_and_executes_with_funder_signature() {
+        let tunnel_id = Address::from_str("0x1").unwrap();
+        let chain = Arc::new(FakeChain::default());
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel_id, tunnel_object(tunnel_id));
+        *chain.effects.lock().unwrap() = Some(success_effects_with_created(Vec::new()));
+
+        let backend = Arc::new(FakeBackend::default());
+        let mut config = config();
+        config.settle_mode = SuiSettleMode::DirectSettle;
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
+                .expect("anchor"),
+        );
+        let (half_a, half_b, signer_a, signer_b) = paired_settle_requests("0x1");
+        insert_open_record(&shared, intent(1), "0x1", &signer_a, &signer_b);
+        let anchor = shared.for_open_intent(intent(1));
+
+        let (a, b) = tokio::join!(anchor.settle(half_a), anchor.settle(half_b));
+
+        assert_eq!(a.expect("settle A").digest, Digest::ZERO.to_string());
+        assert_eq!(b.expect("settle B").digest, Digest::ZERO.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
+        assert!(backend.settle_body.lock().unwrap().is_none());
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_address_balance_gas_transaction(&chain, shared.funder_address());
+    }
+
+    #[tokio::test]
+    async fn direct_settle_batches_multiple_ready_ptbs() {
+        let first_tunnel = Address::from_str("0x1").unwrap();
+        let second_tunnel = Address::from_str("0x2").unwrap();
+        let chain = Arc::new(FakeChain::default());
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(first_tunnel, tunnel_object(first_tunnel));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(second_tunnel, tunnel_object(second_tunnel));
+        *chain.effects.lock().unwrap() = Some(success_effects_with_created(Vec::new()));
+
+        let backend = Arc::new(FakeBackend::default());
+        let mut config = config();
+        config.settle_mode = SuiSettleMode::DirectSettle;
+        config.settle_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 60_000,
+            max_wait_ms: 60_000,
+        };
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
+                .expect("anchor"),
+        );
+        let (first_a, first_b, first_signer_a, first_signer_b) = paired_settle_requests("0x1");
+        let (second_a, second_b, second_signer_a, second_signer_b) = paired_settle_requests("0x2");
+        insert_open_record(&shared, intent(1), "0x1", &first_signer_a, &first_signer_b);
+        insert_open_record(
+            &shared,
+            intent(2),
+            "0x2",
+            &second_signer_a,
+            &second_signer_b,
+        );
+        let first_anchor = shared.for_open_intent(intent(1));
+        let second_anchor = shared.for_open_intent(intent(2));
+
+        let (first_a, first_b, second_a, second_b) = tokio::join!(
+            first_anchor.settle(first_a),
+            first_anchor.settle(first_b),
+            second_anchor.settle(second_a),
+            second_anchor.settle(second_b),
+        );
+
+        assert_eq!(first_a.expect("first A").digest, Digest::ZERO.to_string());
+        assert_eq!(first_b.expect("first B").digest, Digest::ZERO.to_string());
+        assert_eq!(second_a.expect("second A").digest, Digest::ZERO.to_string());
+        assert_eq!(second_b.expect("second B").digest, Digest::ZERO.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
+        assert_eq!(*chain.execute_call_count.lock().unwrap(), 1);
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(
+            executed_move_call_count(&chain, "entry_close_cooperative_with_root"),
+            2
+        );
+        assert_address_balance_gas_transaction(&chain, shared.funder_address());
+    }
+
+    #[tokio::test]
+    async fn sponsored_settle_batches_multiple_ready_ptbs() {
+        let first_tunnel = Address::from_str("0x1").unwrap();
+        let second_tunnel = Address::from_str("0x2").unwrap();
+        let tx = test_transaction();
+        let sponsor_key = Ed25519PrivateKey::new([8u8; 32]);
+        let sponsor_signature = sponsor_key.sign_transaction(&tx).unwrap().to_base64();
+        let chain = Arc::new(FakeChain::default());
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(first_tunnel, tunnel_object(first_tunnel));
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(second_tunnel, tunnel_object(second_tunnel));
+        *chain.effects.lock().unwrap() = Some(success_effects_with_created(Vec::new()));
+
+        let backend = Arc::new(FakeBackend::default());
+        *backend.sponsor.lock().unwrap() = Some(SponsorResponse {
+            provider: "settler".into(),
+            tx_bytes: base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).unwrap()),
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
+        });
+
+        let mut config = config();
+        config.settle_mode = SuiSettleMode::SponsoredSettle;
+        config.settle_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 60_000,
+            max_wait_ms: 60_000,
+        };
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
+                .expect("anchor"),
+        );
+        let (first_a, first_b, first_signer_a, first_signer_b) = paired_settle_requests("0x1");
+        let (second_a, second_b, second_signer_a, second_signer_b) = paired_settle_requests("0x2");
+        insert_open_record(&shared, intent(1), "0x1", &first_signer_a, &first_signer_b);
+        insert_open_record(
+            &shared,
+            intent(2),
+            "0x2",
+            &second_signer_a,
+            &second_signer_b,
+        );
+        let first_anchor = shared.for_open_intent(intent(1));
+        let second_anchor = shared.for_open_intent(intent(2));
+
+        let (first_a, first_b, second_a, second_b) = tokio::join!(
+            first_anchor.settle(first_a),
+            first_anchor.settle(first_b),
+            second_anchor.settle(second_a),
+            second_anchor.settle(second_b),
+        );
+
+        assert_eq!(first_a.expect("first A").digest, Digest::ZERO.to_string());
+        assert_eq!(first_b.expect("first B").digest, Digest::ZERO.to_string());
+        assert_eq!(second_a.expect("second A").digest, Digest::ZERO.to_string());
+        assert_eq!(second_b.expect("second B").digest, Digest::ZERO.to_string());
+        assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 1);
+        assert_eq!(*chain.execute_call_count.lock().unwrap(), 1);
+        assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(2));
+        assert_eq!(
+            sponsored_kind_move_call_count(&backend, "entry_close_cooperative_with_root"),
+            2
+        );
     }
 }
