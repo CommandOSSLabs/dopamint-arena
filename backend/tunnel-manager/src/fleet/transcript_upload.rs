@@ -1,16 +1,21 @@
-//! Streams the co-signed transcript to S3 in chunks *during play* — the bot owns the whole
-//! transcript with bounded RAM, and nothing is uploaded at settle.
+//! Streams the co-signed transcript to S3 in chunks *during play* with a **hard, DDoS-proof RAM
+//! ceiling**: many concurrent sessions can't exhaust server memory even if S3 stalls.
 //!
-//! [`S3StreamingRecorder`] wraps [`StreamingRootRecorder`] (the O(log N) root) and adds a small
-//! byte buffer. `record()` appends the 250 B settle-entry and, once the buffer crosses
-//! [`CHUNK_TARGET`], **spawns** a `put_chunk` — `record` is synchronous and runs on the per-move
-//! hot path, so it must never block on the S3 `PutObject`. `finish()` flushes the tail and seals a
-//! [`TranscriptManifest`] indexing the chunks for reassembly. Chunk bytes go through the same
-//! [`encode_settle_entry`] as the settle body, so reassembled chunks reproduce exactly what the
-//! on-chain root commits to.
+//! - [`S3StreamingRecorder`] wraps [`StreamingRootRecorder`] (the O(log N) root) + a small byte
+//!   buffer. `record()` appends the 250 B settle-entry and, once the buffer crosses
+//!   [`CHUNK_TARGET`], hands the chunk to the shared [`TranscriptUploader`]. `finish()` flushes the
+//!   tail and seals a [`TranscriptManifest`].
+//! - [`TranscriptUploader`] is one per instance: a **bounded queue** (the byte-budget) drained by a
+//!   worker pool. When the queue is full (S3 behind), producers **block** — never drop, never OOM.
+//!   RAM is capped at `UPLOAD_BUDGET_CHUNKS + UPLOAD_WORKERS` chunks regardless of session count.
+//!
+//! Chunk bytes go through the same [`encode_settle_entry`] as the settle body, so reassembled
+//! chunks reproduce exactly what the on-chain root commits to.
 
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tunnel_core::wire::{encode_settle_entry, SettleBodyEntry};
 use tunnel_harness::{
     StreamingRootRecorder, Transcript, TranscriptEntry, TranscriptError, TranscriptRecorder,
@@ -18,12 +23,68 @@ use tunnel_harness::{
 };
 use transcript_store::{TranscriptChunkWriter, TranscriptManifest};
 
-/// Flush a chunk once the buffer reaches ~1 MB (~4000 entries). Bounds per-match RAM and caps
+/// Flush a chunk once the buffer reaches ~1 MB (~4000 entries). Bounds per-session RAM and caps
 /// `PutObject`s at ~⌈25 MB / 1 MB⌉ per match — one S3 call per ~4000 moves, never per move.
 const CHUNK_TARGET: usize = 1024 * 1024;
 
 /// Settle-body wire version recorded in the manifest (`tunnel_core::wire::SETTLE_BODY_VERSION`).
 const SETTLE_VERSION: u8 = 1;
+
+/// Max chunks queued for upload across ALL sessions on this instance — the byte-budget. Queued RAM
+/// ≈ this × [`CHUNK_TARGET`] (~512 MB). When full, producers block (backpressure).
+const UPLOAD_BUDGET_CHUNKS: usize = 512;
+/// Max concurrent S3 `put_chunk`s draining the queue.
+const UPLOAD_WORKERS: usize = 32;
+
+/// One chunk handed to the [`TranscriptUploader`].
+pub struct ChunkUpload {
+    pub tunnel_id: String,
+    pub seq: u32,
+    pub bytes: Vec<u8>,
+}
+
+/// Per-instance bounded uploader — the byte-budget that keeps streaming RAM-safe under S3 slowdown.
+/// Every session's recorder pushes chunks into one bounded channel; a worker pool drains it to S3
+/// with bounded concurrency. A full channel means S3 can't keep up, so producers **block**
+/// (backpressure) rather than pile chunks in RAM or drop them.
+pub struct TranscriptUploader {
+    tx: mpsc::Sender<ChunkUpload>,
+}
+
+impl TranscriptUploader {
+    /// Spawn the drain task over `writer`. Each recorder clones [`sender`](Self::sender) to stream.
+    pub fn spawn(writer: Arc<dyn TranscriptChunkWriter>) -> Self {
+        let (tx, mut rx) = mpsc::channel::<ChunkUpload>(UPLOAD_BUDGET_CHUNKS);
+        tokio::spawn(async move {
+            let concurrency = Arc::new(tokio::sync::Semaphore::new(UPLOAD_WORKERS));
+            while let Some(upload) = rx.recv().await {
+                // Acquire a worker slot first, so `recv` stops pulling when all workers are busy —
+                // the channel then fills and producers feel backpressure.
+                let permit = concurrency
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("upload semaphore open");
+                let writer = writer.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = writer
+                        .put_chunk(&upload.tunnel_id, upload.seq, &upload.bytes)
+                        .await
+                    {
+                        tracing::warn!(tunnel = %upload.tunnel_id, seq = upload.seq, error = %e, "transcript chunk upload failed");
+                    }
+                    drop(permit);
+                });
+            }
+        });
+        Self { tx }
+    }
+
+    /// A sender each recorder clones to stream its chunks through the shared budget.
+    pub fn sender(&self) -> mpsc::Sender<ChunkUpload> {
+        self.tx.clone()
+    }
+}
 
 #[derive(Default)]
 struct ChunkBuf {
@@ -35,26 +96,31 @@ struct ChunkBuf {
 }
 
 /// Root recorder + streaming S3 uploader. Cheaply cloneable (Arc-shared state): one clone drives
-/// the game, another is retained to `finish()` the tail after the driver returns.
+/// the game, another is retained to `finish()` the tail + seal after the driver returns.
 #[derive(Clone)]
 pub struct S3StreamingRecorder {
     inner: StreamingRootRecorder,
     tunnel_id: String,
+    /// Mid-play chunk sink (bounded, backpressured). `None` = no streaming (dev/test).
+    tx: Option<mpsc::Sender<ChunkUpload>>,
+    /// Direct writer for the finish path (tail chunk + manifest seal). `None` = no S3.
     writer: Option<Arc<dyn TranscriptChunkWriter>>,
     buf: Arc<Mutex<ChunkBuf>>,
 }
 
 impl S3StreamingRecorder {
-    /// `writer = None` degrades to a plain root recorder (no S3 archive), so callers wire it
-    /// unconditionally and S3 stays optional in dev/test.
+    /// `tx` streams chunks during play (backpressured via the shared budget); `writer` uploads the
+    /// tail + seals the manifest at `finish()`. Both `None` degrades to a plain root recorder.
     pub fn new(
         tunnel_id: impl Into<String>,
+        tx: Option<mpsc::Sender<ChunkUpload>>,
         writer: Option<Arc<dyn TranscriptChunkWriter>>,
     ) -> Self {
         let tunnel_id = tunnel_id.into();
         Self {
             inner: StreamingRootRecorder::new(tunnel_id.clone()),
             tunnel_id,
+            tx,
             writer,
             buf: Arc::new(Mutex::new(ChunkBuf::default())),
         }
@@ -66,7 +132,8 @@ impl S3StreamingRecorder {
         let Some(writer) = &self.writer else {
             return;
         };
-        // 1. Flush the tail chunk.
+        // 1. Flush the tail chunk directly (awaited → durable before the manifest seal). No
+        //    production is ongoing at finish, so a direct put needs no backpressure.
         let tail = {
             let mut b = self.buf.lock().expect("chunk buf");
             if b.bytes.is_empty() {
@@ -119,9 +186,10 @@ impl<M> TranscriptRecorder<M> for S3StreamingRecorder {
         let settle_entry = TranscriptSettleEntry::from_transcript_entry(&self.tunnel_id, &entry);
         self.inner.record(entry)?; // dup/monotonic nonce check + O(log N) root fold
 
-        let Some(writer) = &self.writer else {
+        // Root only (no sink) → nothing to stream.
+        if self.tx.is_none() && self.writer.is_none() {
             return Ok(());
-        };
+        }
         let ready_chunk = {
             let mut b = self.buf.lock().expect("chunk buf");
             encode_settle_entry(
@@ -132,7 +200,9 @@ impl<M> TranscriptRecorder<M> for S3StreamingRecorder {
                 },
                 &mut b.bytes,
             );
-            if b.bytes.len() >= CHUNK_TARGET {
+            // Flush mid-play only when a bounded uploader exists to receive it; without one
+            // (dev/test) the buffer holds until finish().
+            if self.tx.is_some() && b.bytes.len() >= CHUNK_TARGET {
                 let seq = b.seq;
                 b.seq += 1;
                 b.total_bytes += b.bytes.len() as u64;
@@ -141,16 +211,23 @@ impl<M> TranscriptRecorder<M> for S3StreamingRecorder {
                 None
             }
         };
-        // Off the hot path: a dropped spawn only loses that chunk (best-effort archive; funds stay
-        // safe via the co-signed checkpoint). `record` runs inside the bot's tokio runtime.
         if let Some((seq, bytes)) = ready_chunk {
-            let writer = writer.clone();
-            let tunnel_id = self.tunnel_id.clone();
-            tokio::spawn(async move {
-                if let Err(e) = writer.put_chunk(&tunnel_id, seq, &bytes).await {
-                    tracing::warn!(tunnel = %tunnel_id, seq, error = %e, "transcript chunk upload failed");
+            let tx = self.tx.as_ref().expect("tx present when a chunk is ready");
+            let upload = ChunkUpload {
+                tunnel_id: self.tunnel_id.clone(),
+                seq,
+                bytes,
+            };
+            // Fast path; on a full budget PAUSE the producer (never drop, never OOM). `record` is
+            // sync, so the blocking send runs under `block_in_place` (needs the multi-thread runtime).
+            match tx.try_send(upload) {
+                Ok(()) => {}
+                Err(TrySendError::Full(upload)) => {
+                    let _ = tokio::task::block_in_place(|| tx.blocking_send(upload));
                 }
-            });
+                // Uploader gone (shutdown) → best-effort; the co-signed checkpoint still protects funds.
+                Err(TrySendError::Closed(_)) => {}
+            }
         }
         Ok(())
     }
@@ -204,36 +281,66 @@ mod tests {
         out
     }
 
-    // The whole point: chunks streamed during play, reassembled, are byte-identical to the entries
-    // the on-chain root commits to — so a verifier's re-derived root matches the anchor.
+    // finish() uploads the tail + seals; the reassembled chunks are byte-identical to the entries
+    // the on-chain root commits to.
     #[tokio::test]
     async fn streamed_chunks_reassemble_to_the_settle_entries() {
         use transcript_store::{testing::FakeChunkStore, TranscriptChunkReader};
 
-        let tunnel_id = TID;
         let entries = vec![entry(1), entry(2), entry(3)];
         let fake = Arc::new(FakeChunkStore::default());
-        let recorder =
-            S3StreamingRecorder::new(tunnel_id, Some(fake.clone() as Arc<dyn TranscriptChunkWriter>));
+        // tx=None: 3 small entries never trigger a mid-play flush; finish() uploads via `writer`.
+        let recorder = S3StreamingRecorder::new(
+            TID,
+            None,
+            Some(fake.clone() as Arc<dyn TranscriptChunkWriter>),
+        );
         for e in &entries {
             recorder.record(e.clone()).expect("record");
         }
-        recorder.finish().await; // sub-chunk match → tail flush is the single chunk
+        recorder.finish().await;
 
         let reassembled = fake
-            .read_transcript(tunnel_id)
+            .read_transcript(TID)
             .await
             .unwrap()
             .expect("chunks present");
-        assert_eq!(reassembled, expected_entry_bytes(tunnel_id, &entries));
+        assert_eq!(reassembled, expected_entry_bytes(TID, &entries));
     }
 
-    // No writer → pure root recorder: nothing streamed, root still served.
+    // No sink → pure root recorder: nothing streamed, root still served.
     #[tokio::test]
-    async fn no_writer_streams_nothing_but_keeps_the_root() {
-        let recorder = S3StreamingRecorder::new(TID, None);
+    async fn no_sink_keeps_only_the_root() {
+        let recorder = S3StreamingRecorder::new(TID, None, None);
         recorder.record(entry(1)).expect("record");
         recorder.finish().await; // no-op
         assert!(TranscriptRecorder::<u8>::transcript_root(&recorder, TID).is_ok());
+    }
+
+    // The bounded uploader drains every queued chunk to the store.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn uploader_drains_all_queued_chunks() {
+        use transcript_store::testing::FakeChunkStore;
+
+        let fake = Arc::new(FakeChunkStore::default());
+        let uploader = TranscriptUploader::spawn(fake.clone() as Arc<dyn TranscriptChunkWriter>);
+        let tx = uploader.sender();
+        for seq in 0..5u32 {
+            tx.send(ChunkUpload {
+                tunnel_id: TID.to_string(),
+                seq,
+                bytes: vec![seq as u8; 16],
+            })
+            .await
+            .expect("queue chunk");
+        }
+        // Bounded wait for the pool to drain (in-memory puts complete near-instantly).
+        for _ in 0..100 {
+            if fake.chunks.lock().unwrap().len() == 5 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(fake.chunks.lock().unwrap().len(), 5, "all chunks drained");
     }
 }

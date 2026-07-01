@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use transcript_store::TranscriptChunkWriter;
 use tunnel_harness::Signer;
 
-use crate::fleet::transcript_upload::S3StreamingRecorder;
+use crate::fleet::transcript_upload::{ChunkUpload, S3StreamingRecorder};
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
@@ -230,6 +230,7 @@ async fn play_arena_match(
         match_key,
         &opened.opponent_wallet,
         opened.tunnel_id.clone(),
+        state.chunk_upload_tx.clone(),
         state.chunk_writer.clone(),
     )
     .await
@@ -261,14 +262,16 @@ async fn play_game(
     match_key: DurableSigner,
     opponent_wallet: &str,
     tunnel_id: String,
+    chunk_upload_tx: Option<mpsc::Sender<ChunkUpload>>,
     chunk_writer: Option<Arc<dyn TranscriptChunkWriter>>,
 ) -> anyhow::Result<u64> {
     // Every game drives the identical party-B seam (Role::B + a fresh transcript recorder); only the
     // protocol's `play_*` entry differs, so each game is one arm. The recorder folds the v2 root
-    // incrementally (bounded RAM) AND streams the co-signed transcript to S3 in chunks during play;
-    // `finish()` flushes the tail at settle/teardown. A clone drives the game while this handle is
-    // retained to finish. `chunk_writer == None` (dev/test) → root only, no S3.
-    let recorder = S3StreamingRecorder::new(tunnel_id.clone(), chunk_writer);
+    // incrementally (bounded RAM) AND streams the co-signed transcript to S3 in chunks during play
+    // through the shared bounded uploader (`chunk_upload_tx`); `finish()` flushes the tail + seals
+    // the manifest via `chunk_writer`. A clone drives the game while this handle is retained to
+    // finish. Both `None` (dev/test) → root only, no S3.
+    let recorder = S3StreamingRecorder::new(tunnel_id.clone(), chunk_upload_tx, chunk_writer);
     macro_rules! play {
         ($play_fn:ident) => {
             $play_fn(

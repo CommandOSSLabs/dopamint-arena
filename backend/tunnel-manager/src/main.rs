@@ -128,6 +128,11 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s as std::sync::Arc<dyn transcript_store::TranscriptArchiver>);
     let chunk_writer: Option<std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>> =
         s3_store.map(|s| s as std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>);
+    // Per-instance bounded uploader over the same writer — the byte-budget that keeps streaming
+    // RAM-safe under S3 slowdown (producers block when full). `None` when S3 is unconfigured.
+    let chunk_upload_tx = chunk_writer
+        .clone()
+        .map(|w| crate::fleet::transcript_upload::TranscriptUploader::spawn(w).sender());
 
     let instance_id = config
         .instance_id
@@ -222,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
         walrus,
         archiver,
         chunk_writer,
+        chunk_upload_tx,
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),

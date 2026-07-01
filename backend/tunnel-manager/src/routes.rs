@@ -52,6 +52,7 @@ pub(crate) mod test_support {
             walrus,
             archiver: None,
             chunk_writer: None,
+            chunk_upload_tx: None,
             ollama,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
