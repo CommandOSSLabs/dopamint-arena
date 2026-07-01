@@ -1023,7 +1023,8 @@ impl Protocol for SeededBlackjack {
         mv: &Self::Move,
         by: Seat,
     ) -> Result<Self::State, tunnel_harness::ProtocolError> {
-        Blackjack.apply_move(state, mv, by)
+        tunnel_blackjack::apply_move_with_round_cap(state, *mv, by, self.round_cap)
+            .map_err(tunnel_harness::ProtocolError)
     }
 
     fn encode_state(&self, s: &Self::State) -> Vec<u8> {
@@ -1086,6 +1087,30 @@ impl MoveStrategy<SeededBlackjack> for BlackjackStrategy {
 mod tests {
     use super::*;
     use tunnel_harness::{BcsFrameCodec, DriverRunControl, JsonFrameCodec, PostcardFrameCodec};
+
+    #[test]
+    fn seeded_blackjack_apply_move_respects_bench_round_cap() {
+        let protocol = SeededBlackjack {
+            card_seed: None,
+            round_cap: tunnel_blackjack::ROUND_CAP + 1,
+        };
+        let mut state = tunnel_blackjack::initial_state(2_000, 2_000, None);
+        state.round = tunnel_blackjack::ROUND_CAP;
+        let player = tunnel_blackjack::player_party(state.round + 1);
+
+        let next = protocol.apply_move(
+            &state,
+            &BjMove::Bet {
+                amount: tunnel_blackjack::MIN_BET,
+            },
+            player,
+        );
+
+        assert!(
+            next.is_ok(),
+            "bench round cap wrapper should allow legal continuation beyond default ROUND_CAP"
+        );
+    }
 
     async fn golden_match<C: FrameCodec<BjMove> + Default>() -> TunnelOutcome {
         let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);

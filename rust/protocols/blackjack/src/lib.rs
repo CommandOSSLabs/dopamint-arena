@@ -321,6 +321,15 @@ fn settle(s: &BjState, winner: Option<Party>) -> BjState {
 }
 
 pub fn apply_move(s: &BjState, mv: BjMove, by: Party) -> Result<BjState, String> {
+    apply_move_with_round_cap(s, mv, by, ROUND_CAP)
+}
+
+pub fn apply_move_with_round_cap(
+    s: &BjState,
+    mv: BjMove,
+    by: Party,
+    round_cap: u64,
+) -> Result<BjState, String> {
     match s.phase {
         Phase::RoundOver => {
             let BjMove::Bet { amount } = mv else {
@@ -330,7 +339,7 @@ pub fn apply_move(s: &BjState, mv: BjMove, by: Party) -> Result<BjState, String>
             if by != next_player {
                 return Err(format!("only the player ({next_player:?}) sets the bet"));
             }
-            if is_terminal(s) {
+            if is_terminal_with_round_cap(s, round_cap) {
                 return Err("game over: a side cannot fund another bet".into());
             }
             let cap = max_bet(s);

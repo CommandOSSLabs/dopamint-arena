@@ -566,12 +566,21 @@ pub fn apply_move(
     mv: &BlackjackV2Move,
     by: Party,
 ) -> Result<BlackjackV2State, String> {
+    apply_move_with_round_cap(s, mv, by, ROUND_CAP)
+}
+
+pub fn apply_move_with_round_cap(
+    s: &BlackjackV2State,
+    mv: &BlackjackV2Move,
+    by: Party,
+    round_cap: u64,
+) -> Result<BlackjackV2State, String> {
     match s.phase {
         Phase::RoundOver => {
             let BlackjackV2Move::Bet { amount } = mv else {
                 return Err("expected 'bet' in round_over".into());
             };
-            if is_terminal(s) {
+            if is_terminal_with_round_cap(s, round_cap) {
                 return Err("game over: no more rounds can be played".into());
             }
             let next_player = player_party(s.round + 1);
@@ -689,6 +698,7 @@ fn random_secret(rng: &mut dyn FnMut() -> f64) -> BlackjackV2Secret {
 pub struct BlackjackV2Strategy {
     rng_state: u32,
     round_cap: u64,
+    wager: u64,
 }
 
 impl BlackjackV2Strategy {
@@ -697,9 +707,14 @@ impl BlackjackV2Strategy {
     }
 
     pub fn with_round_cap(seed: u64, round_cap: u64) -> Self {
+        Self::with_round_cap_and_wager(seed, round_cap, WAGER)
+    }
+
+    pub fn with_round_cap_and_wager(seed: u64, round_cap: u64, wager: u64) -> Self {
         Self {
             rng_state: seed as u32,
             round_cap,
+            wager,
         }
     }
 
@@ -723,7 +738,7 @@ impl BlackjackV2Strategy {
             Phase::RoundOver => (seat == player_party(state.round + 1)).then(|| {
                 // Bet the default, clamped to the legal window. Not-terminal guarantees
                 // `max_bet >= MIN_BET`, so the clamp always yields a legal amount.
-                let amount = WAGER.min(max_bet(state)).max(MIN_BET);
+                let amount = self.wager.min(max_bet(state)).max(MIN_BET);
                 BlackjackV2Move::Bet { amount }
             }),
             Phase::DrawCommit => {
@@ -805,8 +820,12 @@ pub struct BlackjackV2WithRoundCapStrategy {
 
 impl BlackjackV2WithRoundCapStrategy {
     pub fn new(seed: u64, round_cap: u64) -> Self {
+        Self::with_wager(seed, round_cap, WAGER)
+    }
+
+    pub fn with_wager(seed: u64, round_cap: u64, wager: u64) -> Self {
         Self {
-            inner: BlackjackV2Strategy::with_round_cap(seed, round_cap),
+            inner: BlackjackV2Strategy::with_round_cap_and_wager(seed, round_cap, wager),
             round_cap,
         }
     }
@@ -969,7 +988,7 @@ impl Protocol for BlackjackV2WithRoundCap {
         mv: &Self::Move,
         by: Seat,
     ) -> Result<Self::State, ProtocolError> {
-        apply_move(s, mv, by).map_err(ProtocolError)
+        apply_move_with_round_cap(s, mv, by, self.round_cap).map_err(ProtocolError)
     }
 
     fn encode_state(&self, s: &Self::State) -> Vec<u8> {
@@ -1220,6 +1239,35 @@ mod strategy_tests {
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn strategy_can_use_minimum_wager_for_long_running_bench() {
+        let state = initial_state(200, 200);
+        let player = player_party(state.round + 1);
+        let mut strategy = BlackjackV2WithRoundCapStrategy::with_wager(7, ROUND_CAP, MIN_BET);
+
+        let planned = strategy
+            .plan_move(&state, player, &strategy_ctx(player))
+            .await
+            .expect("player should place the opening bet");
+
+        assert_eq!(planned, BlackjackV2Move::Bet { amount: MIN_BET });
+    }
+
+    #[test]
+    fn round_cap_wrapper_can_continue_past_default_round_cap() {
+        let protocol = BlackjackV2WithRoundCap::new(ROUND_CAP + 1);
+        let mut state = initial_state(2_000, 2_000);
+        state.round = ROUND_CAP;
+        let player = player_party(state.round + 1);
+
+        let next = protocol.apply_move(&state, &BlackjackV2Move::Bet { amount: MIN_BET }, player);
+
+        assert!(
+            next.is_ok(),
+            "bench round cap wrapper should allow legal continuation beyond default ROUND_CAP"
+        );
     }
 
     #[tokio::test]
