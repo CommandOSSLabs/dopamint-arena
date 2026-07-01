@@ -104,7 +104,10 @@ pub async fn join_and_spawn(
 
     let Some(secret) = secret_from_hex(&rec.eph_secret_hex) else {
         state.fleet.release_arena();
-        tracing::error!(match_id, "arena reservation carried an unreadable eph secret");
+        tracing::error!(
+            match_id,
+            "arena reservation carried an unreadable eph secret"
+        );
         return Err("unknown_arena_match");
     };
     let match_key = DurableSigner::from_secret(&secret);
@@ -137,7 +140,10 @@ pub async fn join_and_spawn(
             .to_text(),
         )
         .await;
-    state.bus.populate(&user_conn, match_id, &match_record).await;
+    state
+        .bus
+        .populate(&user_conn, match_id, &match_record)
+        .await;
 
     // Spawn the one-shot play task. It drives to settlement, then frees its admission slot. The bot's
     // opponent is the joiner (party A) — `rec.seat_a`, which `claim_arena` verified equals `wallet`.
@@ -179,7 +185,12 @@ async fn drive_arena_bot(
     // The bot signs its settle half with `timestamp = created_at` (matching the FE half, which reads
     // the same on-chain field). Fail the match if unreadable — a half the FE would reject.
     let created_at_ms = state.arena_opener.read_created_at_ms(tunnel_id).await?;
-    let anchor = RelayBridgedAnchor::new(tunnel_id.to_owned(), conn, match_id.to_owned(), created_at_ms);
+    let anchor = RelayBridgedAnchor::new(
+        tunnel_id.to_owned(),
+        conn,
+        match_id.to_owned(),
+        created_at_ms,
+    );
     let moves = play_game(game, channel, anchor, match_key, opponent_wallet).await?;
     tracing::info!(
         match_id = %match_id,

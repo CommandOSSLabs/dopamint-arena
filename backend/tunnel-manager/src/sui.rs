@@ -79,7 +79,7 @@ const SPONSOR_AGENT_ALLOWANCE_FNS: &[&str] = &[
     "set_rate",
 ];
 
-/// `example_streaming_payment` ops sponsorable for a 0-SUI sender — the stream is funded from the
+/// `streaming_payment` ops sponsorable for a 0-SUI sender — the stream is funded from the
 /// user's OWN input coins, so the settler only pays gas.
 const SPONSOR_STREAMING_PAYMENT_FNS: &[&str] = &[
     "create_stream",
@@ -259,11 +259,7 @@ impl SuiSettler {
         }
         if let Some(s) = streaming_payment_package_id {
             let pkg = Address::from_str(s).context("bad STREAMING_PAYMENT_PACKAGE_ID")?;
-            example_packages.push((
-                pkg,
-                "example_streaming_payment",
-                SPONSOR_STREAMING_PAYMENT_FNS,
-            ));
+            example_packages.push((pkg, "streaming_payment", SPONSOR_STREAMING_PAYMENT_FNS));
         }
         // Seed the per-sponsorship nonce from the full wall clock (secs mixed with nanos), not
         // just subsec_nanos, so two restarts in the same epoch are very unlikely to pick colliding
@@ -1572,7 +1568,7 @@ mod tests {
         )];
         let stream_mods: Vec<ExampleModule> = vec![(
             stream_pkg,
-            "example_streaming_payment",
+            "streaming_payment",
             SPONSOR_STREAMING_PAYMENT_FNS,
         )];
         let call = |package: Address, module: &str, function: &str, type_args: Vec<TypeTag>| {
@@ -1623,7 +1619,7 @@ mod tests {
         assert!(check(
             call(
                 stream_pkg,
-                "example_streaming_payment",
+                "streaming_payment",
                 "create_stream",
                 vec![coin.clone()]
             ),
@@ -1633,7 +1629,7 @@ mod tests {
         assert!(check(
             call(
                 stream_pkg,
-                "example_streaming_payment",
+                "streaming_payment",
                 "create_stream",
                 vec![coin.clone()]
             ),
