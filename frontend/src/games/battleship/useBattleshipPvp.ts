@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -71,6 +71,7 @@ import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
 
 /** Backend arena/`profile_for` id (single token, same both ways). Single source of truth for the
@@ -990,6 +991,18 @@ function useWorkerBattleship(windowId: string): BattleshipPvp {
       });
     }
   }, [snap.status, snap.winner, snap.role, report]);
+  // Arena one-sig auto-enter (ADR-0028): consume this game's fleet allocation from the store and join
+  // it in the worker. Arena has no placement UI, so — like the legacy `enterArenaMatch` — the seat
+  // auto-places a random fleet (stable across renders so the one-shot entry uses a fixed board) and
+  // plays on autopilot (`auto` defaults on) vs the fleet bot. No "Find match" click.
+  const arenaFleet = useMemo(() => placeFleetRandom(Math.random), []);
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "battleship",
+    arenaGameId: BATTLESHIP_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+    setup: arenaFleet,
+  });
   return {
     status: snap.status,
     role: snap.role,
