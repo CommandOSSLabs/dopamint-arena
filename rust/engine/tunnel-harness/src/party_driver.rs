@@ -319,8 +319,8 @@ where
                         "anchor requires transcript recorder".into(),
                     ));
                 }
+                let root = recorder.transcript_root(seat.tunnel_id())?;
                 let transcript = recorder.snapshot();
-                let root = transcript.canonical_root_for_tunnel(seat.tunnel_id())?;
                 let msg = serialize_settlement_with_root(&settlement, &root);
                 let entries = transcript
                     .entries()

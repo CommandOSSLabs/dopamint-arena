@@ -128,6 +128,16 @@ impl<M> Transcript<TranscriptEntry<M>> {
     }
 }
 
+/// blake2b256 over the node domain and the two child hashes. Shared by the whole-tree
+/// `transcript_root` and the streaming `StreamingMerkleRoot` so the two can never drift.
+fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(TRANSCRIPT_NODE_DOMAIN.len() + 64);
+    bytes.extend_from_slice(TRANSCRIPT_NODE_DOMAIN);
+    bytes.extend_from_slice(left);
+    bytes.extend_from_slice(right);
+    blake2b256(&bytes)
+}
+
 pub fn transcript_root(leaves: &[[u8; 32]]) -> [u8; 32] {
     if leaves.is_empty() {
         return ZERO_ROOT;
@@ -139,18 +149,75 @@ pub fn transcript_root(leaves: &[[u8; 32]]) -> [u8; 32] {
         }
         level = level
             .chunks_exact(2)
-            .map(|pair| {
-                let mut bytes = Vec::with_capacity(
-                    TRANSCRIPT_NODE_DOMAIN.len() + pair[0].len() + pair[1].len(),
-                );
-                bytes.extend_from_slice(TRANSCRIPT_NODE_DOMAIN);
-                bytes.extend_from_slice(&pair[0]);
-                bytes.extend_from_slice(&pair[1]);
-                blake2b256(&bytes)
-            })
+            .map(|pair| merkle_node(&pair[0], &pair[1]))
             .collect();
     }
     level[0]
+}
+
+/// Streaming O(log N) computation of `transcript_root`. Folds leaves via a binary-counter
+/// carry (`carry[k]` = root of the perfect subtree over 2^k leaves); `root()` finalizes
+/// with the SAME odd-level zero-leaf padding as `transcript_root`, so its output is
+/// byte-identical. Holds at most ⌈log2 N⌉ hashes, never the leaves.
+///
+/// NOT a Merkle Mountain Range: MMR bag-the-peaks and a naive one-op-per-level fold both
+/// produce the wrong root under this padding (see the N=5 golden vector).
+#[derive(Clone, Debug, Default)]
+pub struct StreamingMerkleRoot {
+    carry: Vec<Option<[u8; 32]>>,
+    count: u64,
+}
+
+impl StreamingMerkleRoot {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, leaf: [u8; 32]) {
+        self.count += 1;
+        let mut node = leaf;
+        let mut level = 0;
+        loop {
+            if level == self.carry.len() {
+                self.carry.push(Some(node));
+                return;
+            }
+            match self.carry[level].take() {
+                None => {
+                    self.carry[level] = Some(node);
+                    return;
+                }
+                Some(existing) => {
+                    node = merkle_node(&existing, &node);
+                    level += 1;
+                }
+            }
+        }
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        if self.count == 0 {
+            return ZERO_ROOT;
+        }
+        // Fold the occupied carries low→high. Before combining a carry at `level`, lift
+        // the accumulator up to that level with zero-leaf pads (the odd-level padding),
+        // then combine (earlier subtree left, accumulator right).
+        let mut acc: Option<([u8; 32], usize)> = None;
+        for (level, slot) in self.carry.iter().enumerate() {
+            let Some(node) = slot else { continue };
+            match acc {
+                None => acc = Some((*node, level)),
+                Some((mut current, mut cur_level)) => {
+                    while cur_level < level {
+                        current = merkle_node(&current, &ZERO_ROOT);
+                        cur_level += 1;
+                    }
+                    acc = Some((merkle_node(node, &current), level + 1));
+                }
+            }
+        }
+        acc.expect("count > 0 implies at least one carry").0
+    }
 }
 
 pub fn transcript_leaf<M>(tunnel_id: &str, entry: &TranscriptEntry<M>) -> [u8; 32] {
@@ -235,6 +302,13 @@ pub trait TranscriptRecorder<M> {
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError>;
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>>;
 
+    /// The settlement Merkle root over the recording. Default recomputes it from the
+    /// snapshot; streaming recorders override to return an incrementally-maintained root
+    /// so they need not retain the entries.
+    fn transcript_root(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        self.snapshot().canonical_root_for_tunnel(tunnel_id)
+    }
+
     /// Preprocess (filter + reshape) then serialize in one pure pass. `preprocess`
     /// returns `None` to drop an entry. The raw recording is never mutated.
     fn export<C, T, F>(&self, codec: &C, preprocess: F) -> Result<C::Output, C::Error>
@@ -318,10 +392,73 @@ impl<M> TranscriptRecorder<M> for NullTranscriptRecorder {
     }
 }
 
+/// Bounded-RAM recorder for the arena bot: folds each entry's leaf into a streaming
+/// Merkle accumulator and drops the entry. Holds O(log N) hash state, never the entries —
+/// the bot only needs the root (`arena_anchor` ignores `transcript_entries`), so
+/// `snapshot()` is empty and the root is served by `transcript_root()`. Needs `tunnel_id`
+/// at construction because the leaf commits to the tunnel-scoped `state_update`.
+#[derive(Clone)]
+pub struct StreamingRootRecorder {
+    tunnel_id: String,
+    state: Arc<Mutex<StreamingRecorderState>>,
+}
+
+struct StreamingRecorderState {
+    acc: StreamingMerkleRoot,
+    last_nonce: Option<u64>,
+}
+
+impl StreamingRootRecorder {
+    pub fn new(tunnel_id: impl Into<String>) -> Self {
+        Self {
+            tunnel_id: tunnel_id.into(),
+            state: Arc::new(Mutex::new(StreamingRecorderState {
+                acc: StreamingMerkleRoot::new(),
+                last_nonce: None,
+            })),
+        }
+    }
+}
+
+impl<M> TranscriptRecorder<M> for StreamingRootRecorder {
+    fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
+        let mut st = self.state.lock().expect("recorder mutex");
+        if let Some(previous) = st.last_nonce {
+            if entry.nonce == previous {
+                return Err(TranscriptError::DuplicateNonce { nonce: entry.nonce });
+            }
+            if entry.nonce < previous {
+                return Err(TranscriptError::NonMonotonicNonce {
+                    previous,
+                    nonce: entry.nonce,
+                });
+            }
+        }
+        let leaf = transcript_leaf(&self.tunnel_id, &entry);
+        st.acc.push(leaf);
+        st.last_nonce = Some(entry.nonce);
+        Ok(())
+    }
+
+    /// Retains no entries; the root is served by `transcript_root()`.
+    fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
+        Transcript::from_entries(Vec::new())
+    }
+
+    fn transcript_root(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        debug_assert_eq!(
+            tunnel_id, self.tunnel_id,
+            "settle tunnel_id must match the recorder's construction id"
+        );
+        Ok(self.state.lock().expect("recorder mutex").acc.root())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Seat;
+    use tunnel_core::crypto::blake2b256;
     use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
 
     fn entry(nonce: u64) -> TranscriptEntry<u8> {
@@ -532,5 +669,86 @@ mod tests {
             })
             .unwrap();
         assert_eq!(json, "{\"entries\":[]}");
+    }
+
+    #[test]
+    fn streaming_root_matches_whole_tree_for_all_sizes() {
+        for n in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 31, 100, 1000] {
+            let leaves: Vec<[u8; 32]> =
+                (0..n).map(|i| blake2b256(&(i as u64).to_le_bytes())).collect();
+            let mut acc = StreamingMerkleRoot::new();
+            for l in &leaves {
+                acc.push(*l);
+            }
+            assert_eq!(
+                acc.root(),
+                transcript_root(&leaves),
+                "streaming root diverged at n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_root_holds_log_n_state_at_100k() {
+        let mut acc = StreamingMerkleRoot::new();
+        let mut leaves = Vec::with_capacity(100_000);
+        for i in 0..100_000u64 {
+            let leaf = blake2b256(&i.to_le_bytes());
+            leaves.push(leaf);
+            acc.push(leaf);
+        }
+        // ceil(log2(100000)) = 17 → the carry vec never exceeds 17 levels.
+        assert!(acc.carry.len() <= 17, "carry levels {} exceed 17", acc.carry.len());
+        assert_eq!(acc.root(), transcript_root(&leaves));
+    }
+
+    #[test]
+    fn streaming_recorder_root_equals_canonical_whole_buffer_root() {
+        let tunnel_id = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let entries = vec![
+            parity_entry(1, 90, 110, 0x11, 0x22),
+            parity_entry(2, 95, 105, 0x33, 0x44),
+            parity_entry(3, 80, 120, 0x55, 0x66),
+        ];
+        let rec = StreamingRootRecorder::new(tunnel_id);
+        for e in &entries {
+            TranscriptRecorder::<()>::record(&rec, e.clone()).unwrap();
+        }
+        let whole = Transcript::from_entries(entries)
+            .canonical_root_for_tunnel(tunnel_id)
+            .unwrap();
+        let streamed = TranscriptRecorder::<()>::transcript_root(&rec, tunnel_id).unwrap();
+        assert_eq!(streamed, whole);
+        // Same fixture root as the whole-buffer path (TS parity vector).
+        assert_eq!(
+            hex::encode(streamed),
+            "1d96600288a81c30db9384dca7be6d9904bfeb062efd28b9d74bd1fb2d61df30"
+        );
+    }
+
+    #[test]
+    fn streaming_recorder_rejects_duplicate_and_non_monotonic_nonce() {
+        let rec = StreamingRootRecorder::new("0xabc");
+        TranscriptRecorder::<()>::record(&rec, parity_entry(2, 95, 105, 0x33, 0x44)).unwrap();
+        assert_eq!(
+            TranscriptRecorder::<()>::record(&rec, parity_entry(2, 1, 1, 0, 0)),
+            Err(TranscriptError::DuplicateNonce { nonce: 2 })
+        );
+        assert_eq!(
+            TranscriptRecorder::<()>::record(&rec, parity_entry(1, 1, 1, 0, 0)),
+            Err(TranscriptError::NonMonotonicNonce {
+                previous: 2,
+                nonce: 1
+            })
+        );
+    }
+
+    #[test]
+    fn streaming_recorder_snapshot_is_empty() {
+        let rec = StreamingRootRecorder::new("0xabc");
+        TranscriptRecorder::<()>::record(&rec, parity_entry(1, 90, 110, 0x11, 0x22)).unwrap();
+        let snap: Transcript<TranscriptEntry<()>> = rec.snapshot();
+        assert!(snap.entries().is_empty());
+        assert!(TranscriptRecorder::<()>::records_transcript(&rec));
     }
 }
