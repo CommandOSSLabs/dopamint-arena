@@ -5,6 +5,7 @@ pub mod cli;
 pub mod heartbeat;
 pub mod humanize;
 pub mod party_driver;
+mod pre_open_gate;
 pub mod protocols;
 pub mod report;
 pub mod resources;

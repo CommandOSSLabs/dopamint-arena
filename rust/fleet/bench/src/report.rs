@@ -5,6 +5,7 @@ use crate::cli::{AnchorMode, BenchOpts, TranscriptRecorderMode};
 use crate::humanize;
 use crate::resources::ResourceSummary;
 use crate::swarm::{SuiPtbFlushReasonCounts, SwarmOutcome};
+use serde::Serialize;
 use tunnel_telemetry::{Distribution, StageId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +363,23 @@ pub fn render_with_style(
         out.push('\n');
     }
 
+    if simple.bench_mode == "warmup" {
+        let warmup_secs = simple.warmup_elapsed_ms as f64 / 1000.0;
+        let open_rate = if warmup_secs > 0.0 {
+            simple.warmup_preopened as f64 / warmup_secs
+        } else {
+            0.0
+        };
+        out.push_str(&format!(
+            "\n{}\n  - fleet pre-open: {} tunnels in {:.2}s ({:.1}/s), open-retries={}\n",
+            style.section("Warm-up"),
+            humanize::count(simple.warmup_preopened),
+            warmup_secs,
+            open_rate,
+            simple.warmup_open_retries,
+        ));
+    }
+
     out.push_str(&format!(
         "\n{}\n  - setup overhead {:.1}%\n  - play-loop p50={} p90={} avg={} peak={}\n",
         style.section("Latency"),
@@ -486,11 +504,69 @@ pub fn render_with_style(
     out
 }
 
+#[derive(Serialize)]
+pub struct JsonReport {
+    pub protocol_id: String,
+    pub bench_mode: String,
+    pub workers: usize,
+    pub tunnel_concurrency: String,
+    pub tunnels_opened: u64,
+    pub tunnels_settled: u64,
+    pub tunnels_failed: u64,
+    pub moves: u64,
+    pub elapsed_ms: u128,
+    pub move_window_elapsed_ms: u128,
+    pub warmup_elapsed_ms: u128,
+    pub warmup_preopened: u64,
+    pub warmup_open_retries: u64,
+    pub wall_move_tps: f64,
+    pub play_only_move_tps: f64,
+    pub lane_tps_p50: f64,
+    pub lane_tps_p90: f64,
+    pub lane_tps_avg: f64,
+    pub cpu_cores_avg: f64,
+    pub cpu_util_p50_pct: f64,
+    pub rss_peak_bytes: u64,
+}
+
+pub fn render_json(
+    opts: &BenchOpts,
+    protocol_id: &str,
+    o: &SwarmOutcome,
+    res: &ResourceSummary,
+) -> String {
+    let report = JsonReport {
+        protocol_id: protocol_id.to_string(),
+        bench_mode: o.bench_mode.to_string(),
+        workers: opts.workers,
+        tunnel_concurrency: opts.tunnel_concurrency.label(),
+        tunnels_opened: o.tunnels_opened,
+        tunnels_settled: o.tunnels_settled,
+        tunnels_failed: o.tunnels_failed,
+        moves: o.moves,
+        elapsed_ms: o.elapsed_ms,
+        move_window_elapsed_ms: o.move_window_elapsed_ms,
+        warmup_elapsed_ms: o.warmup_elapsed_ms,
+        warmup_preopened: o.warmup_preopened,
+        warmup_open_retries: o.warmup_open_retries,
+        wall_move_tps: move_tps(o.moves, o.elapsed_ms),
+        play_only_move_tps: play_only_tps(o),
+        lane_tps_p50: o.per_tunnel_tps_play.p50,
+        lane_tps_p90: o.per_tunnel_tps_play.p90,
+        lane_tps_avg: o.per_tunnel_tps_play.avg,
+        cpu_cores_avg: res.cpu_cores_avg,
+        cpu_util_p50_pct: res.cpu_util_p50_pct,
+        rss_peak_bytes: res.rss_peak_bytes,
+    };
+    serde_json::to_string_pretty(&report).expect("JsonReport serializes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::{
-        AnchorMode, BenchOpts, ColorMode, ConcurrencyMode, SignerInitMode, TranscriptRecorderMode,
+        AnchorMode, BenchMode, BenchOpts, ColorMode, ConcurrencyMode, SignerInitMode,
+        TranscriptRecorderMode,
     };
     use crate::resources::ResourceSummary;
     use crate::swarm::SwarmOutcome;
@@ -502,6 +578,9 @@ mod tests {
             moves: None,
             initial_balance: crate::protocols::DEFAULT_BALANCE,
             tunnel_concurrency: ConcurrencyMode::Fixed(64),
+            bench_mode: BenchMode::Churn,
+            warmup_timeout_secs: 120,
+            json: false,
             per_move_latency: false,
             trace: false,
             signer_init_mode,
@@ -547,6 +626,10 @@ mod tests {
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
             sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
+            bench_mode: "churn",
+            warmup_elapsed_ms: 0,
+            warmup_preopened: 0,
+            warmup_open_retries: 0,
         }
     }
 
@@ -606,6 +689,49 @@ mod tests {
         );
 
         assert!(s.contains("local/sui-sponsored fleet-bench blackjack.v2"));
+    }
+
+    #[test]
+    fn render_emits_warmup_section_for_warmup_mode() {
+        let mut o = outcome(2000, 20, 3000);
+        o.bench_mode = "warmup";
+        o.warmup_elapsed_ms = 500;
+        o.warmup_preopened = 8;
+        o.warmup_open_retries = 2;
+
+        let s = render(
+            &opts(4, SignerInitMode::PerTunnel),
+            "payments.v1",
+            &o,
+            &res(),
+        );
+
+        assert!(s.contains("Warm-up"), "got:\n{s}");
+        assert!(
+            s.contains("fleet pre-open: 8 tunnels in 0.50s (16.0/s), open-retries=2"),
+            "got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn json_report_includes_warmup_fields() {
+        let mut o = outcome(2000, 20, 3000);
+        o.bench_mode = "warmup";
+        o.warmup_elapsed_ms = 500;
+        o.warmup_preopened = 8;
+
+        let json = render_json(
+            &opts(4, SignerInitMode::PerTunnel),
+            "payments.v1",
+            &o,
+            &res(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(v["bench_mode"], "warmup");
+        assert_eq!(v["warmup_elapsed_ms"], 500);
+        assert_eq!(v["warmup_preopened"], 8);
+        assert!(v["play_only_move_tps"].as_f64().is_some());
     }
 
     #[test]
@@ -678,6 +804,10 @@ mod tests {
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
             sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
+            bench_mode: "churn",
+            warmup_elapsed_ms: 0,
+            warmup_preopened: 0,
+            warmup_open_retries: 0,
         };
         let s = render(
             &opts(1, SignerInitMode::PerTunnel),
@@ -798,6 +928,10 @@ mod tests {
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
             sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
+            bench_mode: "churn",
+            warmup_elapsed_ms: 0,
+            warmup_preopened: 0,
+            warmup_open_retries: 0,
         };
         let s = render(
             &opts(10, SignerInitMode::PerTunnel),

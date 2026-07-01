@@ -69,6 +69,14 @@ impl ConcurrencyMode {
     }
 }
 
+/// Tunnel lifecycle shape. `Churn` is the default interleaved pool; `Warmup`
+/// pre-opens the whole initial fleet behind a barrier before play begins.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BenchMode {
+    Churn,
+    Warmup,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ColorMode {
     Auto,
@@ -101,6 +109,12 @@ pub struct BenchOpts {
     pub initial_balance: u64,
     /// Tunnel lifecycle pool size: `auto` or a fixed in-flight count.
     pub tunnel_concurrency: ConcurrencyMode,
+    /// Tunnel lifecycle shape (`churn` or `warmup`).
+    pub bench_mode: BenchMode,
+    /// Warm-up open barrier timeout in seconds.
+    pub warmup_timeout_secs: u64,
+    /// Emit a machine-readable JSON report to stdout.
+    pub json: bool,
     /// Show the per-move latency breakdown — per-frame transport send/recv (and
     /// recorder-record, when a real recorder runs) latency rows. Off by default.
     pub per_move_latency: bool,
@@ -231,6 +245,19 @@ struct Raw {
         value_name = "auto|N"
     )]
     tunnel_concurrency: String,
+    /// Tunnel lifecycle shape: churn or warmup.
+    #[arg(
+        long = "bench-mode",
+        default_value = "churn",
+        value_name = "churn|warmup"
+    )]
+    bench_mode: String,
+    /// Warm-up open barrier timeout in seconds (warmup mode only).
+    #[arg(long = "warmup-timeout", default_value_t = 120, value_name = "SECONDS")]
+    warmup_timeout: u64,
+    /// Emit a machine-readable JSON report to stdout instead of the text report.
+    #[arg(long = "json", default_value_t = false)]
+    json: bool,
     /// Show the per-move latency breakdown (per-frame transport send/recv rows).
     #[arg(long = "per-move-latency", default_value_t = false)]
     per_move_latency: bool,
@@ -681,6 +708,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             ConcurrencyMode::Fixed(n)
         }
     };
+    let bench_mode = match raw.bench_mode.as_str() {
+        "churn" => BenchMode::Churn,
+        "warmup" => BenchMode::Warmup,
+        other => return Err(format!("--bench-mode must be churn|warmup, got {other}")),
+    };
+    if raw.warmup_timeout == 0 {
+        return Err("--warmup-timeout must be greater than 0".to_string());
+    }
 
     Ok(BenchOpts {
         workers,
@@ -688,6 +723,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         moves,
         initial_balance: raw.initial_balance,
         tunnel_concurrency,
+        bench_mode,
+        warmup_timeout_secs: raw.warmup_timeout,
+        json: raw.json,
         per_move_latency: raw.per_move_latency,
         trace: raw.trace,
         signer_init_mode,
@@ -787,6 +825,25 @@ mod tests {
         let opts = parse_v(&["--moves", "max"]).unwrap();
 
         assert_eq!(opts.moves, Some(MoveTarget::Max));
+    }
+
+    #[test]
+    fn parses_bench_mode_and_warmup_timeout() {
+        let o = parse_v(&["--bench-mode", "warmup", "--warmup-timeout", "30"]).unwrap();
+
+        assert_eq!(o.bench_mode, BenchMode::Warmup);
+        assert_eq!(o.warmup_timeout_secs, 30);
+        assert!(parse_v(&["--bench-mode", "bogus"]).is_err());
+        assert!(parse_v(&["--warmup-timeout", "0"]).is_err());
+    }
+
+    #[test]
+    fn bench_mode_defaults_to_churn() {
+        let o = parse_v(&[]).unwrap();
+
+        assert_eq!(o.bench_mode, BenchMode::Churn);
+        assert_eq!(o.warmup_timeout_secs, 120);
+        assert!(!o.json);
     }
 
     #[test]

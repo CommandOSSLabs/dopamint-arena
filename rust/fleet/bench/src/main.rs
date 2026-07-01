@@ -75,14 +75,21 @@ fn main() {
     let mut summaries = Vec::with_capacity(opts.protocol_ids.len());
     for protocol_id in &opts.protocol_ids {
         let (outcome, res) = run_protocol(&opts, sui_context.as_ref(), protocol_id);
-        print!(
-            "{}",
-            report::render_with_style(&opts, protocol_id, &outcome, &res, render_style)
-        );
+        if opts.json {
+            println!(
+                "{}",
+                report::render_json(&opts, protocol_id, &outcome, &res)
+            );
+        } else {
+            print!(
+                "{}",
+                report::render_with_style(&opts, protocol_id, &outcome, &res, render_style)
+            );
+        }
         summaries.push(report::ProtocolRunSummary::from_run(protocol_id, &outcome));
     }
 
-    if summaries.len() > 1 {
+    if !opts.json && summaries.len() > 1 {
         print!(
             "{}",
             report::render_summary_with_style(&opts, &summaries, render_style)
@@ -129,6 +136,8 @@ fn run_protocol(
         opts.initial_balance,
         telemetry,
         preinitialize,
+        opts.bench_mode,
+        opts.warmup_timeout_secs,
     );
     (outcome, sampler.stop())
 }
@@ -152,7 +161,7 @@ fn resolve_heartbeat(opts: &cli::BenchOpts, protocol_id: &'static str) -> Option
 mod tests {
     use super::*;
     use fleet_bench::cli::{
-        BenchOpts, ColorMode, FrameCodecKind, ScenarioMode, SuiSponsoredAnchorOpts,
+        BenchMode, BenchOpts, ColorMode, FrameCodecKind, ScenarioMode, SuiSponsoredAnchorOpts,
     };
 
     fn opts(tunnel_concurrency: ConcurrencyMode) -> BenchOpts {
@@ -162,6 +171,9 @@ mod tests {
             moves: None,
             initial_balance: 200,
             tunnel_concurrency,
+            bench_mode: BenchMode::Churn,
+            warmup_timeout_secs: 120,
+            json: false,
             per_move_latency: false,
             trace: false,
             signer_init_mode: SignerInitMode::PerTunnel,

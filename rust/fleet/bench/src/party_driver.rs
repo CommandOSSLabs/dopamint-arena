@@ -5,6 +5,7 @@
 
 use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts};
 use crate::heartbeat::HeartbeatConfig;
+use crate::pre_open_gate::PreOpenGate;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sui_tunnel_anchor::{
@@ -337,6 +338,9 @@ struct BenchAnchor {
     stage_windows: Option<StageWindowRecorder>,
     submitter: Option<BenchSubmitter>,
     seat: Seat,
+    /// Present only in warm-up mode: parks between open and play until the
+    /// initial fleet is open. In churn mode this stays `None`.
+    pre_open_gate: Option<Arc<PreOpenGate>>,
 }
 
 impl BenchAnchor {
@@ -345,12 +349,14 @@ impl BenchAnchor {
         stage_windows: Option<StageWindowRecorder>,
         submitter: Option<BenchSubmitter>,
         seat: Seat,
+        pre_open_gate: Option<Arc<PreOpenGate>>,
     ) -> Self {
         Self {
             inner,
             stage_windows,
             submitter,
             seat,
+            pre_open_gate,
         }
     }
 
@@ -737,6 +743,14 @@ impl TunnelAnchor for BenchAnchor {
             ),
             Err(error) => tracing::warn!(anchor, protocol, ?error, "anchor open failed"),
         }
+        // Warm-up barrier: on success, hold both seats between open and play
+        // until the whole initial fleet is open. Seat A counts the tunnel once.
+        if let (Some(gate), Ok(_)) = (&self.pre_open_gate, &result) {
+            if self.seat == Seat::A {
+                gate.mark_opened();
+            }
+            gate.wait().await;
+        }
         result
     }
 
@@ -917,17 +931,25 @@ where
     let settlement_mode = inner_anchor.settlement_mode();
     let submitter = matches!(anchor_mode, AnchorMode::SuiSponsored).then(BenchSubmitter::new);
     let submitter_for_supervisor = submitter.clone();
+    let pre_open_gate = crate::protocols::current_request_pre_open_gate();
     let anchor_a = InstrumentedAnchor::new(
         BenchAnchor::new(
             inner_anchor.clone(),
             stage_windows.clone(),
             submitter.clone(),
             Seat::A,
+            pre_open_gate.clone(),
         ),
         CollectingSink::with_capacity(2),
     );
     let anchor_b = InstrumentedAnchor::new(
-        BenchAnchor::new(inner_anchor, stage_windows.clone(), submitter, Seat::B),
+        BenchAnchor::new(
+            inner_anchor,
+            stage_windows.clone(),
+            submitter,
+            Seat::B,
+            pre_open_gate,
+        ),
         CollectingSink::with_capacity(2),
     );
     // Keep handles outside the drivers to read counters after join.

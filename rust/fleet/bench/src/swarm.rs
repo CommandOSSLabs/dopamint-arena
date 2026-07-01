@@ -3,10 +3,11 @@
 //! as the serving fleet, and completed lifecycles are replaced until the global
 //! duration stops new launches or the move limit stops move production.
 
-use crate::cli::{AnchorMode, FrameCodecKind, MoveTarget, ScenarioMode};
+use crate::cli::{AnchorMode, BenchMode, FrameCodecKind, MoveTarget, ScenarioMode};
 use crate::party_driver::{
     SeatKit, StageWindowRecorder, SuiSponsoredBenchContext, TunnelTelemetry,
 };
+use crate::pre_open_gate::PreOpenGate;
 use crate::protocols::{play_tunnel_for, PlayTunnelRequest};
 use crate::stats::{summarize, Distribution};
 use std::time::{Duration, Instant};
@@ -115,6 +116,14 @@ pub struct SwarmOutcome {
     pub gas_sponsor_mist: u64,
     pub transcript_export_bytes: u64,
     pub sui_ptb_metrics: SuiPtbMetrics,
+    /// `churn` or `warmup`.
+    pub bench_mode: &'static str,
+    /// Wall time from warm-up start to the barrier release. Zero in churn mode.
+    pub warmup_elapsed_ms: u128,
+    /// Initial fleet size released by the warm-up barrier. Zero in churn mode.
+    pub warmup_preopened: u64,
+    /// Failed-open respawns during warm-up.
+    pub warmup_open_retries: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -269,6 +278,10 @@ fn aggregate(
         gas_sponsor_mist: gas.gas_sponsor_mist,
         transcript_export_bytes,
         sui_ptb_metrics,
+        bench_mode: "churn",
+        warmup_elapsed_ms: 0,
+        warmup_preopened: 0,
+        warmup_open_retries: 0,
     }
 }
 
@@ -286,6 +299,7 @@ async fn run_one_tunnel(
     kit_source: SeatKitSource,
     run_control: Option<DriverRunControl>,
     stage_windows: Option<StageWindowRecorder>,
+    pre_open_gate: Option<std::sync::Arc<PreOpenGate>>,
 ) -> TunnelSample {
     // Resolve seat keys inside the task so `Fresh` keygen parallelizes across the
     // worker pool rather than serializing on the refill coordinator.
@@ -299,20 +313,23 @@ async fn run_one_tunnel(
         ?codec,
         "tunnel task start"
     );
-    let r = play_tunnel_for(PlayTunnelRequest {
-        protocol_id,
-        codec,
-        card_seed: scenario.card_seed(tunnel_index),
-        run_control,
-        kit: &kit,
-        tunnel_id: &tunnel_id,
-        initial_balance,
-        max_moves_per_tunnel,
-        anchor_mode,
-        sui_context: sui_context.as_ref(),
-        telemetry,
-        stage_windows,
-    })
+    let r = crate::protocols::scope_pre_open_gate(
+        pre_open_gate,
+        play_tunnel_for(PlayTunnelRequest {
+            protocol_id,
+            codec,
+            card_seed: scenario.card_seed(tunnel_index),
+            run_control,
+            kit: &kit,
+            tunnel_id: &tunnel_id,
+            initial_balance,
+            max_moves_per_tunnel,
+            anchor_mode,
+            sui_context: sui_context.as_ref(),
+            telemetry,
+            stage_windows,
+        }),
+    )
     .await;
     tracing::debug!(
         tunnel_index,
@@ -499,6 +516,8 @@ pub fn run_lifecycle_pipeline(
     initial_balance: u64,
     telemetry: TunnelTelemetry,
     preinitialize: bool,
+    bench_mode: BenchMode,
+    warmup_timeout_secs: u64,
 ) -> SwarmOutcome {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -513,6 +532,10 @@ pub fn run_lifecycle_pipeline(
     let sui_context = sui_context.cloned();
     let gas_context = sui_context.clone();
     let pool = tunnel_concurrency.max(1);
+    let pre_open_gate = match bench_mode {
+        BenchMode::Warmup => Some(PreOpenGate::new(pool as u64)),
+        BenchMode::Churn => None,
+    };
     let preinit_kits: Vec<SeatKit> = if preinitialize {
         (0..pool).map(|_| random_seat_kit()).collect()
     } else {
@@ -532,6 +555,7 @@ pub fn run_lifecycle_pipeline(
         ?anchor_mode,
         ?codec,
         ?scenario,
+        ?bench_mode,
         preinitialize,
         "fleet lifecycle pipeline start"
     );
@@ -546,7 +570,9 @@ pub fn run_lifecycle_pipeline(
     let run_control_for_tasks = run_control.clone();
     let stage_windows = StageWindowRecorder::new();
     let stage_windows_for_tasks = stage_windows.clone();
-    let (samples, move_window_elapsed_ms, tunnels_aborted) = runtime.block_on(async move {
+    let gate_for_wait = pre_open_gate.clone();
+    let warmup_started = Instant::now();
+    let run_result = runtime.block_on(async move {
         let kit_source_for = |index: u64| -> SeatKitSource {
             if preinitialize {
                 SeatKitSource::Preinitialized(Box::new(
@@ -571,6 +597,7 @@ pub fn run_lifecycle_pipeline(
                 kit_source_for(index),
                 Some(run_control_for_tasks.clone()),
                 Some(stage_windows_for_tasks.clone()),
+                pre_open_gate.clone(),
             ));
         };
 
@@ -583,16 +610,50 @@ pub fn run_lifecycle_pipeline(
 
         let mut samples = TunnelSamples::new();
         let mut tunnels_aborted = 0;
-        let Some(move_window_started) = wait_for_first_play_window(
-            &stage_windows_for_tasks,
-            &mut tasks,
-            &mut samples,
-            &mut tunnels_aborted,
-            TUNNEL_DRAIN_TIMEOUT,
-        )
-        .await
-        else {
-            return (samples, 0, tunnels_aborted);
+        let (move_window_started, warmup_open_retries, warmup_elapsed_ms) = match &gate_for_wait {
+            None => {
+                let Some(start) = wait_for_first_play_window(
+                    &stage_windows_for_tasks,
+                    &mut tasks,
+                    &mut samples,
+                    &mut tunnels_aborted,
+                    TUNNEL_DRAIN_TIMEOUT,
+                )
+                .await
+                else {
+                    return (samples, 0, tunnels_aborted, 0, 0);
+                };
+                (start, 0, 0)
+            }
+            Some(gate) => {
+                match wait_for_preopen(
+                    gate,
+                    &mut tasks,
+                    &mut samples,
+                    &mut tunnels_aborted,
+                    &mut next_index,
+                    &spawn_tunnel,
+                    warmup_started,
+                    Duration::from_secs(warmup_timeout_secs),
+                )
+                .await
+                {
+                    Some((start, retries)) => (
+                        start,
+                        retries,
+                        start.duration_since(warmup_started).as_millis().max(1),
+                    ),
+                    None => {
+                        eprintln!(
+                            "warm-up: {}/{} tunnels opened after {}s; aborting",
+                            gate.opened(),
+                            pool,
+                            warmup_timeout_secs
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
         };
         let deadline = move_window_started + Duration::from_secs(duration_secs);
         let stop_observed_at = loop {
@@ -638,8 +699,12 @@ pub fn run_lifecycle_pipeline(
                 .duration_since(move_window_started)
                 .as_millis(),
             tunnels_aborted,
+            warmup_open_retries,
+            warmup_elapsed_ms,
         )
     });
+    let (samples, move_window_elapsed_ms, tunnels_aborted, warmup_open_retries, warmup_elapsed_ms) =
+        run_result;
     // Freeze wall time the instant the measured run's tasks finish, before the
     // shutdown grace below — otherwise a slow telemetry backend's drain would
     // dilate `elapsed_ms` and deflate wall move-TPS.
@@ -677,7 +742,7 @@ pub fn run_lifecycle_pipeline(
     let settle_active_elapsed_ms = stage_windows
         .active_elapsed_ms(tunnel_telemetry::StageId::Settle)
         .min(elapsed_ms);
-    let outcome = aggregate(
+    let mut outcome = aggregate(
         samples,
         elapsed_ms,
         move_window_elapsed_ms,
@@ -687,6 +752,16 @@ pub fn run_lifecycle_pipeline(
         sui_ptb_metrics,
         tunnels_aborted,
     );
+    outcome.bench_mode = match bench_mode {
+        BenchMode::Warmup => "warmup",
+        BenchMode::Churn => "churn",
+    };
+    outcome.warmup_elapsed_ms = warmup_elapsed_ms;
+    outcome.warmup_preopened = match bench_mode {
+        BenchMode::Warmup => pool as u64,
+        BenchMode::Churn => 0,
+    };
+    outcome.warmup_open_retries = warmup_open_retries;
     tracing::info!(
         moves = outcome.moves,
         secs = outcome.elapsed_ms as f64 / 1000.0,
@@ -698,6 +773,51 @@ pub fn run_lifecycle_pipeline(
         "fleet lifecycle pipeline done"
     );
     outcome
+}
+
+/// Drains failed opens and respawns until every initial tunnel has opened.
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_preopen(
+    gate: &std::sync::Arc<PreOpenGate>,
+    tasks: &mut JoinSet<TunnelSample>,
+    samples: &mut TunnelSamples,
+    tunnels_aborted: &mut u64,
+    next_index: &mut u64,
+    spawn_tunnel: &impl Fn(&mut JoinSet<TunnelSample>, u64),
+    started: Instant,
+    timeout: Duration,
+) -> Option<(Instant, u64)> {
+    let deadline = started.checked_add(timeout).unwrap_or(started);
+    let mut retries = 0u64;
+    loop {
+        if gate.is_released() {
+            return Some((Instant::now(), retries));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+
+        tokio::select! {
+            biased;
+
+            _ = gate.wait() => return Some((Instant::now(), retries)),
+            result = tasks.join_next() => {
+                match result {
+                    Some(result) => {
+                        if record_tunnel_join(samples, result) {
+                            *tunnels_aborted += 1;
+                        }
+                        retries += 1;
+                        spawn_tunnel(tasks, *next_index);
+                        *next_index += 1;
+                    }
+                    None => return Some((Instant::now(), retries)),
+                }
+            }
+            _ = tokio::time::sleep(remaining) => return None,
+        }
+    }
 }
 
 async fn wait_for_first_play_window(
@@ -897,6 +1017,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         assert!(out.moves >= 1);
         assert_eq!(out.tunnels_opened, 1);
@@ -1017,10 +1139,42 @@ mod tests {
                 heartbeat: None,
             },
             true,
+            BenchMode::Churn,
+            120,
         );
         assert!(out.moves >= 2);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
         assert_eq!(out.tunnels_aborted, 0);
+    }
+
+    #[test]
+    fn warmup_mode_preopens_whole_fleet_and_reports_window() {
+        let out = run_lifecycle_pipeline(
+            2,
+            1,
+            None,
+            4,
+            ScenarioMode::Varied,
+            FrameCodecKind::Postcard,
+            AnchorMode::Memory,
+            None,
+            tunnel_core::protocol_id::PAYMENTS_V1,
+            200,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+                heartbeat: None,
+            },
+            true,
+            BenchMode::Warmup,
+            120,
+        );
+
+        assert_eq!(out.bench_mode, "warmup");
+        assert_eq!(out.warmup_preopened, 4);
+        assert!(out.tunnels_opened >= 4, "whole initial fleet opened");
+        assert!(out.warmup_elapsed_ms >= 1, "warm-up window recorded");
+        assert_eq!(out.warmup_open_retries, 0);
     }
 
     #[test]
@@ -1055,6 +1209,7 @@ mod tests {
                                 },
                                 SeatKitSource::Preinitialized(Box::new(random_seat_kit())),
                                 Some(run_control),
+                                None,
                                 None,
                             )
                             .await,
@@ -1100,6 +1255,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         assert_eq!(out.moves, 143);
         assert_eq!(out.moves_dist.min, 143.0);
@@ -1125,6 +1282,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         let bcs = run_lifecycle_pipeline(
             2,
@@ -1143,6 +1302,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         let postcard = run_lifecycle_pipeline(
             2,
@@ -1161,6 +1322,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
 
         assert_eq!(bcs.moves, json.moves);
@@ -1189,6 +1352,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
@@ -1214,6 +1379,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_opened, 1);
@@ -1239,6 +1406,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
@@ -1263,6 +1432,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         )
     }
 
@@ -1302,6 +1473,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
         assert!(
             out.tunnels_claimed > 2,
@@ -1336,6 +1509,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
 
         assert!(out.moves >= 1);
@@ -1367,6 +1542,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
 
         assert!(out.moves >= 64);
@@ -1397,6 +1574,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
 
         assert!(out.moves >= 1);
@@ -1439,6 +1618,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
 
         assert_eq!(out.tunnels_aborted, 0);
@@ -1465,6 +1646,8 @@ mod tests {
                 heartbeat: None,
             },
             false,
+            BenchMode::Churn,
+            120,
         );
 
         assert_eq!(out.tunnels_claimed, 1);

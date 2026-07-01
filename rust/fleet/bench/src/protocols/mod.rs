@@ -3,6 +3,9 @@ use crate::party_driver::play_protocol_tunnel_with_strategies;
 use crate::party_driver::SeatKit;
 use crate::party_driver::{StageWindowRecorder, TunnelTelemetry};
 use crate::party_driver::{SuiSponsoredBenchContext, TunnelOutcome};
+use crate::pre_open_gate::PreOpenGate;
+use std::future::Future;
+use std::sync::Arc;
 use tunnel_core::protocol_id::{
     API_CREDITS_V1, BATTLESHIP_SERIES_V1, BATTLESHIP_V1, BLACKJACK_BET_V1, BLACKJACK_DUEL_V1,
     BLACKJACK_V2, BOMB_IT_SERIES_V1, BOMB_IT_V1, CARO_SERIES_V1, CARO_V1, CHAT_V1, CROSS_SERIES_V1,
@@ -48,6 +51,7 @@ pub(crate) struct PlayTunnelRequest<'a> {
 tokio::task_local! {
     static REQUEST_RUN_CONTROL: Option<DriverRunControl>;
     static REQUEST_STAGE_WINDOWS: Option<StageWindowRecorder>;
+    static REQUEST_PRE_OPEN_GATE: Option<Arc<PreOpenGate>>;
     static REQUEST_INITIAL_BALANCE: u64;
     static REQUEST_MAX_MOVES_PER_TUNNEL: u64;
 }
@@ -58,6 +62,20 @@ fn current_request_run_control() -> Option<DriverRunControl> {
 
 fn current_request_stage_windows() -> Option<StageWindowRecorder> {
     REQUEST_STAGE_WINDOWS.try_with(Clone::clone).ok().flatten()
+}
+
+pub(crate) fn current_request_pre_open_gate() -> Option<Arc<PreOpenGate>> {
+    REQUEST_PRE_OPEN_GATE.try_with(Clone::clone).ok().flatten()
+}
+
+pub(crate) async fn scope_pre_open_gate<F, T>(
+    pre_open_gate: Option<Arc<PreOpenGate>>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    REQUEST_PRE_OPEN_GATE.scope(pre_open_gate, future).await
 }
 
 pub(crate) fn current_initial_balance() -> u64 {
