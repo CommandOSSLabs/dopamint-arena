@@ -21,6 +21,7 @@ import type {
   GameSessionSpec,
   MainBridge,
   MatchSnapshot,
+  WorkerArenaEntry,
 } from "./engineApi";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -154,6 +155,25 @@ export class PvpHub {
       return;
     }
     await this.session(windowId, mp).findMatch(gameId, setup);
+  }
+
+  async enterArenaMatch(
+    windowId: string,
+    gameId: GameId,
+    entry: WorkerArenaEntry,
+  ): Promise<void> {
+    if (!this.config || !this.bridge) {
+      this.failWindow(windowId, new Error("pvp hub not configured"));
+      return;
+    }
+    let mp: MpClient;
+    try {
+      mp = await this.ensureSocket();
+    } catch (e) {
+      this.failWindow(windowId, e);
+      return;
+    }
+    await this.session(windowId, mp).enterArena(gameId, entry);
   }
 
   async resume(windowId: string, gameId: GameId): Promise<void> {

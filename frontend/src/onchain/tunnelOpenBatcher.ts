@@ -210,7 +210,12 @@ export class TunnelOpenBatcher {
             chunkTotal,
           );
       for (const p of chunkPending) {
-        const id = map.get(normalizeSuiAddress(p.req.partyA.address));
+        // A deposit targets a KNOWN tunnel (`p.req.tunnelId`) — resolve to it directly. Resolving by
+        // party-A address collides in multi-game arena: every game shares the user's wallet as party A,
+        // so the address→tunnelId map keeps only one entry and all games would get the same tunnel.
+        const id = deposit
+          ? p.req.tunnelId
+          : map.get(normalizeSuiAddress(p.req.partyA.address));
         if (id) p.resolve(id);
         else
           p.reject(

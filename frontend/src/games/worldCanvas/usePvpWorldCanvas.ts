@@ -34,6 +34,7 @@ import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
 
 /** A seat's queued paint == the co-signed batch move (a run of cells). */
@@ -84,6 +85,12 @@ function useWorkerMatch(
     PvpCell[],
     PvpCanvasState["winner"]
   >;
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "world-canvas",
+    arenaGameId: WORLD_CANVAS_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+  });
   return {
     status: snap.status,
     role: snap.role,

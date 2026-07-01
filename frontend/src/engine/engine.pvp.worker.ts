@@ -16,6 +16,8 @@ const api: PvpHubApi = {
   attachBridge: (bridge) => hub.attachBridge(bridge),
   subscribe: (onSnapshot) => hub.subscribe(onSnapshot),
   findMatch: (windowId, gameId, setup) => hub.findMatch(windowId, gameId, setup),
+  enterArenaMatch: (windowId, gameId, entry) =>
+    hub.enterArenaMatch(windowId, gameId, entry),
   resume: (windowId, gameId) => hub.resume(windowId, gameId),
   submitInput: (windowId, input) => hub.submitInput(windowId, input),
   setAuto: (windowId, on) => hub.setAuto(windowId, on),

@@ -76,6 +76,30 @@ export interface EngineConfig {
 // --- Worker RPC surfaces (Comlink) --------------------------------------------------------
 
 /**
+ * A fleet allocation handed to the worker for arena entry (ADR-0028). The tunnel is already created +
+ * seat B funded by the fleet, and seat A deposited by the main-thread batched `enterArena` PTB — so
+ * the worker only JOINS the pre-allocated match + wires the relay/engine over the live tunnel (no
+ * matchmaking, no open). The ephemeral key was minted on MAIN (its pubkey is baked into the tunnel at
+ * allocate) and travels here as a secret hex — the SAME key must co-sign moves (a different key
+ * rejects every signature). Plain/cloneable so it crosses the Comlink boundary.
+ */
+export interface WorkerArenaEntry {
+  /** The pre-allocated relay match to `joinMatch` (role is always A — the fleet bound the bot as B). */
+  matchId: string;
+  /** The fleet-pre-created tunnel to build the engine over (no open here). */
+  tunnelId: string;
+  /** The user's per-game ephemeral secret (32-byte ed25519 seed, hex); rebuilt via `keyPairFromSecret`. */
+  ephemeralSecretHex: string;
+  /** Tunnel party B (the bot): pubkey verifies its move sigs, address receives seat B. */
+  botPubkeyHex: string;
+  botAddress: string;
+  /** Per-seat stake the fleet + the batched deposit funded (backend `GameProfile`); inits both balances. */
+  stakeEach: string;
+  /** Optional `makeProtocol`/`initSetup` payload (ttt/caro board size + game cap). */
+  setup?: unknown;
+}
+
+/**
  * The shared PvP hub the SINGLE relay worker `Comlink.expose`s (M1: one socket for all PvP). Every
  * method is keyed by `windowId` because ONE worker multiplexes MANY windows' matches over ONE
  * `MpClient` (one WebSocket), routed by matchId. The snapshot sink is therefore `(windowId, snap)`
@@ -90,6 +114,14 @@ export interface PvpHubApi {
   /** windowId-tagged coalesced-snapshot sink (a Comlink proxy). */
   subscribe(onSnapshot: (windowId: string, snap: MatchSnapshot) => void): void;
   findMatch(windowId: string, gameId: GameId, setup?: unknown): Promise<void>;
+  /** Arena entry (ADR-0028): join a fleet-pre-allocated match + wire the engine over its live tunnel,
+   *  instead of quickMatch + open. The {@link WorkerArenaEntry} carries the pre-opened tunnel + the
+   *  main-minted ephemeral key; funding already happened on main (batched), so this only plays. */
+  enterArenaMatch(
+    windowId: string,
+    gameId: GameId,
+    entry: WorkerArenaEntry,
+  ): Promise<void>;
   resume(windowId: string, gameId: GameId): Promise<void>;
   submitInput(windowId: string, input: unknown): void;
   setAuto(windowId: string, on: boolean): void;

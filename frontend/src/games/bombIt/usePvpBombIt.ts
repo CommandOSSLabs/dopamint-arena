@@ -15,6 +15,7 @@ import { makeBombItResumeAdapter } from "./bombItResumeAdapter";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
 
 export type { PvpStatus };
@@ -63,6 +64,13 @@ function useWorkerBombIt(windowId: string): PvpBombIt {
     BombItView,
     BombItState["winner"]
   >;
+  // Arena one-sig auto-enter (ADR-0028): consume this game's fleet allocation + play it in the worker.
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "bomb-it",
+    arenaGameId: BOMB_IT_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+  });
   return {
     status: snap.status,
     role: snap.role,

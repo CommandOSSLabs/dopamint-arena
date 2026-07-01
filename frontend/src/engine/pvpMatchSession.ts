@@ -13,7 +13,11 @@
  * this thread (design §5/§6); they never transit the main heap or the bridge.
  */
 import { type MpClient, type PvpChannel, type Role } from "@/pvp/mpClient";
-import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
+import {
+  generateKeyPair,
+  keyPairFromSecret,
+  type KeyPair,
+} from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
@@ -35,6 +39,7 @@ import type {
   MatchController,
   MatchIo,
   MatchSnapshot,
+  WorkerArenaEntry,
 } from "./engineApi";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -390,6 +395,116 @@ export class PvpMatchSession {
       }
       if (this.gen !== myGen) return;
       controller.onConfirmed(); // kick the first due move
+      tMatch();
+      this.emit();
+    } catch (e) {
+      if (this.gen === myGen) this.fail(e);
+    }
+  }
+
+  /**
+   * Arena entry (ADR-0028): join a fleet-pre-allocated match + wire the engine over its live tunnel —
+   * NO matchmaking, NO open. Differs from {@link findMatch} in exactly four ways: (1) the ephemeral
+   * key is INJECTED (main-minted + baked into the tunnel at allocate — a fresh one would reject every
+   * signature); (2) `joinMatch(matchId)` binds the ONE pre-allocated match (role always A) instead of
+   * `quickMatch`; (3) NO funding block — the fleet opened the tunnel + funded seat B and the main
+   * thread's batched `enterArena` PTB deposited seat A; (4) NO "ready" handshake — the fleet bot enters
+   * its move loop the instant its tunnel opens (the relay buffers our first frame), so waiting on a
+   * "ready" it never sends would hang seat A forever. `activate` + settle + resume are shared verbatim.
+   */
+  async enterArena(gameId: GameId, entry: WorkerArenaEntry): Promise<void> {
+    if (this.busy) return; // a findMatch/enterArena/resume is already in flight (defect #2)
+    this.busy = true;
+    const myGen = this.gen;
+    const config = this.deps.config;
+    const spec = this.deps.getSpec(gameId);
+    if (!spec) {
+      this.busy = false;
+      this.fail(new Error(`engine not ready for game '${gameId}'`));
+      return;
+    }
+    this.spec = spec;
+    try {
+      this.error = null;
+      const tMatch = emark("match", `enterArena ${gameId}`);
+      // The user's per-game ephemeral, rebuilt from the seed the main thread baked into the tunnel.
+      const ephemeral: KeyPair = keyPairFromSecret(
+        fromHex(entry.ephemeralSecretHex),
+      );
+      const wallet = config.wallet;
+      const mp = this.deps.mp; // shared, already connected by the hub
+      const stake = BigInt(entry.stakeEach);
+      // Seat A already deposited on main (batched) + seat B by the fleet — jump straight to funding-
+      // done state; there is no matchmaking wait for a fleet bot.
+      this.status = "funding";
+      this.emit();
+
+      // Bind the ONE pre-allocated match (role A); the fleet bound the bot as seat B at allocate.
+      const match = await mp.joinMatch(entry.matchId);
+      if (this.gen !== myGen) return; // reset during join
+      this.matchId = match.matchId;
+      this.role = match.role;
+      this.opponentWallet = match.opponentWallet;
+      this.emit();
+      elog("match", "arena joined", {
+        window: this.deps.windowId,
+        role: match.role,
+        matchId: match.matchId,
+      });
+
+      const channel = mp.channel(match.matchId);
+      const waitPeer = makeInbox(channel);
+
+      const controller = spec.createMatch(this.io());
+      this.controller = controller;
+      controller.initSetup(entry.setup);
+
+      // Exchange ephemeral pubkeys — the bot's was baked into the tunnel at create, but the relay
+      // handshake still carries it so both sides know the co-signing key.
+      channel.sendPeer({
+        t: "hello",
+        ephemeralPubkey: toHex(ephemeral.publicKey),
+      });
+      const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
+      const oppPub = fromHex(hello.ephemeralPubkey);
+      if (this.gen !== myGen) return;
+
+      // Build the engine over the fleet-pre-created tunnel (no funding). Balances init to the per-seat
+      // stake the fleet + the batched deposit funded — the on-chain reality this settlement must match.
+      const backend = defaultBackend();
+      const self = makeEndpoint(backend, wallet, ephemeral, true);
+      const opp = makeEndpoint(
+        backend,
+        match.opponentWallet,
+        { publicKey: oppPub, scheme: ephemeral.scheme },
+        false,
+      );
+      const dt: AnyTunnel = new DistributedTunnel(
+        spec.makeProtocol(entry.setup),
+        {
+          tunnelId: entry.tunnelId,
+          self,
+          opponent: opp,
+          selfParty: match.role,
+          moveCodec: spec.moveCodec,
+        },
+        channel.transport,
+        { a: stake, b: stake },
+      );
+      this.dt = dt;
+      this.activate(channel, waitPeer, {
+        matchId: match.matchId,
+        tunnelId: entry.tunnelId,
+        role: match.role,
+        game: gameId,
+        opponentWallet: match.opponentWallet,
+        opponentPubkeyHex: toHex(oppPub),
+        selfEphemeralSecretHex: toHex(ephemeral.secretKey),
+      });
+
+      // No "ready" wait (see the method doc): the fleet bot is always ready, so kick our first move now.
+      if (this.gen !== myGen) return;
+      controller.onConfirmed();
       tMatch();
       this.emit();
     } catch (e) {

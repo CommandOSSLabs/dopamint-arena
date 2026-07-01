@@ -18,8 +18,13 @@ import { useCurrentAccount } from "@mysten/dapp-kit";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
-import { usePvpTicTacToe as useLegacyPvp } from "./app/hooks/usePvpTicTacToe";
+import {
+  usePvpTicTacToe as useLegacyPvp,
+  CARO_ARENA_GAME_ID,
+  TIC_TAC_TOE_ARENA_GAME_ID,
+} from "./app/hooks/usePvpTicTacToe";
 import type {
   PvpTttView,
   PvpPhase,
@@ -79,6 +84,17 @@ function useWorkerPvp(
   }, [phase]);
 
   const setup: TurnGameSetup = variant === "caro" ? { boardSize } : {};
+  // Arena one-sig auto-enter (ADR-0028): consume this variant's fleet allocation from the store and
+  // join it in the worker — the window comes alive vs a bot on wallet-connect, no "Find match" click.
+  // Keyed by the variant's arena id (caro vs tic_tac_toe) so the right window claims the right entry.
+  useArenaWorkerEntry({
+    windowId,
+    gameId,
+    arenaGameId:
+      variant === "caro" ? CARO_ARENA_GAME_ID : TIC_TAC_TOE_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+    setup,
+  });
   const start = () => engineClient.findMatch(windowId, gameId, setup);
 
   return {

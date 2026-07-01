@@ -21,8 +21,11 @@ import {
   type MultiGameCaroState,
   type MultiGameCaroMove,
   pickCaroMove,
+  caroMoveCodec,
+  tttMoveCodec,
 } from "@ttt/shared";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import type {
   GameSessionSpec,
   MatchController,
@@ -64,6 +67,9 @@ interface TurnGameCfg<State extends MultiTurnState, Move> {
   /** This seat's bot cell for the current state (called only when it's our turn). */
   botCell(state: WithWinner<State>, role: Party): number;
   deriveView(state: WithWinner<State>): TurnGameView;
+  /** Wire codec matching the fleet bot's frame encoding. Without it the tunnel serializes moves as
+   *  raw JSON and the Rust bot rejects the frame ("malformed frame: expected a string"). */
+  moveCodec: MoveCodec<Move>;
 }
 
 /**
@@ -149,15 +155,19 @@ function makeTurnGamePvpSpec<State extends MultiTurnState, Move>(
     makeProtocol: (setup) =>
       withTopLevelWinner(cfg.makeInner(setup as TurnGameSetup)),
     matchmakingKey: (setup) => cfg.matchmakingKey(setup as TurnGameSetup),
+    moveCodec: cfg.moveCodec,
     createMatch: (io) => new TurnGamePvpController(io, cfg),
   };
 }
 
 // --- per-game wiring -------------------------------------------------------
 
-const TTT_GAMES = 5;
+// FE↔Rust parity: the fleet bot drives a SERIES of max_games=1 with per-seat stake=1 and a canonical
+// 15×15 board (rust/fleet/core play_match.rs). These are baked into caro/ttt `encodeState`, so any
+// drift breaks co-signing with a `state_hash mismatch`. Keep them equal to the bot's.
+const TTT_GAMES = 1;
 const TTT_STAKE = 1n;
-const CARO_GAMES = 5;
+const CARO_GAMES = 1;
 const CARO_DEFAULT_BOARD = 15;
 const CARO_STAKE = 1n;
 
@@ -182,12 +192,13 @@ export const tttPvpSpec = defineGame(
     makeInner: (setup) =>
       new MultiGameTicTacToeProtocol(
         setup?.maxGames ?? TTT_GAMES,
-        0n,
+        TTT_STAKE,
       ) as unknown as InnerTurnProtocol<
         MultiGameTicTacToeState,
         MultiGameTicTacToeMove
       >,
     matchmakingKey: () => "tictactoe:ttt",
+    moveCodec: tttMoveCodec as unknown as MoveCodec<MultiGameTicTacToeMove>,
     botCell: (state, role) => {
       const mg = new MultiGameTicTacToeProtocol(state.maxGames, 0n);
       const m = mg.randomMove(state, role, Math.random);
@@ -206,10 +217,11 @@ export const caroPvpSpec = defineGame(
       new MultiGameCaroProtocol(
         setup?.maxGames ?? CARO_GAMES,
         setup?.boardSize ?? CARO_DEFAULT_BOARD,
-        0n,
+        CARO_STAKE,
       ) as unknown as InnerTurnProtocol<MultiGameCaroState, MultiGameCaroMove>,
     matchmakingKey: (setup) =>
       `tictactoe:caro:${setup?.boardSize ?? CARO_DEFAULT_BOARD}`,
+    moveCodec: caroMoveCodec as unknown as MoveCodec<MultiGameCaroMove>,
     botCell: (state, role) =>
       pickCaroMove(state.inner, role, Math.random, "strong"),
     deriveView: (s) => deriveView(s),

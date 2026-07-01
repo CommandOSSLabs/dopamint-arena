@@ -15,6 +15,7 @@ import { makeCrossResumeAdapter } from "./crossResumeAdapter";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
 
 export type { PvpStatus };
@@ -61,6 +62,12 @@ function useWorkerChickenCross(windowId: string): PvpChickenCross {
     CrossView,
     CrossState["winner"]
   >;
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "chicken-cross",
+    arenaGameId: CHICKEN_CROSS_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+  });
   return {
     status: snap.status,
     role: snap.role,

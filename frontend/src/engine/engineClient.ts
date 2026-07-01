@@ -14,6 +14,7 @@ import type {
   MainBridge,
   MatchSnapshot,
   PvpHubApi,
+  WorkerArenaEntry,
 } from "./engineApi";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
@@ -219,6 +220,16 @@ export const engineClient = {
   resume(windowId: string, gameId: GameId): void {
     ensurePvpWindow(windowId);
     fire(ensureHub().resume(windowId, gameId));
+  },
+  /** Arena entry (ADR-0028): hand the worker a fleet allocation (pre-opened tunnel + main-minted key)
+   *  to join + play, instead of quickMatch + open. Funding already happened on main (batched PTB). */
+  enterArenaMatch(
+    windowId: string,
+    gameId: GameId,
+    entry: WorkerArenaEntry,
+  ): void {
+    ensurePvpWindow(windowId);
+    fire(ensureHub().enterArenaMatch(windowId, gameId, entry));
   },
   submitInput(windowId: string, input: unknown): void {
     if (hubApi) fire(hubApi.submitInput(windowId, input));
