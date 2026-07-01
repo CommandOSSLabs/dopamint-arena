@@ -4,8 +4,6 @@ export const DURATIONS = [
   { label: "5 minutes", ms: 300_000n }, // 5 * 60 * 1000
 ] as const;
 
-export const TOPUP_MS = DURATIONS[0].ms;
-
 /**
  * Auto mode burst interval — matches Regular Payments `AUTO_ADD_INTERVAL_MS`.
  * ~200 verified co-signs/s per stream (off-chain; not on-chain txs).
@@ -15,6 +13,8 @@ export const AUTO_TICK_INTERVAL_MS = 5;
 /** Dashboard inline completion banner — auto-return to lobby (matches Regular Payments). */
 export const AUTO_RETURN_SEC = 3;
 
+export const MINIMUM_AMOUNT = "100";
+
 /**
  * Clock meter refresh — setInterval, not RAF, so progress still advances when the
  * tab is backgrounded (RAF pauses; intervals are only throttled, not frozen).
@@ -22,8 +22,6 @@ export const AUTO_RETURN_SEC = 3;
 export const CLOCK_METER_INTERVAL_MS = 100;
 
 export const GAME_ID = "streaming-payment";
-
-export const STREAM_POLL_MS = 7_000; // slower poll to avoid Sui fullnode 429s; meter is driven by local ticks anyway
 
 export const TX_EXPLORER_URL = (digest: string) =>
   `https://suiscan.xyz/testnet/tx/${digest}`;

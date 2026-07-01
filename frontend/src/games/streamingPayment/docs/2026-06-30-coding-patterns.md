@@ -25,7 +25,7 @@ Pass a session object from the hook into screen components — same pattern as R
 
 The hook (`useStreamingPaymentSession`) owns: in-memory session state, **auto loop**,
 **clock vest watch**, **`streaming.v1` tick loop** (telemetry), heartbeat, tx runners, and lobby
-form state (`totalInput`, `durationIdx`, `autoMode`).
+form state (`budgetAmount`, `durationIdx`, `autoMode`).
 
 **No `localStorage` persistence** until a resume adapter lands. Components stay presentational.
 

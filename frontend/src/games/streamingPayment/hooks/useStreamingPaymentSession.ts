@@ -44,10 +44,9 @@ import {
   FIXED_RECIPIENT,
   FIXED_RECIPIENT_NAME,
   GAME_ID,
-  STREAM_POLL_MS,
-  TOPUP_MS,
+  MINIMUM_AMOUNT,
 } from "../utils/constants";
-import { formatMtps, parseMtps } from "../utils/formatMtps";
+import { parseMtps } from "../utils/formatMtps";
 import { buildTick, verifyTick } from "../utils/sessionCore";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -68,7 +67,7 @@ interface StreamingSnapshot {
   ledger: LedgerEntry[];
   stream: StreamFields | null;
   recipientIdx: number;
-  totalInput: string;
+  budgetAmount: string;
   durationIdx: number;
   verifiedAccrued: bigint;
   tickCount: number;
@@ -96,7 +95,7 @@ class StreamingPaymentSession {
   private stream: StreamFields | null = null;
 
   // Form (persists across completeRound for UX)
-  private totalInput = "100";
+  private budgetAmount = MINIMUM_AMOUNT;
   private durationIdx = 0;
 
   // Tick / meter (off-chain streaming.v1 co-signs in self-play)
@@ -110,7 +109,6 @@ class StreamingPaymentSession {
   private error: string | null = null;
 
   // Timers
-  private pollHandle: ReturnType<typeof setInterval> | null = null;
   private tickHandle: ReturnType<typeof setInterval> | null = null;
   private vestCheckHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -134,7 +132,7 @@ class StreamingPaymentSession {
     ledger: [],
     stream: null,
     recipientIdx: 0,
-    totalInput: "100",
+    budgetAmount: this.budgetAmount,
     durationIdx: 0,
     verifiedAccrued: 0n,
     tickCount: 0,
@@ -175,7 +173,7 @@ class StreamingPaymentSession {
       ledger: this.ledger,
       stream: this.stream,
       recipientIdx: 0, // fixed recipient phase — no selection
-      totalInput: this.totalInput,
+      budgetAmount: this.budgetAmount,
       durationIdx: this.durationIdx,
       verifiedAccrued: this.verifiedAccrued,
       tickCount: this.tickCount,
@@ -197,7 +195,7 @@ class StreamingPaymentSession {
     if (p.meta !== undefined) this.meta = p.meta;
     if (p.ledger !== undefined) this.ledger = p.ledger;
     if (p.stream !== undefined) this.stream = p.stream;
-    if (p.totalInput !== undefined) this.totalInput = p.totalInput;
+    if (p.budgetAmount !== undefined) this.budgetAmount = p.budgetAmount;
     if (p.durationIdx !== undefined) this.durationIdx = p.durationIdx;
     if (p.verifiedAccrued !== undefined)
       this.verifiedAccrued = p.verifiedAccrued;
@@ -213,7 +211,6 @@ class StreamingPaymentSession {
     this.windowId = windowId;
 
     // Re-arm loops if we are mid-stream (e.g. HMR / remount).
-    // We do NOT restart recurring poll here (no STREAM_POLL_MS fullnode hammering).
     // In the auto showcase the round is ended by the receiver's on-chain withdraw.
     if (
       this.screen === "dashboard" &&
@@ -228,7 +225,6 @@ class StreamingPaymentSession {
 
   dispose = () => {
     this.gen += 1;
-    this.stopPoll();
     this.stopTickLoop();
     this.stopVestWatch();
     this.stopAutoLoop();
@@ -240,53 +236,6 @@ class StreamingPaymentSession {
   };
 
   // ------------------- timers & loops -------------------
-
-  private startPoll() {
-    this.stopPoll();
-    // Only poll the fullnode while we have an active stream (meter + TPS driven locally).
-    // This dramatically reduces Sui RPC calls and avoids 429s.
-    if (!this.stream || this.stream.status !== StreamStatus.ACTIVE) return;
-
-    this.pollHandle = setInterval(() => {
-      if (!this.stream || this.stream.status !== StreamStatus.ACTIVE) {
-        this.stopPoll();
-        return;
-      }
-      void this.pollOnce();
-    }, STREAM_POLL_MS);
-    void this.pollOnce();
-  }
-
-  private stopPoll() {
-    if (this.pollHandle) {
-      clearInterval(this.pollHandle);
-      this.pollHandle = null;
-    }
-  }
-
-  private async pollOnce() {
-    const deps = this.deps;
-    if (!this.streamId || !deps?.client) return;
-    try {
-      const fresh = await fetchStream(deps.client, this.streamId);
-      if (!fresh) return;
-
-      const wasActive = this.stream?.status === StreamStatus.ACTIVE;
-      this.stream = fresh;
-
-      if (wasActive && fresh.status !== StreamStatus.ACTIVE) {
-        // Stream reached terminal state (cancelled / completed)
-        this.stopPoll();
-        this.stopTickLoop();
-        this.stopVestWatch();
-        this.flushHeartbeat(true);
-        this.deps?.report.setActive?.(0);
-      }
-      this.patch({});
-    } catch {
-      // best-effort poll; ignore transient errors
-    }
-  }
 
   private startTickLoop() {
     this.stopTickLoop();
@@ -525,8 +474,8 @@ class StreamingPaymentSession {
 
   // ------------------- actions -------------------
 
-  setTotalInput = (v: string) => {
-    this.totalInput = v;
+  setBudgetAmount = (v: string) => {
+    this.budgetAmount = v;
     this.emit();
   };
 
@@ -555,7 +504,7 @@ class StreamingPaymentSession {
     if (!deps?.account || !deps.signExec || !deps.prepareStake) return;
     if (isSessionTxPhase(this.phase)) return;
 
-    const total = parseMtps(this.totalInput);
+    const total = parseMtps(this.budgetAmount);
     if (total <= 0n) {
       this.patch({ error: "Enter a positive amount to stream." });
       return;
@@ -652,11 +601,12 @@ class StreamingPaymentSession {
     if (isSessionTxPhase(this.phase) || s.status !== StreamStatus.ACTIVE)
       return;
 
-    const added = topUpAmountFor(s, TOPUP_MS);
+    const durationMs = DURATIONS[this.durationIdx].ms;
+
+    const added = topUpAmountFor(s, durationMs);
     if (added <= 0n) return;
 
     this.patch({ phase: "toppingUp" });
-
     this.gen += 1;
     const myGen = this.gen;
 
@@ -667,7 +617,7 @@ class StreamingPaymentSession {
         streamId: this.streamId,
         fundsCoinId,
         addedAmount: added,
-        addedDurationMs: TOPUP_MS,
+        addedDurationMs: durationMs,
       });
 
       const res = await deps.signExec(tx);
@@ -700,7 +650,11 @@ class StreamingPaymentSession {
       });
     } catch (e: any) {
       if (this.gen !== myGen) return;
-      this.patch({ phase: "streaming", error: String(e?.message ?? e) });
+
+      this.patch({
+        phase: "streaming",
+        error: String(e?.message ?? e),
+      });
     }
   };
 
@@ -730,7 +684,6 @@ class StreamingPaymentSession {
       };
 
       this.flushHeartbeat(true);
-      this.stopPoll();
       this.stopTickLoop();
       this.stopVestWatch();
 
@@ -757,7 +710,6 @@ class StreamingPaymentSession {
     if (this.screen === "lobby" && !this.streamId) return;
 
     this.gen += 1;
-    this.stopPoll();
     this.stopTickLoop();
     this.stopVestWatch();
     this.flushHeartbeat(true);
@@ -842,8 +794,8 @@ export function useStreamingPaymentSession(windowId: string) {
 
   // Live derived values (not stored in snap to avoid duplication)
   const formRate = (() => {
-    const tot = parseMtps(snap.totalInput || "0");
-    const d = DURATIONS[snap.durationIdx] ?? DURATIONS[0];
+    const tot = parseMtps(snap.budgetAmount || "0");
+    const d = DURATIONS[snap.durationIdx];
     return d.ms > 0n ? (tot * 1000n) / d.ms : 0n;
   })();
 
@@ -865,7 +817,7 @@ export function useStreamingPaymentSession(windowId: string) {
     busy,
 
     // form controls
-    setTotalInput: session.setTotalInput,
+    setBudgetAmount: session.setBudgetAmount,
     setDurationIdx: session.setDurationIdx,
 
     // actions

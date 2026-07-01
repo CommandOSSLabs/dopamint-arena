@@ -1,5 +1,5 @@
 import { useStreamingPaymentSession } from "../../hooks/useStreamingPaymentSession";
-import { DURATIONS, formatMtps } from "../../utils";
+import { DURATIONS, formatMtps, MINIMUM_AMOUNT } from "../../utils";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -38,11 +38,20 @@ export function StreamingPaymentLobby({ session }: StreamingPaymentLobbyProps) {
                 <input
                   type="number"
                   inputMode="decimal"
-                  min="0"
-                  value={session.totalInput}
-                  onChange={(e) => session.setTotalInput(e.target.value)}
+                  min={MINIMUM_AMOUNT}
+                  value={session.budgetAmount}
+                  onChange={(e) => session.setBudgetAmount(e.target.value)}
                   disabled={session.busy}
                   className="w-full min-w-0 bg-transparent px-2 py-1.5 text-sm outline-none"
+                  onBlur={({ currentTarget }) => {
+                    const value = currentTarget.value;
+
+                    if (Number(value) < Number(MINIMUM_AMOUNT)) {
+                      currentTarget.value = MINIMUM_AMOUNT;
+
+                      session.setBudgetAmount(currentTarget.value);
+                    }
+                  }}
                 />
 
                 <span className="px-2 text-[11px] text-muted-foreground">

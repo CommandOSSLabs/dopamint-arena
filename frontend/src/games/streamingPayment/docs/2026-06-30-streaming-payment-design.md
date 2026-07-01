@@ -179,7 +179,7 @@ stream (`AUTO_TICK_INTERVAL_MS` = 5ms) while UI may show only ~1–2 **MTPS/s** 
 | `screen` | `"lobby"` \| `"dashboard"` (no `thankYou`) |
 | `phase` | Typed lifecycle — see table below (source of truth; no `busy` on snapshot) |
 | `busy` (hook) | Derived boolean — `creating` \| `toppingUp` \| `cancelling`; UI disables only |
-| `totalInput` / `durationIdx` | Lobby form |
+| `budgetAmount` / `durationIdx` | Lobby form |
 | `autoMode` | Default **true** — auto-repeat loop |
 | `vestComplete` | Clock vest done; drives completion banner |
 | `streamId` / `meta` / `stream` / `ledger` | Active round |
@@ -219,7 +219,7 @@ button: `phase === "creating" ? "Creating stream" : "Start stream"`).
 
 | Field | Value | Notes |
 |-------|-------|-------|
-| Default total | **100 MTPS** | Lobby `totalInput` default |
+| Default total | **100 MTPS** | Lobby `budgetAmount` default |
 | Durations | **1 / 3 / 5 minutes** | `DURATIONS[durationIdx]` |
 | Top-up extension | **+1 minute** | `TOPUP_MS`; amount from `topUpAmountFor` |
 | Recipient (interim) | Contractor name + ephemeral B address | Per-stream local keypair |
