@@ -117,11 +117,38 @@ swaps, so `arena_anchor` / `party_driver` change only at the constructor.
 `/settle` route, and the on-chain call are identical; only the bot's internal root
 derivation differs. Zero FE / wire / route change.
 
-### Pillar 2 — Durable chunked S3 archive (sequential objects + manifest)
+### Pillar 2 — S3 as the verification source (read-redirect), Walrus synced async
 
-Extend the recorder to a `StreamingArchiveRecorder` (P1 accumulator + a chunk writer) that
-**streams the archive to S3 as immutable sequential objects during play**. Best-practice
-per the S3 research (§9): **sequential `PutObject`, not multipart.**
+> **SUPERSEDES the streaming design below (2026-07-01).** The bot-streams-chunks mechanism
+> was dropped: it serves no game that verifies. Verification only exists for games that
+> *settle* (they have an on-chain root to check against) — and those are the *small* ones,
+> already archived whole. The *large* game (world-canvas) never settles → never verifies,
+> so streaming it produces un-anchored dead chunks. And a verification source must be the
+> **authoritative co-signed FE body**, not the bot's independent re-derivation (divergence
+> risk, heightened by the ACK-resend WIP). The chunked/streaming detail below is retained
+> only for its S3 best-practice rationale; it is **not** the implementation.
+
+The chosen outcome ("the explorer verifies from S3") is achieved by a small read-redirect,
+because the settle route **already** archives the whole co-signed body to S3
+(`routes.rs:448-463`, key `{prefix}transcripts/{tunnel}/{tx_digest}.bin`, byte-identical to
+the Walrus blob). So:
+
+- **Explorer reads S3 primary.** `GET /v1/settlements/:digest/transcript`
+  (`backend/explorer/src/api.rs:70`) does an S3 `GetObject` at
+  `{prefix}transcripts/{row.tunnel_id}/{digest}.bin` (both fields are on `SettlementRow`,
+  `backend/shared/src/lib.rs:65-79`) and returns those bytes; the browser verifies them
+  exactly as it verifies the Walrus blob today (same bytes). **Dual-read:** fall back to the
+  Walrus aggregator when the S3 object is absent, so the cutover can't regress verification.
+- **New explorer S3 access.** `backend/explorer` has no AWS SDK today — add `aws-sdk-s3` +
+  `aws-config`, an `Option<S3TranscriptReader>` on `ApiState` (behind a `TranscriptReader`
+  trait so it's fake-testable), env `S3_TRANSCRIPTS_BUCKET`/`S3_TRANSCRIPTS_PREFIX`, and IAM
+  `s3:GetObject` on the transcripts bucket for the explorer API task role
+  (`infra/src/components/ExplorerServices.ts`).
+- **S3 becomes primary, Walrus async (later phase).** Make the settle-route S3 write
+  reliable (awaited) and move the Walrus upload off the hot path into an **async sidecar**
+  (S3→Walrus replication worker with retries) — then retire Walrus-on-settle.
+
+Everything from here to the end of Pillar 2 is the **superseded** streaming design:
 
 Why not multipart: uploaded parts are **not a readable object until
 `CompleteMultipartUpload`** — so an abandoned stream (our dominant lifecycle) would archive
@@ -240,12 +267,17 @@ separate ADR if world-canvas provenance / fund-settlement becomes a product requ
 
 ## 9. Phasing
 
-- **P1 — streaming Merkle recorder** *(ship first; resolves the OOM)*: swap at
-  `colocated.rs:260` + golden parity + RAM-bound tests. No S3 / FE / wire / settle-route
-  changes. Surgical.
-- **P2 — chunked S3 archive**: `StreamingArchiveRecorder` (sequential 512 KiB objects,
-  timer+size flush, semaphore, graceful drain, `Crc32C`), manifest sealing, settle-route
-  swap, verify-path update. Backend-only.
+- **P1 — streaming Merkle recorder** — **DONE** (committed): swap at `colocated.rs`
+  (`StreamingRootRecorder`) + golden parity + RAM-bound tests. Resolves the server OOM. No
+  S3 / FE / wire / settle-route changes.
+- **P2 — explorer verifies from S3 (read-redirect), S3 primary**: the explorer `/transcript`
+  endpoint reads the S3 object (`GetObject` at the deterministic key) primary, falling back
+  to Walrus; add `aws-sdk-s3` + a fake-testable `TranscriptReader` to `backend/explorer`,
+  config, and IAM `s3:GetObject`. No streaming, no recorder change. (Supersedes the dropped
+  chunked-streaming design — see Pillar 2.)
+- **P3 — S3-primary write + async Walrus sidecar**: make the settle-route S3 write reliable
+  (awaited); move Walrus off the hot path into an S3→Walrus replication sidecar with
+  retries; retire Walrus-on-settle.
 
 ## 10. References (S3 streaming best-practice)
 
