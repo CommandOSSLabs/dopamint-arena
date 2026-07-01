@@ -15,6 +15,9 @@ pub struct ApiState {
     pub store: Arc<dyn SettlementStore>,
     pub walrus_aggregator_url: String,
     pub http: reqwest::Client,
+    /// S3 is the primary transcript source (the settle route archives the co-signed body
+    /// there); `None` when unconfigured → Walrus-only. Missing objects fall back to Walrus.
+    pub s3: Option<Arc<dyn crate::s3read::TranscriptReader>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -65,18 +68,35 @@ async fn detail(State(s): State<ApiState>, Path(digest): Path<String>) -> Respon
     }
 }
 
-/// Proxy the Walrus transcript blob so the browser fetches it same-origin (and we can cache
-/// / shield the public aggregator). 404 when the settlement has no archived transcript.
+/// Serve the archived transcript. **S3 primary** — the settle route archives the co-signed
+/// settle body to S3 at a deterministic key; we read it back so verification (client-side)
+/// runs on the same bytes. Falls back to proxying the **Walrus** blob when S3 is unconfigured
+/// or the object is absent (cutover safety). 404 when neither has it.
 async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Response {
-    let blob_id = match s.store.get(&digest).await {
-        Ok(Some(row)) => row.walrus_blob_id,
+    let row = match s.store.get(&digest).await {
+        Ok(Some(row)) => row,
         Ok(None) => return (StatusCode::NOT_FOUND, "no such settlement").into_response(),
         Err(e) => {
             tracing::error!(error = %e, "settlement store error");
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
         }
     };
-    let Some(blob_id) = blob_id else {
+    if let Some(s3) = &s.s3 {
+        match s3.read(&row.tunnel_id, &digest).await {
+            Ok(Some(bytes)) => {
+                return (
+                    [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                    bytes,
+                )
+                    .into_response();
+            }
+            Ok(None) => {} // not in S3 (yet) → fall back to Walrus
+            Err(e) => {
+                tracing::warn!(error = %e, digest, "s3 transcript read failed; trying walrus");
+            }
+        }
+    }
+    let Some(blob_id) = row.walrus_blob_id else {
         return (
             StatusCode::NOT_FOUND,
             "settlement has no archived transcript",
@@ -200,6 +220,13 @@ mod tests {
     use tower::ServiceExt; // oneshot
 
     fn state_with(rows: Vec<SettlementRow>) -> ApiState {
+        state_with_s3(rows, None)
+    }
+
+    fn state_with_s3(
+        rows: Vec<SettlementRow>,
+        s3: Option<Arc<dyn crate::s3read::TranscriptReader>>,
+    ) -> ApiState {
         let store = InMemorySettlementStore::new();
         for r in rows {
             futures::executor::block_on(store.upsert(r)).unwrap(); // inherent upsert, before Arc<dyn>
@@ -208,6 +235,7 @@ mod tests {
             store: Arc::new(store),
             walrus_aggregator_url: "https://agg.example".into(),
             http: reqwest::Client::new(),
+            s3,
         }
     }
 
@@ -319,6 +347,47 @@ mod tests {
     #[tokio::test]
     async fn transcript_404_when_no_blob() {
         let app = router(state_with(vec![settled("a", 10)])); // walrus_blob_id None
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements/a/transcript")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn transcript_reads_from_s3_when_present() {
+        let mut objects = std::collections::HashMap::new();
+        objects.insert("0xtun/a".to_string(), b"\x02settle-body-bytes".to_vec());
+        let s3 = Arc::new(crate::s3read::FakeTranscriptReader { objects })
+            as Arc<dyn crate::s3read::TranscriptReader>;
+        let app = router(state_with_s3(vec![settled("a", 10)], Some(s3)));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements/a/transcript")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"\x02settle-body-bytes");
+    }
+
+    #[tokio::test]
+    async fn transcript_falls_back_to_walrus_path_when_s3_misses() {
+        // S3 configured but empty and the row has no walrus blob → the walrus branch is taken
+        // and 404s on the missing blob, proving the S3-miss fallthrough (not an S3 hit).
+        let s3 = Arc::new(crate::s3read::FakeTranscriptReader {
+            objects: std::collections::HashMap::new(),
+        }) as Arc<dyn crate::s3read::TranscriptReader>;
+        let app = router(state_with_s3(vec![settled("a", 10)], Some(s3)));
         let res = app
             .oneshot(
                 Request::builder()

@@ -24,11 +24,30 @@ async fn main() -> anyhow::Result<()> {
 
     let database_url = std::env::var("DATABASE_URL")?;
     let store = Arc::new(shared::postgres::PgSettlementStore::connect(&database_url).await?);
+    // S3 is the primary transcript source when configured (the settle route archives the
+    // co-signed body there); Walrus is the fallback. Region/credentials come from the
+    // environment via the AWS default provider chain.
+    let s3: Option<Arc<dyn explorer::s3read::TranscriptReader>> =
+        match std::env::var("S3_TRANSCRIPTS_BUCKET") {
+            Ok(bucket) if !bucket.is_empty() => {
+                let cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&cfg);
+                let prefix = std::env::var("S3_TRANSCRIPTS_PREFIX").unwrap_or_default();
+                tracing::info!(%bucket, "explorer: transcripts read from S3 (primary)");
+                Some(Arc::new(explorer::s3read::S3TranscriptReader::new(
+                    client, bucket, prefix,
+                )))
+            }
+            _ => None,
+        };
     let state = ApiState {
         store,
         walrus_aggregator_url: std::env::var("WALRUS_AGGREGATOR_URL")
             .unwrap_or_else(|_| "https://aggregator.walrus-testnet.walrus.space".into()),
         http: reqwest::Client::new(),
+        s3,
     };
 
     // Bridge Redis pub/sub -> a broadcast channel the SSE handler subscribes to.
