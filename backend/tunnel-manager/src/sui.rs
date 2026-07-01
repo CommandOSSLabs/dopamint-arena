@@ -1726,6 +1726,47 @@ mod tests {
         );
     }
 
+    // A BATCHED open (N games in one PTB) must clear the same sponsor allowlist as the single open:
+    // N repetitions of the allowlisted calls + N sender-sourced `redeem_funds` withdrawals, all under
+    // one shared party-B sender. The gas budget must scale to the whole PTB (4 commands × N games),
+    // not the single-open's 4 — else a batch under-funds and reverts on-chain.
+    #[test]
+    fn arena_batch_open_kind_is_sponsorable_and_scales_budget_by_game_count() {
+        use crate::fleet::arena_opener::build_arena_open_kind_many;
+        let pkg = Address::from_str("0xabc").unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
+        let bot = Address::from_str("0xb0b").unwrap();
+        let settler = Address::from_str("0x5e7").unwrap();
+        let games = vec![
+            (Address::from_str("0x11").unwrap(), vec![0xa1; 32], vec![0xb1; 32], 1000u64),
+            (Address::from_str("0x22").unwrap(), vec![0xa2; 32], vec![0xb2; 32], 2000u64),
+            (Address::from_str("0x33").unwrap(), vec![0xa3; 32], vec![0xb3; 32], 3000u64),
+        ];
+        let kind = build_arena_open_kind_many(pkg, coin.clone(), bot, &games).unwrap();
+        let kind_bytes = bcs::to_bytes(&kind).unwrap();
+        let tx = build_sponsored_tx(
+            pkg,
+            &coin,
+            &[],
+            bot,
+            settler,
+            &kind_bytes,
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
+        )
+        .expect("batched arena open passes the sponsor allowlist (all calls allowlisted, sender-sourced stake)");
+        assert_eq!(tx.sender, bot, "one shared party-B sender for the batch");
+        assert_eq!(tx.gas_payment.owner, settler, "settler still pays the gas");
+        assert!(tx.gas_payment.objects.is_empty(), "SIP-58 address-balance gas");
+        assert_eq!(
+            tx.gas_payment.budget,
+            4 * 3 * SPONSOR_GAS_BUDGET_PER_COMMAND,
+            "budget scales to 4 commands × 3 games, not a single open's 4"
+        );
+    }
+
     // A batched open packs many commands into one PTB; the gas budget must scale with the command
     // count so the dry-run doesn't reject the batch as under-funded — the bug a flat budget caused.
     #[test]

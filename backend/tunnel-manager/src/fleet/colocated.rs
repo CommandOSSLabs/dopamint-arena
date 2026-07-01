@@ -46,10 +46,6 @@ pub struct ArenaSlot {
     pub eph_secret_hex: String,
 }
 
-/// Mint one arena match recipe (no spawn, no pool reservation). The caller (`arena_allocate`) uses
-/// `eph_pubkey`/`bot_address` to open+fund the tunnel and persists the full recipe via
-/// `put_arena_reservation`. The match id is a UUID (globally unique — it is a shared store key that
-/// any instance may claim, unlike the old per-instance `arena_N` counter which would collide).
 /// Test convenience: check out a fresh address AND mint a recipe in one call. Production goes through
 /// `checkout_bot_address` + `reserve_arena_slot_on` so a whole allocate batch shares one seat-B
 /// address (Design 1); this single-address-per-slot shape is only what the tests want.
