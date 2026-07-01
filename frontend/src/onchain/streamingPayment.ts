@@ -7,6 +7,7 @@
 import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { MTPS_COIN_TYPE } from "./mtps";
+import { redeemStakeFromBalance, type StakeFromBalance } from "./tunnelTx";
 
 export const STREAMING_PAYMENT_PACKAGE_ID =
   import.meta.env?.VITE_STREAMING_PAYMENT_PACKAGE_ID ?? "";
@@ -44,11 +45,12 @@ export function streamStatusName(status: number): string {
 // ============================================
 
 /**
- * Build the create tx: split `totalAmount` MTPS off `fundsCoinId` as the stream's escrow, call
- * `create_stream` (returns the object), then share it so the recipient can withdraw against it.
+ * Build the create tx: withdraw `totalAmount` MTPS from the sender's SIP-58 address balance
+ * (ADR-0013) as the stream's escrow, call `create_stream`, then share it so the recipient can
+ * withdraw against it. Pair with {@link ensureMtpsAddressBalance} off the hot path.
  */
 export function buildCreateStreamTx(opts: {
-  fundsCoinId: string;
+  stakeFromBalance: StakeFromBalance;
   totalAmount: bigint;
   recipient: string;
   durationMs: bigint;
@@ -56,9 +58,7 @@ export function buildCreateStreamTx(opts: {
 }): Transaction {
   const tx = new Transaction();
 
-  const [funds] = tx.splitCoins(tx.object(opts.fundsCoinId), [
-    tx.pure.u64(opts.totalAmount),
-  ]);
+  const funds = redeemStakeFromBalance(tx, opts.stakeFromBalance);
 
   tx.moveCall({
     target: target("create_stream"),
@@ -106,14 +106,12 @@ export function buildCancelStreamTx(streamId: string): Transaction {
  */
 export function buildTopUpTx(opts: {
   streamId: string;
-  fundsCoinId: string;
+  stakeFromBalance: StakeFromBalance;
   addedAmount: bigint;
   addedDurationMs: bigint;
 }): Transaction {
   const tx = new Transaction();
-  const [funds] = tx.splitCoins(tx.object(opts.fundsCoinId), [
-    tx.pure.u64(opts.addedAmount),
-  ]);
+  const funds = redeemStakeFromBalance(tx, opts.stakeFromBalance);
   tx.moveCall({
     target: target("top_up"),
     typeArguments: [MTPS_COIN_TYPE],

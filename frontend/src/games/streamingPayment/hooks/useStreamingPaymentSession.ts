@@ -28,6 +28,7 @@ import {
   type StreamFields,
   type StreamReader,
 } from "@/onchain/streamingPayment";
+import { MTPS_COIN_TYPE } from "@/onchain/mtps";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 
@@ -56,7 +57,9 @@ interface SessionDeps {
   account: string | undefined;
   client: StreamReader;
   signExec: ReturnType<typeof useSponsoredSignExec>["signExec"];
-  prepareStake: ReturnType<typeof useSponsoredSignExec>["prepareStake"];
+  ensureStakeBalance: ReturnType<
+    typeof useSponsoredSignExec
+  >["ensureStakeBalance"];
 }
 
 interface StreamingSnapshot {
@@ -501,7 +504,7 @@ class StreamingPaymentSession {
 
   startStream = async () => {
     const deps = this.deps;
-    if (!deps?.account || !deps.signExec || !deps.prepareStake) return;
+    if (!deps?.account || !deps.signExec || !deps.ensureStakeBalance) return;
     if (isSessionTxPhase(this.phase)) return;
 
     const total = parseMtps(this.budgetAmount);
@@ -529,11 +532,10 @@ class StreamingPaymentSession {
     });
 
     try {
-      // Get an MTPS coin (or address-balance funded) with >= total
-      const fundsCoinId = await deps.prepareStake(total);
+      await deps.ensureStakeBalance(total);
 
       const tx = buildCreateStreamTx({
-        fundsCoinId,
+        stakeFromBalance: { amount: total, coinType: MTPS_COIN_TYPE },
         totalAmount: total,
         recipient,
         durationMs: dur,
@@ -597,7 +599,8 @@ class StreamingPaymentSession {
   topUp = async () => {
     const deps = this.deps;
     const s = this.stream;
-    if (!deps?.signExec || !deps.prepareStake || !this.streamId || !s) return;
+    if (!deps?.signExec || !deps.ensureStakeBalance || !this.streamId || !s)
+      return;
     if (isSessionTxPhase(this.phase) || s.status !== StreamStatus.ACTIVE)
       return;
 
@@ -611,11 +614,11 @@ class StreamingPaymentSession {
     const myGen = this.gen;
 
     try {
-      const fundsCoinId = await deps.prepareStake(added);
+      await deps.ensureStakeBalance(added);
 
       const tx = buildTopUpTx({
         streamId: this.streamId,
-        fundsCoinId,
+        stakeFromBalance: { amount: added, coinType: MTPS_COIN_TYPE },
         addedAmount: added,
         addedDurationMs: durationMs,
       });
@@ -779,7 +782,7 @@ export function useStreamingPaymentSession(windowId: string) {
     account: account?.address,
     client: suiClient as unknown as StreamReader,
     signExec: sponsored.signExec,
-    prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
@@ -802,10 +805,7 @@ export function useStreamingPaymentSession(windowId: string) {
   const ratePerSecondVal = snap.stream ? ratePerSecond(snap.stream) : 0n;
   const recipientName = snap.meta?.recipientName ?? FIXED_RECIPIENT_NAME;
   const recipientAddress = snap.meta?.recipientAddress ?? FIXED_RECIPIENT;
-  const busy =
-    snap.phase === "creating" ||
-    snap.phase === "toppingUp" ||
-    snap.phase === "cancelling";
+  const busy = isSessionTxPhase(snap.phase);
 
   return {
     ...snap,
