@@ -47,7 +47,7 @@ pub(crate) async fn play_series(
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     let initial_balance = current_initial_balance();
-    let stake_per_game = initial_balance.min(100);
+    let stake_per_game = 0;
     play_with_strategies(
         BattleshipSeries::new(tunnel_id, stake_per_game),
         BattleshipSeriesStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5, stake_per_game),

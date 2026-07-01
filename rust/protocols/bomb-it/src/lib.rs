@@ -915,6 +915,10 @@ impl Protocol for BombItSeries {
         self.inner.is_terminal(&state.inner) && !self.can_fund_next_game(state)
     }
 
+    fn can_gracefully_close(&self, state: &Self::State) -> bool {
+        self.inner.is_terminal(&state.inner)
+    }
+
     fn sample_move(
         &self,
         state: &Self::State,

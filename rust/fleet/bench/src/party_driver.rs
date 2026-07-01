@@ -585,7 +585,10 @@ pub async fn play_tunnel_seeded<C: FrameCodec<BjMove> + Default>(
 ) -> TunnelOutcome {
     // SeededBlackjack carries the card_seed into initial_state.
     play_protocol_tunnel_with_strategies::<SeededBlackjack, C, BlackjackStrategy, BlackjackStrategy>(
-        SeededBlackjack { card_seed },
+        SeededBlackjack {
+            card_seed,
+            round_cap: tunnel_blackjack::ROUND_CAP,
+        },
         BlackjackStrategy,
         BlackjackStrategy,
         kit,
@@ -642,6 +645,7 @@ pub async fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
 #[derive(Clone)]
 pub(crate) struct SeededBlackjack {
     pub(crate) card_seed: Option<u64>,
+    pub(crate) round_cap: u64,
 }
 
 impl Protocol for SeededBlackjack {
@@ -674,7 +678,7 @@ impl Protocol for SeededBlackjack {
     }
 
     fn is_terminal(&self, s: &Self::State) -> bool {
-        Blackjack.is_terminal(s)
+        tunnel_blackjack::is_terminal_with_round_cap(s, self.round_cap)
     }
 
     fn sample_move(
@@ -683,7 +687,24 @@ impl Protocol for SeededBlackjack {
         seat: Seat,
         rng: &mut dyn FnMut() -> f64,
     ) -> Option<Self::Move> {
-        Blackjack.sample_move(state, seat, rng)
+        let _ = rng;
+        tunnel_blackjack::plan_with_round_cap(state, seat, self.round_cap)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SeededBlackjackStrategy {
+    pub(crate) round_cap: u64,
+}
+
+impl MoveStrategy<SeededBlackjack> for SeededBlackjackStrategy {
+    async fn plan_move(
+        &mut self,
+        state: &BjState,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<BjMove> {
+        tunnel_blackjack::plan_with_round_cap(state, seat, self.round_cap)
     }
 }
 
@@ -776,7 +797,10 @@ mod tests {
             BlackjackStrategy,
             BlackjackStrategy,
         >(
-            SeededBlackjack { card_seed: None },
+            SeededBlackjack {
+                card_seed: None,
+                round_cap: tunnel_blackjack::ROUND_CAP,
+            },
             BlackjackStrategy,
             BlackjackStrategy,
             &kit,
@@ -813,7 +837,10 @@ mod tests {
             BlackjackStrategy,
             BlackjackStrategy,
         >(
-            SeededBlackjack { card_seed: None },
+            SeededBlackjack {
+                card_seed: None,
+                round_cap: tunnel_blackjack::ROUND_CAP,
+            },
             BlackjackStrategy,
             BlackjackStrategy,
             &kit,
@@ -858,7 +885,10 @@ mod tests {
             BlackjackStrategy,
             BlackjackStrategy,
         >(
-            SeededBlackjack { card_seed: None },
+            SeededBlackjack {
+                card_seed: None,
+                round_cap: tunnel_blackjack::ROUND_CAP,
+            },
             BlackjackStrategy,
             BlackjackStrategy,
             &kit,

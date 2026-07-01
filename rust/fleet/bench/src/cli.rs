@@ -75,6 +75,12 @@ pub enum ColorMode {
     Never,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MoveTarget {
+    Count(u64),
+    Max,
+}
+
 impl ScenarioMode {
     pub fn card_seed(self, tunnel_index: u64) -> Option<u64> {
         match self {
@@ -88,8 +94,8 @@ impl ScenarioMode {
 pub struct BenchOpts {
     pub workers: usize,
     pub duration_secs: u64,
-    /// Optional global move cap across the benchmark run.
-    pub moves: Option<u64>,
+    /// Optional graceful move target across the benchmark run.
+    pub moves: Option<MoveTarget>,
     /// Per-seat initial tunnel balance. Total Sui open deposit is twice this.
     pub initial_balance: u64,
     /// Tunnel lifecycle pool size: `auto` or a fixed in-flight count.
@@ -206,9 +212,9 @@ struct Raw {
     /// Duration before new tunnel launches stop and in-flight tunnels drain.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
-    /// Optional global move cap across the benchmark run.
-    #[arg(long = "moves", value_name = "N")]
-    moves: Option<u64>,
+    /// Optional graceful move target across the benchmark run, or `max`.
+    #[arg(long = "moves", value_name = "N|max")]
+    moves: Option<String>,
     /// Per-seat initial tunnel balance. Total open deposit is twice this.
     #[arg(long = "initial-balance", default_value_t = 200, value_name = "N")]
     initial_balance: u64,
@@ -393,6 +399,19 @@ fn resolve_protocol_ids(raw: &str) -> Result<Vec<&'static str>, String> {
     Ok(resolved)
 }
 
+fn parse_move_target(raw: &str) -> Result<MoveTarget, String> {
+    if raw == "max" {
+        return Ok(MoveTarget::Max);
+    }
+    let moves = raw
+        .parse::<u64>()
+        .map_err(|_| format!("--moves must be a positive integer or 'max', got {raw}"))?;
+    if moves == 0 {
+        return Err("--moves must be greater than 0".to_string());
+    }
+    Ok(MoveTarget::Count(moves))
+}
+
 fn minimum_initial_balance(protocol_id: &str) -> u64 {
     match protocol_id {
         BLACKJACK_BET_V1 => BLACKJACK_BET_MIN_BET,
@@ -463,9 +482,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     if workers == 0 {
         return Err("--workers must be at least 1".to_string());
     }
-    if raw.moves == Some(0) {
-        return Err("--moves must be greater than 0".to_string());
-    }
+    let moves = raw.moves.as_deref().map(parse_move_target).transpose()?;
     validate_initial_balance(&protocol_ids, raw.initial_balance)?;
 
     let signer_init_mode = match raw.signer_init_mode.as_str() {
@@ -654,7 +671,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
-        moves: raw.moves,
+        moves,
         initial_balance: raw.initial_balance,
         tunnel_concurrency,
         per_move_latency: raw.per_move_latency,
@@ -701,7 +718,14 @@ mod tests {
     fn parses_global_move_limit() {
         let opts = parse_v(&["--moves", "1000000"]).unwrap();
 
-        assert_eq!(opts.moves, Some(1_000_000));
+        assert_eq!(opts.moves, Some(MoveTarget::Count(1_000_000)));
+    }
+
+    #[test]
+    fn parses_max_move_target() {
+        let opts = parse_v(&["--moves", "max"]).unwrap();
+
+        assert_eq!(opts.moves, Some(MoveTarget::Max));
     }
 
     #[test]

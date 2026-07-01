@@ -44,8 +44,15 @@ pub struct DriverRunControl {
     inner: Arc<DriverRunControlInner>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverStopMode {
+    Hard,
+    Graceful,
+}
+
 struct DriverRunControlInner {
     move_limit: Option<u64>,
+    stop_mode: DriverStopMode,
     move_reservations: AtomicU64,
     moves: AtomicU64,
     stop_tx: watch::Sender<bool>,
@@ -63,6 +70,7 @@ impl DriverRunControl {
         Self {
             inner: Arc::new(DriverRunControlInner {
                 move_limit: None,
+                stop_mode: DriverStopMode::Hard,
                 move_reservations: AtomicU64::new(0),
                 moves: AtomicU64::new(0),
                 stop_tx,
@@ -75,6 +83,33 @@ impl DriverRunControl {
         Self {
             inner: Arc::new(DriverRunControlInner {
                 move_limit: Some(move_limit),
+                stop_mode: DriverStopMode::Hard,
+                move_reservations: AtomicU64::new(0),
+                moves: AtomicU64::new(0),
+                stop_tx,
+            }),
+        }
+    }
+
+    pub fn graceful_unbounded() -> Self {
+        let (stop_tx, _) = watch::channel(false);
+        Self {
+            inner: Arc::new(DriverRunControlInner {
+                move_limit: None,
+                stop_mode: DriverStopMode::Graceful,
+                move_reservations: AtomicU64::new(0),
+                moves: AtomicU64::new(0),
+                stop_tx,
+            }),
+        }
+    }
+
+    pub fn with_graceful_move_limit(move_limit: u64) -> Self {
+        let (stop_tx, _) = watch::channel(move_limit == 0);
+        Self {
+            inner: Arc::new(DriverRunControlInner {
+                move_limit: Some(move_limit),
+                stop_mode: DriverStopMode::Graceful,
                 move_reservations: AtomicU64::new(0),
                 moves: AtomicU64::new(0),
                 stop_tx,
@@ -103,7 +138,20 @@ impl DriverRunControl {
             > self.inner.moves.load(Ordering::Acquire)
     }
 
+    fn is_graceful(&self) -> bool {
+        self.inner.stop_mode == DriverStopMode::Graceful
+    }
+
+    fn is_hard_stopped(&self) -> bool {
+        self.stopped() && !self.is_graceful()
+    }
+
     fn reserve_move_proposal(&self) -> bool {
+        if self.is_graceful() {
+            self.inner.move_reservations.fetch_add(1, Ordering::AcqRel);
+            return true;
+        }
+
         let Some(move_limit) = self.inner.move_limit else {
             self.inner.move_reservations.fetch_add(1, Ordering::AcqRel);
             if self.stopped() {
@@ -137,8 +185,8 @@ impl DriverRunControl {
         }
     }
 
-    fn record_committed_move_observed_by(&self, seat: Seat) {
-        if seat != Seat::A {
+    fn record_committed_move(&self, observer: Seat, mover: Seat) {
+        if observer == mover {
             return;
         }
 
@@ -359,9 +407,17 @@ where
             if seat.is_terminal() {
                 break;
             }
+            if run_control.as_ref().is_some_and(|control| {
+                control.stopped()
+                    && control.is_graceful()
+                    && moves > 0
+                    && seat.can_gracefully_close()
+            }) {
+                break;
+            }
             if run_control
                 .as_ref()
-                .is_some_and(|control| control.stopped())
+                .is_some_and(DriverRunControl::is_hard_stopped)
             {
                 match Self::recv_or_stop(frame_transport, run_control.as_ref()).await? {
                     DriverRecv::Frame(bytes) => {
@@ -384,7 +440,7 @@ where
                             recorder.record(entry)?;
                         }
                         if let Some(control) = run_control.as_ref() {
-                            control.record_committed_move_observed_by(our_seat);
+                            control.record_committed_move(our_seat, our_seat.other());
                         }
                         continue;
                     }
@@ -429,7 +485,7 @@ where
                             recorder.record(entry)?;
                         }
                         if let Some(control) = run_control.as_ref() {
-                            control.record_committed_move_observed_by(our_seat);
+                            control.record_committed_move(our_seat, our_seat);
                         }
                     }
                     None => return Err(HarnessError::FrameTransport(FrameTransportError::Closed)),
@@ -458,7 +514,7 @@ where
                         recorder.record(entry)?;
                     }
                     if let Some(control) = run_control.as_ref() {
-                        control.record_committed_move_observed_by(our_seat);
+                        control.record_committed_move(our_seat, our_seat.other());
                     }
                 }
                 DriverRecv::Closed => {
@@ -547,7 +603,7 @@ where
 
         let mut stop_rx = run_control.subscribe();
         loop {
-            if run_control.stopped() {
+            if run_control.is_hard_stopped() {
                 if !run_control.has_outstanding_reserved_move() {
                     return Ok(DriverRecv::Stopped);
                 }
@@ -555,7 +611,7 @@ where
                     Ok(frame) => {
                         return match frame? {
                             Some(bytes) => Ok(DriverRecv::Frame(bytes)),
-                            None if run_control.stopped()
+                            None if run_control.is_hard_stopped()
                                 && !run_control.has_outstanding_reserved_move() =>
                             {
                                 Ok(DriverRecv::Stopped)
@@ -573,7 +629,7 @@ where
                 frame = frame_transport.recv() => {
                     return match frame? {
                         Some(bytes) => Ok(DriverRecv::Frame(bytes)),
-                        None if run_control.stopped() => Ok(DriverRecv::Stopped),
+                        None if run_control.is_hard_stopped() => Ok(DriverRecv::Stopped),
                         None => Ok(DriverRecv::Closed),
                     };
                 }
@@ -672,6 +728,10 @@ mod tests {
 
         fn is_terminal(&self, state: &Self::State) -> bool {
             state.moves >= 100
+        }
+
+        fn can_gracefully_close(&self, state: &Self::State) -> bool {
+            state.moves > 0 && state.moves % 3 == 0
         }
     }
 
@@ -912,6 +972,50 @@ mod tests {
         assert!(requests.iter().all(|r| r.party_b_balance == 100));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn graceful_move_limit_drains_until_protocol_close_boundary() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::with_graceful_move_limit(1);
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("drivers should stop at the first close boundary after the limit");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 3);
+        assert_eq!(out_b.moves, 3);
+        assert_eq!(run_control.moves(), 3);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+    }
+
     #[test]
     fn run_control_reserves_move_limit_exactly() {
         let run_control = DriverRunControl::with_move_limit(1);
@@ -920,7 +1024,7 @@ mod tests {
         assert!(!run_control.reserve_move_proposal());
         assert_eq!(run_control.moves(), 0);
 
-        run_control.record_committed_move_observed_by(Seat::A);
+        run_control.record_committed_move(Seat::B, Seat::A);
 
         assert_eq!(run_control.moves(), 1);
         assert!(run_control.stopped());

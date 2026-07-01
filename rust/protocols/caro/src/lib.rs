@@ -406,6 +406,10 @@ impl Protocol for CaroSeries {
         state.games_played + 1 >= state.max_games || !self.can_fund_next_game(&state.inner)
     }
 
+    fn can_gracefully_close(&self, state: &Self::State) -> bool {
+        self.inner.is_terminal(&state.inner)
+    }
+
     fn sample_move(
         &self,
         state: &Self::State,

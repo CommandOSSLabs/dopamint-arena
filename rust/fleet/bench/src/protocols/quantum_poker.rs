@@ -1,4 +1,6 @@
-use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
+use super::{
+    current_initial_balance, current_max_moves_per_tunnel, play_with_strategies, MAX_MOVES,
+};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -18,7 +20,7 @@ pub(crate) async fn play(
     let initial_balance = current_initial_balance();
     let ante = initial_balance.min(tunnel_quantum_poker::ANTE);
     play_with_strategies(
-        QuantumPoker::with_ante(3, ante),
+        QuantumPoker::with_ante(current_max_moves_per_tunnel(), ante),
         QuantumPokerStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
         QuantumPokerStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,

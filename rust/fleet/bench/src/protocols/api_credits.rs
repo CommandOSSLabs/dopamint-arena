@@ -15,7 +15,7 @@ pub(crate) async fn play(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let initial_balance = current_initial_balance();
-    let cost_per_call = initial_balance.min(10);
+    let cost_per_call = 1;
     play_with_strategies(
         ApiCredits::new(cost_per_call).expect("valid api credit cost"),
         ApiCreditsStrategy::new(cost_per_call).expect("valid api credit strategy"),

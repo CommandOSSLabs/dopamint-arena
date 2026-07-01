@@ -1,11 +1,15 @@
-use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
+use super::{
+    current_initial_balance, current_max_moves_per_tunnel, play_with_strategies, MAX_MOVES,
+};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SeatKit;
 use crate::party_driver::TunnelTelemetry;
-use crate::party_driver::{SeededBlackjack, SuiSponsoredBenchContext, TunnelOutcome};
+use crate::party_driver::{
+    SeededBlackjack, SeededBlackjackStrategy, SuiSponsoredBenchContext, TunnelOutcome,
+};
 use tunnel_blackjack::duel::BlackjackDuel;
-use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
-use tunnel_blackjack::{BlackjackDuelStrategy, BlackjackStrategy};
+use tunnel_blackjack::v2::{BlackjackV2WithRoundCap, BlackjackV2WithRoundCapStrategy};
+use tunnel_blackjack::BlackjackDuelStrategy;
 
 pub(crate) async fn play_bet(
     codec: FrameCodecKind,
@@ -20,9 +24,16 @@ pub(crate) async fn play_bet(
     // SeededBlackjack injects the card_seed into Protocol::initial_state,
     // replacing the old configure-hook approach.
     play_with_strategies(
-        SeededBlackjack { card_seed },
-        BlackjackStrategy,
-        BlackjackStrategy,
+        SeededBlackjack {
+            card_seed,
+            round_cap: current_max_moves_per_tunnel(),
+        },
+        SeededBlackjackStrategy {
+            round_cap: current_max_moves_per_tunnel(),
+        },
+        SeededBlackjackStrategy {
+            round_cap: current_max_moves_per_tunnel(),
+        },
         codec,
         anchor_mode,
         sui_context,
@@ -76,10 +87,17 @@ pub(crate) async fn play_v2(
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     let initial_balance = current_initial_balance();
+    let protocol = BlackjackV2WithRoundCap::new(current_max_moves_per_tunnel());
     play_with_strategies(
-        BlackjackV2,
-        BlackjackV2Strategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
-        BlackjackV2Strategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
+        protocol,
+        BlackjackV2WithRoundCapStrategy::new(
+            seed ^ 0xA5A5_5A5A_D0D0_1CE5,
+            current_max_moves_per_tunnel(),
+        ),
+        BlackjackV2WithRoundCapStrategy::new(
+            seed ^ 0x5A5A_A5A5_CAFE_BABE,
+            current_max_moves_per_tunnel(),
+        ),
         codec,
         anchor_mode,
         sui_context,

@@ -1,4 +1,6 @@
-use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
+use super::{
+    current_initial_balance, current_max_moves_per_tunnel, play_with_strategies, MAX_MOVES,
+};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -47,9 +49,10 @@ pub(crate) async fn play_series(
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
     let initial_balance = current_initial_balance();
-    let stake = initial_balance.min(100);
+    let stake = 0;
+    let max_games = current_max_moves_per_tunnel().max(1);
     play_with_strategies(
-        TicTacToeSeries::new(3, stake).expect("valid ttt series"),
+        TicTacToeSeries::new(max_games, stake).expect("valid ttt series"),
         TicTacToeSeriesStrategy::new(TicTacToeDifficulty::Perfect, seed as u32),
         TicTacToeSeriesStrategy::new(TicTacToeDifficulty::Perfect, (seed ^ 0x5A5A_A5A5) as u32),
         codec,

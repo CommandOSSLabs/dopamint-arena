@@ -503,4 +503,33 @@ mod tests {
         assert!(outcome.settle_ok, "cooperative stop still settles");
         assert_eq!(outcome.final_balances.sum(), 400);
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tic_tac_toe_series_uses_requested_continuation_cap() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let kit = SeatKit::new(&sa, &sb);
+
+        let outcome = play_tunnel_for(PlayTunnelRequest {
+            protocol_id: TIC_TAC_TOE_SERIES_V1,
+            codec: FrameCodecKind::Json,
+            card_seed: None,
+            run_control: None,
+            kit: &kit,
+            tunnel_id: "0x1",
+            initial_balance: DEFAULT_BALANCE,
+            max_moves_per_tunnel: 40,
+            anchor_mode: AnchorMode::Memory,
+            sui_context: None,
+            telemetry: TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            stage_windows: None,
+        })
+        .await;
+
+        assert!(outcome.moves > 29);
+        assert!(outcome.settle_ok, "natural series terminal still settles");
+    }
 }

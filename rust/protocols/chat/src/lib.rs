@@ -183,6 +183,10 @@ impl Protocol for Chat {
         false
     }
 
+    fn can_gracefully_close(&self, _state: &ChatState) -> bool {
+        true
+    }
+
     fn sample_move(
         &self,
         state: &ChatState,
@@ -203,5 +207,24 @@ impl Protocol for Chat {
             });
         }
         Some(ChatMove { text, tip: None })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_chat_state_is_gracefully_closeable() {
+        let protocol = Chat;
+        let ctx = TunnelContext {
+            tunnel_id: "0xchat".into(),
+            initial: Balances { a: 10, b: 10 },
+            seat: Seat::A,
+        };
+        let state = protocol.initial_state(&ctx);
+
+        assert!(protocol.can_gracefully_close(&state));
+        assert!(!protocol.is_terminal(&state));
     }
 }
