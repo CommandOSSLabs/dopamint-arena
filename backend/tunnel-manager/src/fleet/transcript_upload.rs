@@ -4,9 +4,10 @@
 //! [`S3StreamingRecorder`] wraps [`StreamingRootRecorder`] (the O(log N) root) and adds a small
 //! byte buffer. `record()` appends the 250 B settle-entry and, once the buffer crosses
 //! [`CHUNK_TARGET`], **spawns** a `put_chunk` — `record` is synchronous and runs on the per-move
-//! hot path, so it must never block on the S3 `PutObject`. `finish()` flushes the tail at settle
-//! or teardown. Chunk bytes go through the same [`encode_settle_entry`] as the settle body, so
-//! reassembled chunks reproduce exactly what the on-chain root commits to.
+//! hot path, so it must never block on the S3 `PutObject`. `finish()` flushes the tail and seals a
+//! [`TranscriptManifest`] indexing the chunks for reassembly. Chunk bytes go through the same
+//! [`encode_settle_entry`] as the settle body, so reassembled chunks reproduce exactly what the
+//! on-chain root commits to.
 
 use std::sync::{Arc, Mutex};
 
@@ -15,16 +16,22 @@ use tunnel_harness::{
     StreamingRootRecorder, Transcript, TranscriptEntry, TranscriptError, TranscriptRecorder,
     TranscriptSettleEntry,
 };
-use transcript_store::TranscriptChunkWriter;
+use transcript_store::{TranscriptChunkWriter, TranscriptManifest};
 
 /// Flush a chunk once the buffer reaches ~1 MB (~4000 entries). Bounds per-match RAM and caps
 /// `PutObject`s at ~⌈25 MB / 1 MB⌉ per match — one S3 call per ~4000 moves, never per move.
 const CHUNK_TARGET: usize = 1024 * 1024;
 
+/// Settle-body wire version recorded in the manifest (`tunnel_core::wire::SETTLE_BODY_VERSION`).
+const SETTLE_VERSION: u8 = 1;
+
 #[derive(Default)]
 struct ChunkBuf {
     bytes: Vec<u8>,
+    /// Next chunk sequence number; equals the total chunk count once the tail is flushed.
     seq: u32,
+    /// Cumulative bytes across all flushed chunks — sealed into the manifest's `total_bytes`.
+    total_bytes: u64,
 }
 
 /// Root recorder + streaming S3 uploader. Cheaply cloneable (Arc-shared state): one clone drives
@@ -53,22 +60,55 @@ impl S3StreamingRecorder {
         }
     }
 
-    /// Flush the remaining buffered entries as the final chunk. Call once at settle/teardown.
+    /// Flush the remaining buffered entries as the final chunk, then seal the manifest that indexes
+    /// the transcript for reassembly. Call once at settle/teardown.
     pub async fn finish(&self) {
         let Some(writer) = &self.writer else {
             return;
         };
-        let (seq, bytes) = {
+        // 1. Flush the tail chunk.
+        let tail = {
             let mut b = self.buf.lock().expect("chunk buf");
             if b.bytes.is_empty() {
+                None
+            } else {
+                let seq = b.seq;
+                b.seq += 1;
+                b.total_bytes += b.bytes.len() as u64;
+                Some((seq, std::mem::take(&mut b.bytes)))
+            }
+        };
+        if let Some((seq, bytes)) = tail {
+            if let Err(e) = writer.put_chunk(&self.tunnel_id, seq, &bytes).await {
+                tracing::warn!(tunnel = %self.tunnel_id, seq, error = %e, "transcript tail chunk upload failed");
+            }
+        }
+        // 2. Seal the manifest so a verifier reassembles by exact count (no LIST) + checks completeness.
+        let (chunk_count, total_bytes) = {
+            let b = self.buf.lock().expect("chunk buf");
+            (b.seq, b.total_bytes)
+        };
+        if chunk_count == 0 {
+            return; // nothing was ever streamed (empty transcript)
+        }
+        let root = match <StreamingRootRecorder as TranscriptRecorder<()>>::transcript_root(
+            &self.inner,
+            &self.tunnel_id,
+        ) {
+            Ok(root) => root,
+            Err(e) => {
+                tracing::warn!(tunnel = %self.tunnel_id, error = %e, "transcript root unavailable; manifest not sealed");
                 return;
             }
-            let seq = b.seq;
-            b.seq += 1;
-            (seq, std::mem::take(&mut b.bytes))
         };
-        if let Err(e) = writer.put_chunk(&self.tunnel_id, seq, &bytes).await {
-            tracing::warn!(tunnel = %self.tunnel_id, seq, error = %e, "transcript tail chunk upload failed");
+        let manifest = TranscriptManifest::new(
+            chunk_count,
+            total_bytes,
+            format!("0x{}", hex::encode(root)),
+            SETTLE_VERSION,
+        );
+        if let Err(e) = writer.seal(&self.tunnel_id, &manifest).await {
+            tracing::warn!(tunnel = %self.tunnel_id, error = %e, "transcript manifest seal failed");
         }
     }
 }
@@ -95,6 +135,7 @@ impl<M> TranscriptRecorder<M> for S3StreamingRecorder {
             if b.bytes.len() >= CHUNK_TARGET {
                 let seq = b.seq;
                 b.seq += 1;
+                b.total_bytes += b.bytes.len() as u64;
                 Some((seq, std::mem::take(&mut b.bytes)))
             } else {
                 None

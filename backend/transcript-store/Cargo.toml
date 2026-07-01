@@ -16,7 +16,11 @@ testing = []
 
 [dependencies]
 async-trait = { workspace = true }
-anyhow = { workspace = true }
+# Library best practice: expose a concrete `Error` (thiserror) rather than `anyhow`, so
+# consuming apps can match on failure modes.
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 aws-config = { version = "1", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
