@@ -1,6 +1,6 @@
 //! Connect-handshake signature verification. v1 verifies the ed25519 signature over the
-//! server nonce (proves key control); wallet<->pubkey binding needs a wallet-signed
-//! attestation because the pubkey is an ephemeral per-game co-signing key.
+//! server nonce (proves key control); wallet<->pubkey address derivation is a noted
+//! follow-up. Uses `ed25519-dalek` directly.
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
