@@ -35,7 +35,7 @@ function ensureSession(): PvpMatchSession {
     bridge: bridge!,
     getSpec,
     emit: (snap) => emit?.(snap),
-    connStatus: () => remoteMp!.connStatus(),
+    connStatus: () => remoteMp?.connStatus() ?? "closed",
   });
   return session;
 }

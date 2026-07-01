@@ -208,10 +208,15 @@ function ensureSocketWorker(): Worker {
 }
 
 /** Spawn (once per window) a game worker, wire its private port to the socket worker, and init its
- *  session. `config`/`bridge` are set by `configureEngine` before any PvP command, so they're ready. */
-function ensureGameWorker(windowId: string): Comlink.Remote<GameWorkerApi> {
+ *  session. Returns null until `configureEngine` has run (config + bridge ready): the worker MUST be
+ *  init'd before any command reaches it (its session reads `config`/`bridge`/`mp`), so — like the hub,
+ *  which no-ops uncofigured commands — the caller skips the command rather than driving a bare worker. */
+function ensureGameWorker(
+  windowId: string,
+): Comlink.Remote<GameWorkerApi> | null {
   const existing = gameWorkers.get(windowId);
   if (existing) return existing.api;
+  if (!config || !bridge) return null; // not configured yet — don't spawn an un-init'd worker
   const sw = ensureSocketWorker();
   const worker = new Worker(new URL("./engine.game.worker.ts", import.meta.url), {
     type: "module",
@@ -229,17 +234,15 @@ function ensureGameWorker(windowId: string): Comlink.Remote<GameWorkerApi> {
       w.snap = s;
     });
   };
-  if (config && bridge)
-    fire(
-      api.init(
-        config,
-        Comlink.proxy(bridge),
-        windowId,
-        Comlink.transfer(port1, [port1]),
-        Comlink.proxy(onSnapshot),
-      ),
-    );
-  else elog("client", "game worker spawned before configure", { windowId });
+  fire(
+    api.init(
+      config,
+      Comlink.proxy(bridge),
+      windowId,
+      Comlink.transfer(port1, [port1]),
+      Comlink.proxy(onSnapshot),
+    ),
+  );
   return api;
 }
 
@@ -267,7 +270,8 @@ async function resumePoolWindow(
     return;
   }
   if (!records || records.length === 0) return;
-  fire(ensureGameWorker(windowId).resume(gameId));
+  const api = ensureGameWorker(windowId);
+  if (api) fire(api.resume(gameId));
 }
 
 // --- dispose ------------------------------------------------------------------------------
@@ -358,7 +362,8 @@ export const engineClient = {
   findMatch(windowId: string, gameId: GameId, setup?: unknown): void {
     ensurePvpWindow(windowId);
     if (enginePoolEnabled()) {
-      fire(ensureGameWorker(windowId).findMatch(gameId, setup));
+      const api = ensureGameWorker(windowId);
+      if (api) fire(api.findMatch(gameId, setup));
       return;
     }
     fire(ensureHub().findMatch(windowId, gameId, setup));
@@ -380,7 +385,8 @@ export const engineClient = {
   ): void {
     ensurePvpWindow(windowId);
     if (enginePoolEnabled()) {
-      fire(ensureGameWorker(windowId).enterArenaMatch(gameId, entry));
+      const api = ensureGameWorker(windowId);
+      if (api) fire(api.enterArenaMatch(gameId, entry));
       return;
     }
     fire(ensureHub().enterArenaMatch(windowId, gameId, entry));
