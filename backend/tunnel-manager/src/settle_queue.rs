@@ -200,11 +200,15 @@ impl SettleQueue for RedisSettleQueue {
     ) -> anyhow::Result<Vec<QueuedSettle>> {
         use base64::Engine;
         use fred::interfaces::StreamsInterface;
+        use fred::types::RedisValue;
         // BLOCK 0 in Redis blocks forever; map our "don't block" (0) to no BLOCK option.
         let block = (block_ms > 0).then_some(block_ms);
-        let resp: fred::types::XReadResponse<String, String, String, String> = self
+        // Parse the raw RESP2 reply by hand rather than `xreadgroup_map` — fred's stream map helper
+        // errors ("Cannot convert to map") converting the RESP2 array. The wire shape (RESP2, which
+        // the from_url pool uses) is: Array[ Array[ stream, Array[ Array[ id, Array[f,v,f,v] ] ] ] ].
+        let resp: RedisValue = self
             .pool
-            .xreadgroup_map(
+            .xreadgroup(
                 self.group.as_str(),
                 consumer,
                 Some(max as u64),
@@ -215,16 +219,53 @@ impl SettleQueue for RedisSettleQueue {
             )
             .await
             .map_err(|e| anyhow::anyhow!("xreadgroup: {e}"))?;
+
         let mut out = Vec::new();
-        if let Some(entries) = resp.get(&self.stream) {
-            for (id, fields) in entries {
-                let tunnel_id = fields.get("t").cloned().unwrap_or_default();
-                let header = fields
-                    .get("h")
-                    .and_then(|h| base64::engine::general_purpose::STANDARD.decode(h).ok())
-                    .unwrap_or_default();
+        let RedisValue::Array(streams) = resp else {
+            return Ok(out); // Null (BLOCK timeout, no data) or unexpected shape → nothing claimed.
+        };
+        for stream in streams {
+            let RedisValue::Array(mut stream_pair) = stream else {
+                continue;
+            };
+            if stream_pair.len() != 2 {
+                continue;
+            }
+            let entries = stream_pair.pop().expect("len checked"); // [ [id, [f,v,..]], ... ]
+            let RedisValue::Array(entries) = entries else {
+                continue;
+            };
+            for entry in entries {
+                let RedisValue::Array(mut e) = entry else {
+                    continue;
+                };
+                if e.len() != 2 {
+                    continue;
+                }
+                let fields = e.pop().expect("len checked"); // [f, v, f, v]
+                let id: String = e.pop().expect("len checked").convert().unwrap_or_default();
+                let RedisValue::Array(fields) = fields else {
+                    continue;
+                };
+                let flat: Vec<String> = fields
+                    .into_iter()
+                    .map(|v| v.convert::<String>().unwrap_or_default())
+                    .collect();
+                let mut tunnel_id = String::new();
+                let mut header = Vec::new();
+                for pair in flat.chunks_exact(2) {
+                    match pair[0].as_str() {
+                        "t" => tunnel_id = pair[1].clone(),
+                        "h" => {
+                            header = base64::engine::general_purpose::STANDARD
+                                .decode(&pair[1])
+                                .unwrap_or_default()
+                        }
+                        _ => {}
+                    }
+                }
                 out.push(QueuedSettle {
-                    id: id.clone(),
+                    id,
                     tunnel_id,
                     header,
                 });
