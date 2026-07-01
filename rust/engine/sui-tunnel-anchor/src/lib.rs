@@ -15,8 +15,9 @@ use sui_crypto::SuiSigner;
 use sui_rpc::client::{Client as GrpcClient, ResponseExt};
 use sui_rpc::field::{FieldMask, FieldMaskUtil};
 use sui_rpc::proto::sui::rpc::v2::{
-    ExecuteTransactionRequest, GetEpochRequest, GetObjectRequest, GetTransactionRequest,
-    Transaction as ProtoTransaction, UserSignature as ProtoUserSignature,
+    BatchGetObjectsRequest, ExecuteTransactionRequest,
+    ExecutedTransaction as ProtoExecutedTransaction, GetEpochRequest, GetObjectRequest,
+    GetTransactionRequest, Transaction as ProtoTransaction, UserSignature as ProtoUserSignature,
 };
 use sui_sdk_types::{
     Address, Argument, Command, Digest, Ed25519PublicKey, ExecutionStatus, FundsWithdrawal,
@@ -197,6 +198,7 @@ pub struct SuiSponsoredAnchor {
     cost: Arc<CostMeter>,
     ptb_metrics: Arc<Mutex<SuiPtbMetricsSnapshot>>,
     direct_tx_nonce: Arc<AtomicU64>,
+    gas_cache: Arc<GasContextCache>,
 }
 
 /// Stable pre-chain identity for one open intent. The confirmed Sui `tunnel_id`
@@ -237,6 +239,7 @@ struct SuiSponsoredAnchorShared {
     cost: Arc<CostMeter>,
     ptb_metrics: Arc<Mutex<SuiPtbMetricsSnapshot>>,
     direct_tx_nonce: Arc<AtomicU64>,
+    gas_cache: Arc<GasContextCache>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,6 +247,63 @@ pub struct AddressBalanceGasContext {
     pub reference_gas_price: u64,
     pub epoch: u64,
     pub chain_id: Digest,
+}
+
+
+/// Direct-mode gas context (reference gas price, epoch, chain id) only changes at
+/// epoch boundaries, so re-fetching it per transaction is wasteful. Kept short
+/// enough that an epoch roll is picked up quickly; `execute_direct_kind` also
+/// invalidates on a failed submit so a stale price/epoch self-corrects on retry.
+const GAS_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// TTL cache for [`AddressBalanceGasContext`]. A failed refresh is propagated to
+/// the caller and never stored, so transient RPC errors simply retry on the next
+/// call rather than poisoning the cache.
+struct GasContextCache {
+    ttl: Duration,
+    cached: Mutex<Option<(AddressBalanceGasContext, Instant)>>,
+}
+
+impl GasContextCache {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            cached: Mutex::new(None),
+        }
+    }
+
+    /// Return the cached context if still fresh, otherwise run `refresh` to fetch
+    /// a new one. The lock is never held across the await.
+    async fn get_or_refresh<F, Fut>(
+        &self,
+        refresh: F,
+    ) -> Result<AddressBalanceGasContext, TunnelAnchorError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<AddressBalanceGasContext, TunnelAnchorError>>,
+    {
+        if let Some(ctx) = self.fresh() {
+            return Ok(ctx);
+        }
+        let ctx = refresh().await?;
+        *self.cached.lock().expect("gas context cache mutex poisoned") = Some((ctx, Instant::now()));
+        Ok(ctx)
+    }
+
+    fn fresh(&self) -> Option<AddressBalanceGasContext> {
+        let guard = self.cached.lock().expect("gas context cache mutex poisoned");
+        guard
+            .as_ref()
+            .filter(|(_, fetched_at)| fetched_at.elapsed() < self.ttl)
+            .map(|(ctx, _)| *ctx)
+    }
+
+    /// Drop the cached value so the next `get_or_refresh` re-fetches. Called when a
+    /// direct submit fails, since a wrong gas price or rolled epoch is a likely
+    /// cause.
+    fn invalidate(&self) {
+        *self.cached.lock().expect("gas context cache mutex poisoned") = None;
+    }
 }
 
 #[derive(Default)]
@@ -380,21 +440,43 @@ struct SuiSettleBatchExecutor {
     sender: mpsc::UnboundedSender<SettleBatchItem>,
 }
 
+/// A transaction's effects plus the two pieces the open flow needs that the
+/// effects alone don't carry: the checkpoint `timestamp_ms` (the tunnel's
+/// `created_at`) and the `created_objects` with their type/owner/contents. When
+/// the fullnode inlines the created objects in the execute/get_transaction
+/// response, the open flow reads them here and skips the per-object `get_object`
+/// follow-ups; `created_objects` is best-effort, so callers fall back to reads
+/// when it's incomplete.
+pub struct ExecutedChainTx {
+    pub effects: TransactionEffects,
+    pub created_objects: Vec<(Address, Object)>,
+    pub timestamp_ms: Option<u64>,
+}
+
 #[async_trait]
 pub trait SuiChainClient: Send + Sync {
     async fn get_object_ref(&self, object_id: Address) -> Result<ObjectReference, String>;
     async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String>;
+    /// Batched object read. Order matches `object_ids`; a missing object is `None`.
+    /// Default fans out to `get_object`; the gRPC client overrides it with a single
+    /// `BatchGetObjects` call.
+    async fn get_objects(
+        &self,
+        object_ids: Vec<Address>,
+    ) -> Result<Vec<(Address, Option<Object>)>, String> {
+        let mut out = Vec::with_capacity(object_ids.len());
+        for id in object_ids {
+            out.push((id, self.get_object(id).await?));
+        }
+        Ok(out)
+    }
     async fn address_balance_gas_context(&self) -> Result<AddressBalanceGasContext, String>;
     async fn execute_transaction(
         &self,
         transaction: &Transaction,
         signatures: &[UserSignature],
-    ) -> Result<TransactionEffects, String>;
-    async fn get_transaction_effects(
-        &self,
-        digest: &str,
-    ) -> Result<Option<TransactionEffects>, String>;
-    async fn get_transaction_timestamp_ms(&self, digest: &str) -> Result<Option<u64>, String>;
+    ) -> Result<ExecutedChainTx, String>;
+    async fn get_transaction(&self, digest: &str) -> Result<Option<ExecutedChainTx>, String>;
 }
 
 #[async_trait]
@@ -440,14 +522,14 @@ impl SuiBackendClient for HttpSuiBackendClient {
         let url = format!("{}/v1/sponsor", self.base_url);
         let resp = self
             .http
-            .post(url)
+            .post(url.as_str())
             .json(&SponsorRequest {
                 sender,
                 tx_kind_bytes,
             })
             .send()
             .await
-            .map_err(|e| TunnelAnchorError::Unavailable(e.to_string()))?;
+            .map_err(|e| log_backend_send_failure("sponsor", &url, e))?;
         read_json_response(resp, "sponsor").await
     }
 
@@ -459,11 +541,11 @@ impl SuiBackendClient for HttpSuiBackendClient {
         let url = format!("{}/v1/sponsor/execute", self.base_url);
         let resp = self
             .http
-            .post(url)
+            .post(url.as_str())
             .json(&SponsorExecuteRequest { digest, signature })
             .send()
             .await
-            .map_err(|e| TunnelAnchorError::Unavailable(e.to_string()))?;
+            .map_err(|e| log_backend_send_failure("sponsor execute", &url, e))?;
         let body: SponsorExecuteResponse = read_json_response(resp, "sponsor execute").await?;
         Ok(body.digest)
     }
@@ -476,13 +558,97 @@ impl SuiBackendClient for HttpSuiBackendClient {
         let url = format!("{}/v1/tunnels/{}/settle", self.base_url, tunnel_id);
         let resp = self
             .http
-            .post(url)
+            .post(url.as_str())
             .header("content-type", "application/octet-stream")
             .body(body)
             .send()
             .await
-            .map_err(|e| TunnelAnchorError::Unavailable(e.to_string()))?;
+            .map_err(|e| log_backend_send_failure("settle", &url, e))?;
         read_json_response(resp, "settle").await
+    }
+}
+
+/// Object fields the anchor reads: enough for the tunnel type check, the shared
+/// initial version, and parties parsing. Shared by point reads and batched reads.
+const OBJECT_READ_FIELDS: [&str; 10] = [
+    "object_id",
+    "version",
+    "digest",
+    "owner",
+    "object_type",
+    "has_public_transfer",
+    "contents",
+    "previous_transaction",
+    "storage_rebate",
+    "bcs",
+];
+
+/// Max objects per `BatchGetObjects` request; larger id sets are chunked. Sui
+/// fullnodes cap batch reads, so this stays conservative.
+const BATCH_GET_OBJECTS_CHUNK: usize = 50;
+
+/// Read mask for execute / get_transaction that also pulls the checkpoint
+/// timestamp and the created objects, letting the open flow read both from this
+/// one response instead of issuing follow-up point reads. Uses only top-level
+/// fields of `ExecutedTransaction` (`objects` selects the whole object subtree):
+/// if a node returns them without `bcs`, conversion fails and the caller falls
+/// back to point reads, so a partial response degrades rather than breaks.
+fn executed_tx_read_mask() -> FieldMask {
+    FieldMask::from_paths(["effects", "timestamp", "objects"])
+}
+
+/// Build [`ExecutedChainTx`] from a proto transaction.
+fn executed_chain_tx_from_proto(
+    executed: &ProtoExecutedTransaction,
+) -> Result<ExecutedChainTx, String> {
+    let effects_proto = executed
+        .effects_opt()
+        .ok_or_else(|| "grpc transaction returned no effects".to_string())?;
+    let effects = TransactionEffects::try_from(effects_proto).map_err(|e| format!("{e}"))?;
+    let timestamp_ms = executed
+        .timestamp_opt()
+        .map(|ts| ts.seconds.max(0) as u64 * 1_000 + (ts.nanos.max(0) as u64) / 1_000_000);
+    let created_objects = inline_created_objects(&effects, executed);
+    Ok(ExecutedChainTx {
+        effects,
+        created_objects,
+        timestamp_ms,
+    })
+}
+
+/// Collect the created objects inlined in a tx response. Returns empty unless
+/// *every* created object id is present and converts cleanly, so the caller can
+/// treat "incomplete" as "fall back to point reads" and never act on a partial
+/// set (which would misreport how many Tunnels an open produced).
+fn inline_created_objects(
+    effects: &TransactionEffects,
+    executed: &ProtoExecutedTransaction,
+) -> Vec<(Address, Object)> {
+    let created: std::collections::HashSet<Address> =
+        created_object_ids(effects).into_iter().collect();
+    if created.is_empty() {
+        return Vec::new();
+    }
+    let Some(object_set) = executed.objects_opt() else {
+        return Vec::new();
+    };
+    let mut collected = Vec::with_capacity(created.len());
+    for proto_object in object_set.objects() {
+        let Some(id) = proto_object.object_id_opt().and_then(|id| parse_address(id).ok()) else {
+            continue;
+        };
+        if !created.contains(&id) {
+            continue;
+        }
+        match Object::try_from(proto_object) {
+            Ok(object) => collected.push((id, object)),
+            Err(_) => return Vec::new(),
+        }
+    }
+    if collected.len() == created.len() {
+        collected
+    } else {
+        Vec::new()
     }
 }
 
@@ -513,7 +679,8 @@ impl GrpcSuiChainClient {
     async fn client(&self) -> Result<GrpcClient, String> {
         self.client
             .get_or_try_init(|| async {
-                GrpcClient::new(self.endpoint.clone()).map_err(|e| e.to_string())
+                GrpcClient::new(self.endpoint.clone())
+                    .map_err(|e| log_chain_call_failure("connect", &self.endpoint, e))
             })
             .await
             .cloned()
@@ -530,7 +697,7 @@ impl SuiChainClient for GrpcSuiChainClient {
             .ledger_client()
             .get_object(GetObjectRequest::new(&object_id))
             .await
-            .map_err(|status| status.to_string())?
+            .map_err(|status| log_chain_call_failure("get_object_ref", &self.endpoint, status))?
             .into_inner();
         let object = response
             .object_opt()
@@ -547,18 +714,8 @@ impl SuiChainClient for GrpcSuiChainClient {
     }
 
     async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String> {
-        let request = GetObjectRequest::new(&object_id).with_read_mask(FieldMask::from_paths([
-            "object_id",
-            "version",
-            "digest",
-            "owner",
-            "object_type",
-            "has_public_transfer",
-            "contents",
-            "previous_transaction",
-            "storage_rebate",
-            "bcs",
-        ]));
+        let request =
+            GetObjectRequest::new(&object_id).with_read_mask(FieldMask::from_paths(OBJECT_READ_FIELDS));
         let response = match self
             .client()
             .await?
@@ -568,13 +725,57 @@ impl SuiChainClient for GrpcSuiChainClient {
         {
             Ok(response) => response.into_inner(),
             Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-            Err(status) => return Err(status.to_string()),
+            Err(status) => return Err(log_chain_call_failure("get_object", &self.endpoint, status)),
         };
         let Some(object) = response.object_opt() else {
             return Ok(None);
         };
         let object = Object::try_from(object).map_err(|e| format!("{e}"))?;
         Ok(Some(object))
+    }
+
+    async fn get_objects(
+        &self,
+        object_ids: Vec<Address>,
+    ) -> Result<Vec<(Address, Option<Object>)>, String> {
+        let read_mask = FieldMask::from_paths(OBJECT_READ_FIELDS);
+        let mut out = Vec::with_capacity(object_ids.len());
+        for chunk in object_ids.chunks(BATCH_GET_OBJECTS_CHUNK) {
+            let mut request = BatchGetObjectsRequest::default();
+            request.requests = chunk.iter().map(GetObjectRequest::new).collect();
+            let request = request.with_read_mask(read_mask.clone());
+            let response = self
+                .client()
+                .await?
+                .ledger_client()
+                .batch_get_objects(request)
+                .await
+                .map_err(|status| {
+                    log_chain_call_failure("batch_get_objects", &self.endpoint, status)
+                })?
+                .into_inner();
+            for (id, result) in chunk.iter().zip(response.objects()) {
+                // Match `get_object`'s semantics: NotFound -> absent, any other
+                // per-item error propagates (rather than being silently dropped).
+                let object = if let Some(proto) = result.object_opt() {
+                    Some(Object::try_from(proto).map_err(|e| format!("{e}"))?)
+                } else if let Some(status) = result.error_opt() {
+                    if status.code == tonic::Code::NotFound as i32 {
+                        None
+                    } else {
+                        return Err(log_chain_call_failure(
+                            "batch_get_objects",
+                            &self.endpoint,
+                            format!("object {id}: {} ({})", status.message, status.code),
+                        ));
+                    }
+                } else {
+                    None
+                };
+                out.push((*id, object));
+            }
+        }
+        Ok(out)
     }
 
     async fn address_balance_gas_context(&self) -> Result<AddressBalanceGasContext, String> {
@@ -586,7 +787,7 @@ impl SuiChainClient for GrpcSuiChainClient {
             .ledger_client()
             .get_epoch(request)
             .await
-            .map_err(|status| status.to_string())?;
+            .map_err(|status| log_chain_call_failure("get_epoch", &self.endpoint, status))?;
         let chain_id = response
             .chain_id()
             .ok_or_else(|| "get_epoch response missing chain id".to_string())?;
@@ -609,7 +810,7 @@ impl SuiChainClient for GrpcSuiChainClient {
         &self,
         transaction: &Transaction,
         signatures: &[UserSignature],
-    ) -> Result<TransactionEffects, String> {
+    ) -> Result<ExecutedChainTx, String> {
         let request = ExecuteTransactionRequest::new(ProtoTransaction::from(transaction.clone()))
             .with_signatures(
                 signatures
@@ -618,12 +819,12 @@ impl SuiChainClient for GrpcSuiChainClient {
                     .map(ProtoUserSignature::from)
                     .collect::<Vec<_>>(),
             )
-            .with_read_mask(FieldMask::from_paths(["effects", "checkpoint"]));
-        // Wait for checkpoint inclusion (read-your-writes): the open flow then
-        // reads this tx's checkpoint timestamp and its created objects by id,
-        // which only become visible once the tx is checkpointed on this node.
-        // Mirrors the finality wait the prior GraphQL client performed; raw
-        // `execute_transaction` returns pre-checkpoint and would race those reads.
+            .with_read_mask(executed_tx_read_mask());
+        // Wait for checkpoint inclusion (read-your-writes): the open flow needs
+        // this tx's checkpoint timestamp and created objects, which only become
+        // visible once the tx is checkpointed on this node. The mask pulls
+        // `timestamp`/`objects` so the open flow reads them straight from this
+        // response instead of issuing follow-up point reads.
         let response = self
             .client()
             .await?
@@ -632,22 +833,18 @@ impl SuiChainClient for GrpcSuiChainClient {
                 Duration::from_millis(DEFAULT_TIMEOUT_MS),
             )
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| log_chain_call_failure("execute_transaction", &self.endpoint, e))?
             .into_inner();
-        let effects = response
+        let executed = response
             .transaction_opt()
-            .and_then(|tx| tx.effects_opt())
-            .ok_or_else(|| "grpc execute returned no effects".to_string())?;
-        TransactionEffects::try_from(effects).map_err(|e| format!("{e}"))
+            .ok_or_else(|| "grpc execute returned no transaction".to_string())?;
+        executed_chain_tx_from_proto(executed)
     }
 
-    async fn get_transaction_effects(
-        &self,
-        digest: &str,
-    ) -> Result<Option<TransactionEffects>, String> {
+    async fn get_transaction(&self, digest: &str) -> Result<Option<ExecutedChainTx>, String> {
         let digest: Digest = digest.parse().map_err(|e| format!("{e}"))?;
         let request =
-            GetTransactionRequest::new(&digest).with_read_mask(FieldMask::from_paths(["effects"]));
+            GetTransactionRequest::new(&digest).with_read_mask(executed_tx_read_mask());
         let response = match self
             .client()
             .await?
@@ -657,37 +854,14 @@ impl SuiChainClient for GrpcSuiChainClient {
         {
             Ok(response) => response.into_inner(),
             Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-            Err(status) => return Err(status.to_string()),
+            Err(status) => {
+                return Err(log_chain_call_failure("get_transaction", &self.endpoint, status))
+            }
         };
-        let Some(effects) = response.transaction_opt().and_then(|tx| tx.effects_opt()) else {
+        let Some(executed) = response.transaction_opt() else {
             return Ok(None);
         };
-        Ok(Some(
-            TransactionEffects::try_from(effects).map_err(|e| format!("{e}"))?,
-        ))
-    }
-
-    async fn get_transaction_timestamp_ms(&self, digest: &str) -> Result<Option<u64>, String> {
-        let digest: Digest = digest.parse().map_err(|e| format!("{e}"))?;
-        let request = GetTransactionRequest::new(&digest)
-            .with_read_mask(FieldMask::from_paths(["timestamp"]));
-        let response = match self
-            .client()
-            .await?
-            .ledger_client()
-            .get_transaction(request)
-            .await
-        {
-            Ok(response) => response.into_inner(),
-            Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-            Err(status) => return Err(status.to_string()),
-        };
-        let Some(timestamp) = response.transaction_opt().and_then(|tx| tx.timestamp_opt()) else {
-            return Ok(None);
-        };
-        let millis =
-            timestamp.seconds.max(0) as u64 * 1_000 + (timestamp.nanos.max(0) as u64) / 1_000_000;
-        Ok(Some(millis))
+        Ok(Some(executed_chain_tx_from_proto(executed)?))
     }
 }
 
@@ -707,6 +881,7 @@ impl SuiSponsoredAnchorShared {
             cost: self.cost.clone(),
             ptb_metrics: self.ptb_metrics.clone(),
             direct_tx_nonce: self.direct_tx_nonce.clone(),
+            gas_cache: self.gas_cache.clone(),
         }
     }
 
@@ -1025,6 +1200,11 @@ fn send_open_group_result(
             }
         }
         Err(error) => {
+            tracing::warn!(
+                responders = responders.len(),
+                ?error,
+                "sui open group failed"
+            );
             for responder in responders {
                 let _ = responder.send(Err(error.clone()));
             }
@@ -1070,6 +1250,7 @@ impl SuiSponsoredAnchor {
         let cost = Arc::new(CostMeter::default());
         let ptb_metrics = Arc::new(Mutex::new(SuiPtbMetricsSnapshot::default()));
         let direct_tx_nonce = Arc::new(AtomicU64::new(0));
+        let gas_cache = Arc::new(GasContextCache::new(GAS_CONTEXT_CACHE_TTL));
         let shared = SuiSponsoredAnchorShared {
             config: config.clone(),
             funder: funder.clone(),
@@ -1080,6 +1261,7 @@ impl SuiSponsoredAnchor {
             cost: cost.clone(),
             ptb_metrics: ptb_metrics.clone(),
             direct_tx_nonce: direct_tx_nonce.clone(),
+            gas_cache: gas_cache.clone(),
         };
         let open_batch_executor = if config.open_batching.enabled {
             Some(SuiOpenBatchExecutor::new(shared.clone())?)
@@ -1105,6 +1287,7 @@ impl SuiSponsoredAnchor {
             cost,
             ptb_metrics,
             direct_tx_nonce,
+            gas_cache,
         })
     }
 
@@ -1257,13 +1440,13 @@ impl SuiSponsoredAnchor {
         flush_reason: SuiPtbFlushReason,
     ) -> Result<OpenedTunnel, TunnelAnchorError> {
         let kind = self.build_open_kind_for_config(&request).await?;
-        let effects = self.execute_open_kind(kind).await?;
+        let executed = self.execute_open_kind(kind).await?;
         self.cost
-            .add(self.open_gas_paid_by_funder(), net_gas_mist(&effects));
-        ensure_success(&effects)?;
-        self.record_open_ptb(transaction_digest(&effects), 1, flush_reason);
+            .add(self.open_gas_paid_by_funder(), net_gas_mist(&executed.effects));
+        ensure_success(&executed.effects)?;
+        self.record_open_ptb(transaction_digest(&executed.effects), 1, flush_reason);
         let (tunnel_id, created_at_ms, shared_initial_version) =
-            self.opened_from_effects(&effects).await?;
+            self.opened_from_effects(&executed).await?;
         let record = OpenRecord {
             tunnel_id: tunnel_id.clone(),
             party_a: request.party_a,
@@ -1472,21 +1655,25 @@ impl SuiSponsoredAnchor {
             elapsed_ms = started.elapsed().as_millis(),
             "sui open batch execute start"
         );
-        let effects = self
+        let executed = self
             .execute_open_kind(kind)
             .await
             .map_err(open_batch_attempt_error)?;
         self.cost
-            .add(self.open_gas_paid_by_funder(), net_gas_mist(&effects));
+            .add(self.open_gas_paid_by_funder(), net_gas_mist(&executed.effects));
         tracing::debug!(
             requests = requests.len(),
             elapsed_ms = started.elapsed().as_millis(),
             "sui open batch execute done"
         );
-        ensure_success(&effects).map_err(OpenBatchAttemptError::Retryable)?;
-        self.record_open_ptb(transaction_digest(&effects), requests.len(), flush_reason);
+        ensure_success(&executed.effects).map_err(OpenBatchAttemptError::Retryable)?;
+        self.record_open_ptb(
+            transaction_digest(&executed.effects),
+            requests.len(),
+            flush_reason,
+        );
         let opened = self
-            .map_created_tunnels_to_open_requests(&effects, requests)
+            .map_created_tunnels_to_open_requests(&executed, requests)
             .await
             .map_err(OpenBatchAttemptError::Final)?;
         tracing::debug!(
@@ -1523,7 +1710,7 @@ impl SuiSponsoredAnchor {
     async fn execute_open_kind(
         &self,
         kind: TransactionKind,
-    ) -> Result<TransactionEffects, TunnelAnchorError> {
+    ) -> Result<ExecutedChainTx, TunnelAnchorError> {
         match self.config.open_mode {
             SuiOpenMode::SponsoredCreateAndFund => self.execute_sponsored_kind(kind).await,
             SuiOpenMode::DirectCreateAndFund => self.execute_direct_kind(kind).await,
@@ -1533,7 +1720,7 @@ impl SuiSponsoredAnchor {
     async fn execute_sponsored_kind(
         &self,
         kind: TransactionKind,
-    ) -> Result<TransactionEffects, TunnelAnchorError> {
+    ) -> Result<ExecutedChainTx, TunnelAnchorError> {
         let tx_kind_bytes = base64::engine::general_purpose::STANDARD
             .encode(bcs::to_bytes(&kind).map_err(|e| TunnelAnchorError::Rejected(e.to_string()))?);
         let sponsor = self
@@ -1572,7 +1759,7 @@ impl SuiSponsoredAnchor {
                     .execute_enoki(digest.to_string(), user_sig.to_base64())
                     .await?;
                 self.chain
-                    .get_transaction_effects(&digest)
+                    .get_transaction(&digest)
                     .await
                     .map_err(TunnelAnchorError::Unavailable)?
                     .ok_or_else(|| {
@@ -1590,12 +1777,16 @@ impl SuiSponsoredAnchor {
     async fn execute_direct_kind(
         &self,
         kind: TransactionKind,
-    ) -> Result<TransactionEffects, TunnelAnchorError> {
+    ) -> Result<ExecutedChainTx, TunnelAnchorError> {
         let gas = self
-            .chain
-            .address_balance_gas_context()
-            .await
-            .map_err(TunnelAnchorError::Unavailable)?;
+            .gas_cache
+            .get_or_refresh(|| async {
+                self.chain
+                    .address_balance_gas_context()
+                    .await
+                    .map_err(TunnelAnchorError::Unavailable)
+            })
+            .await?;
         let nonce = self.next_direct_tx_nonce()?;
         let gas_budget = direct_gas_budget_mist(&kind);
         let tx = Transaction {
@@ -1620,10 +1811,17 @@ impl SuiSponsoredAnchor {
             .funder
             .sign_transaction(&tx)
             .map_err(|e| TunnelAnchorError::Rejected(format!("sign direct tx: {e}")))?;
-        self.chain
+        let result = self
+            .chain
             .execute_transaction(&tx, &[user_sig])
             .await
-            .map_err(TunnelAnchorError::Unavailable)
+            .map_err(TunnelAnchorError::Unavailable);
+        // A failed submit may be a rolled epoch or stale gas price; drop the cache
+        // so the next attempt re-fetches instead of resubmitting the same bad tx.
+        if result.is_err() {
+            self.gas_cache.invalidate();
+        }
+        result
     }
 
     fn next_direct_tx_nonce(&self) -> Result<u32, TunnelAnchorError> {
@@ -1635,44 +1833,49 @@ impl SuiSponsoredAnchor {
 
     async fn opened_from_effects(
         &self,
-        effects: &TransactionEffects,
+        executed: &ExecutedChainTx,
     ) -> Result<(String, u64, u64), TunnelAnchorError> {
-        ensure_success(effects)?;
-        let tx_digest = transaction_digest(effects);
-        let created_at_ms = self
-            .chain
-            .get_transaction_timestamp_ms(&tx_digest)
-            .await
-            .map_err(TunnelAnchorError::Unavailable)?
-            .ok_or_else(|| {
-                TunnelAnchorError::Unavailable(format!(
-                    "transaction {tx_digest} timestamp not found"
-                ))
-            })?;
-        let tunnel_id = self.find_created_tunnel_id(effects).await?;
+        ensure_success(&executed.effects)?;
+        let created_at_ms = self.created_at_ms(executed)?;
+        let tunnel_id = self.find_created_tunnel_id(executed).await?;
         Ok((tunnel_id.0, created_at_ms, tunnel_id.1))
+    }
+
+    /// The tunnel's on-chain creation time, read from the checkpoint timestamp the
+    /// execute/get_transaction response already carries.
+    fn created_at_ms(&self, executed: &ExecutedChainTx) -> Result<u64, TunnelAnchorError> {
+        executed.timestamp_ms.ok_or_else(|| {
+            TunnelAnchorError::Unavailable(format!(
+                "transaction {} timestamp not found",
+                transaction_digest(&executed.effects)
+            ))
+        })
+    }
+
+    /// Created objects for the open, preferring those the fullnode inlined in the
+    /// tx response (zero extra reads). Falls back to point reads only when the
+    /// inline set is absent or incomplete.
+    async fn resolve_created_objects(
+        &self,
+        executed: &ExecutedChainTx,
+    ) -> Result<Vec<(Address, Object)>, TunnelAnchorError> {
+        let created_ids = created_object_ids(&executed.effects);
+        if !created_ids.is_empty() && executed.created_objects.len() == created_ids.len() {
+            return Ok(executed.created_objects.clone());
+        }
+        self.fetch_existing_objects(created_ids).await
     }
 
     async fn map_created_tunnels_to_open_requests(
         &self,
-        effects: &TransactionEffects,
+        executed: &ExecutedChainTx,
         requests: &[TunnelOpenRequest],
     ) -> Result<Vec<(String, u64, u64)>, TunnelAnchorError> {
         let started = Instant::now();
-        ensure_success(effects)?;
-        let tx_digest = transaction_digest(effects);
-        let created_at_ms = self
-            .chain
-            .get_transaction_timestamp_ms(&tx_digest)
-            .await
-            .map_err(TunnelAnchorError::Unavailable)?
-            .ok_or_else(|| {
-                TunnelAnchorError::Unavailable(format!(
-                    "transaction {tx_digest} timestamp not found"
-                ))
-            })?;
+        ensure_success(&executed.effects)?;
+        let created_at_ms = self.created_at_ms(executed)?;
 
-        let created_ids = created_object_ids(effects);
+        let created_ids = created_object_ids(&executed.effects);
         tracing::debug!(
             requests = requests.len(),
             created_objects = created_ids.len(),
@@ -1681,7 +1884,7 @@ impl SuiSponsoredAnchor {
         );
         let mut matched_results = vec![None; requests.len()];
         let mut tunnel_count = 0usize;
-        for (object_id, object) in self.fetch_existing_objects(created_ids).await? {
+        for (object_id, object) in self.resolve_created_objects(executed).await? {
             if self.is_tunnel_object(&object)? {
                 tunnel_count += 1;
                 let shared_initial_version = Self::shared_initial_version(&object, object_id)?;
@@ -2181,12 +2384,9 @@ impl SuiSponsoredAnchor {
 
     async fn find_created_tunnel_id(
         &self,
-        effects: &TransactionEffects,
+        executed: &ExecutedChainTx,
     ) -> Result<(String, u64), TunnelAnchorError> {
-        for (object_id, object) in self
-            .fetch_existing_objects(created_object_ids(effects))
-            .await?
-        {
+        for (object_id, object) in self.resolve_created_objects(executed).await? {
             if self.is_tunnel_object(&object)? {
                 let shared_initial_version = Self::shared_initial_version(&object, object_id)?;
                 return Ok((object_id.to_string(), shared_initial_version));
@@ -2201,31 +2401,14 @@ impl SuiSponsoredAnchor {
         &self,
         object_ids: Vec<Address>,
     ) -> Result<Vec<(Address, Object)>, TunnelAnchorError> {
-        let mut reads = tokio::task::JoinSet::new();
-        for object_id in object_ids {
-            let chain = self.chain.clone();
-            reads.spawn(async move {
-                chain
-                    .get_object(object_id)
-                    .await
-                    .map(|object| object.map(|object| (object_id, object)))
-            });
-        }
-
-        let mut objects = Vec::new();
-        while let Some(result) = reads.join_next().await {
-            match result {
-                Ok(Ok(Some(object))) => objects.push(object),
-                Ok(Ok(None)) => {}
-                Ok(Err(error)) => return Err(TunnelAnchorError::Unavailable(error)),
-                Err(error) => {
-                    return Err(TunnelAnchorError::Unavailable(format!(
-                        "object read task failed: {error}"
-                    )))
-                }
-            }
-        }
-        Ok(objects)
+        Ok(self
+            .chain
+            .get_objects(object_ids)
+            .await
+            .map_err(TunnelAnchorError::Unavailable)?
+            .into_iter()
+            .filter_map(|(id, object)| object.map(|object| (id, object)))
+            .collect())
     }
 
     fn is_tunnel_object(&self, object: &Object) -> Result<bool, TunnelAnchorError> {
@@ -2344,28 +2527,9 @@ impl SuiSponsoredAnchor {
                 .ok_or_else(|| TunnelAnchorError::Unavailable("empty settle batch result".into()));
         }
         let body = self.backend.settle(first.tunnel_id.clone(), body).await?;
-        // Settle gas is metered post-hoc from the on-chain effects. If they
-        // can't be fetched (RPC error, or not yet indexed), warn instead of
-        // silently dropping the spend — an unmetered settle understates the gas
-        // total, and a silent gap is worse than a visible one.
-        match self.chain.get_transaction_effects(&body.tx_digest).await {
-            Ok(Some(settle_effects)) => {
-                self.cost.add(false, net_gas_mist(&settle_effects));
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    tx_digest = %body.tx_digest,
-                    "settle gas unmetered: transaction effects not yet available"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    tx_digest = %body.tx_digest,
-                    error = ?err,
-                    "settle gas unmetered: failed to fetch transaction effects"
-                );
-            }
-        }
+        // Gas metering is best-effort accounting; keep it off the settle critical
+        // path so a slow/rate-limited chain read can't stall settlement.
+        self.spawn_settle_gas_metering(body.tx_digest.clone());
         self.record_settle_ptb(body.tx_digest.clone(), 1, SuiPtbFlushReason::Immediate);
         Ok(SettledTunnel {
             digest: body.tx_digest,
@@ -2392,6 +2556,12 @@ impl SuiSponsoredAnchor {
                 }
             }
             Err(error) => {
+                tracing::warn!(
+                    items = items.len(),
+                    ?reason,
+                    ?error,
+                    "sui settle batch failed"
+                );
                 for item in items {
                     let _ = item.responder.send(Err(error.clone()));
                 }
@@ -2436,8 +2606,8 @@ impl SuiSponsoredAnchor {
         let kind = self.build_batched_settle_kind(&prepared).await?;
         let effects = match self.config.settle_mode {
             SuiSettleMode::BackendSettle => unreachable!(),
-            SuiSettleMode::SponsoredSettle => self.execute_sponsored_kind(kind).await?,
-            SuiSettleMode::DirectSettle => self.execute_direct_kind(kind).await?,
+            SuiSettleMode::SponsoredSettle => self.execute_sponsored_kind(kind).await?.effects,
+            SuiSettleMode::DirectSettle => self.execute_direct_kind(kind).await?.effects,
         };
         ensure_success(&effects)?;
         self.cost
@@ -2454,6 +2624,32 @@ impl SuiSponsoredAnchor {
                 },
             })
             .collect())
+    }
+
+    /// Meter settle gas in the background. Kept off the settle critical path so a
+    /// slow/rate-limited chain read can't stall settlement, and skipped when the
+    /// digest is empty (the ADR-0029 async settle path returns no digest, so there
+    /// is nothing to fetch).
+    fn spawn_settle_gas_metering(&self, tx_digest: String) {
+        if tx_digest.is_empty() {
+            return;
+        }
+        let chain = self.chain.clone();
+        let cost = self.cost.clone();
+        tokio::spawn(async move {
+            match chain.get_transaction(&tx_digest).await {
+                Ok(Some(settle_tx)) => cost.add(false, net_gas_mist(&settle_tx.effects)),
+                Ok(None) => tracing::warn!(
+                    tx_digest = %tx_digest,
+                    "settle gas unmetered: transaction effects not yet available"
+                ),
+                Err(error) => tracing::warn!(
+                    tx_digest = %tx_digest,
+                    error = %error,
+                    "settle gas unmetered: failed to fetch transaction effects"
+                ),
+            }
+        });
     }
 
     async fn build_batched_settle_kind(
@@ -2592,20 +2788,43 @@ pub struct SettleResponse {
     pub tx_digest: String,
 }
 
+/// Log a failing chain/transport call at `warn` and return the flattened
+/// message. The `SuiChainClient` trait surfaces `String`, discarding the gRPC
+/// `Code`, so rate limits (`ResourceExhausted`) and transport stalls would
+/// otherwise be invisible in swarm runs. The status `Display` embeds the code,
+/// so the logged message still carries the failure class; `endpoint` identifies
+/// which fullnode was hit.
+fn log_chain_call_failure(op: &str, endpoint: &str, error: impl std::fmt::Display) -> String {
+    let message = error.to_string();
+    tracing::warn!(op, endpoint, error = %message, "sui chain call failed");
+    message
+}
+
+/// Log a failing backend HTTP request at `warn` (including the target `url`) and
+/// wrap it as `Unavailable`. Used for transport-level failures (connection
+/// refused, timeouts) before any HTTP status is seen.
+fn log_backend_send_failure(op: &str, url: &str, error: reqwest::Error) -> TunnelAnchorError {
+    let message = error.to_string();
+    tracing::warn!(op, url, error = %message, "sui backend request failed");
+    TunnelAnchorError::Unavailable(message)
+}
+
 async fn read_json_response<T: for<'de> Deserialize<'de>>(
     resp: reqwest::Response,
     label: &str,
 ) -> Result<T, TunnelAnchorError> {
+    let url = resp.url().to_string();
     let status = resp.status();
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| TunnelAnchorError::Unavailable(e.to_string()))?;
+        .map_err(|e| log_backend_send_failure(label, &url, e))?;
     if !status.is_success() {
         let message = format!(
-            "{label} rejected with {status}: {}",
+            "{label} rejected with {status} ({url}): {}",
             String::from_utf8_lossy(&bytes)
         );
+        tracing::warn!(op = label, url, %status, "sui backend call rejected");
         if status == reqwest::StatusCode::REQUEST_TIMEOUT
             || status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || status.is_server_error()
@@ -2927,7 +3146,6 @@ mod tests {
     use super::*;
     use bech32::ToBase32;
     use std::collections::VecDeque;
-    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex as StdMutex;
     use sui_sdk_types::{
         Digest, ExecutionError, GasCostSummary, GasPayment, MoveStruct, ObjectData,
@@ -2951,24 +3169,15 @@ mod tests {
         execute_call_count: StdMutex<usize>,
         execute_signature_count: StdMutex<Option<usize>>,
         transaction_digest_read: StdMutex<Option<String>>,
-        timestamp_digest_read: StdMutex<Option<String>>,
         first_execute_gate: StdMutex<Option<Arc<ExecuteGate>>>,
         object_ref_read_count: StdMutex<usize>,
         object_read_count: StdMutex<usize>,
-        object_read_gate: StdMutex<Option<Arc<ObjectReadGate>>>,
     }
 
     #[derive(Default)]
     struct ExecuteGate {
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
-    }
-
-    #[derive(Default)]
-    struct ObjectReadGate {
-        entered: tokio::sync::Notify,
-        release: tokio::sync::Notify,
-        released: AtomicBool,
     }
 
     #[async_trait]
@@ -2983,20 +3192,7 @@ mod tests {
         }
 
         async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String> {
-            let gate = self.object_read_gate.lock().unwrap().clone();
-            if let Some(gate) = gate {
-                *self.object_read_count.lock().unwrap() += 1;
-                gate.entered.notify_waiters();
-                while !gate.released.load(Ordering::Acquire) {
-                    let notified = gate.release.notified();
-                    if gate.released.load(Ordering::Acquire) {
-                        break;
-                    }
-                    notified.await;
-                }
-            } else {
-                *self.object_read_count.lock().unwrap() += 1;
-            }
+            *self.object_read_count.lock().unwrap() += 1;
             Ok(self.objects.lock().unwrap().get(&object_id).cloned())
         }
 
@@ -3012,7 +3208,7 @@ mod tests {
             &self,
             transaction: &Transaction,
             signatures: &[UserSignature],
-        ) -> Result<TransactionEffects, String> {
+        ) -> Result<ExecutedChainTx, String> {
             *self.executed_transaction.lock().unwrap() = Some(transaction.clone());
             let execute_call_count = {
                 let mut count = self.execute_call_count.lock().unwrap();
@@ -3038,20 +3234,21 @@ mod tests {
                     gate.release.notified().await;
                 }
             }
-            result
+            result.map(|effects| ExecutedChainTx {
+                effects,
+                created_objects: Vec::new(),
+                timestamp_ms: *self.transaction_timestamp_ms.lock().unwrap(),
+            })
         }
 
-        async fn get_transaction_effects(
-            &self,
-            digest: &str,
-        ) -> Result<Option<TransactionEffects>, String> {
+        async fn get_transaction(&self, digest: &str) -> Result<Option<ExecutedChainTx>, String> {
             *self.transaction_digest_read.lock().unwrap() = Some(digest.to_string());
-            Ok(self.transaction_effects.lock().unwrap().clone())
-        }
-
-        async fn get_transaction_timestamp_ms(&self, digest: &str) -> Result<Option<u64>, String> {
-            *self.timestamp_digest_read.lock().unwrap() = Some(digest.to_string());
-            Ok(*self.transaction_timestamp_ms.lock().unwrap())
+            let effects = self.transaction_effects.lock().unwrap().clone();
+            Ok(effects.map(|effects| ExecutedChainTx {
+                effects,
+                created_objects: Vec::new(),
+                timestamp_ms: *self.transaction_timestamp_ms.lock().unwrap(),
+            }))
         }
     }
 
@@ -3405,30 +3602,6 @@ mod tests {
         )
     }
 
-    async fn wait_for_object_reads(chain: &FakeChain, expected: usize, timeout: Duration) -> bool {
-        tokio::time::timeout(timeout, async {
-            loop {
-                if *chain.object_read_count.lock().unwrap() >= expected {
-                    return;
-                }
-                let gate = chain
-                    .object_read_gate
-                    .lock()
-                    .unwrap()
-                    .clone()
-                    .expect("object read gate");
-                gate.entered.notified().await;
-            }
-        })
-        .await
-        .is_ok()
-    }
-
-    fn release_object_reads(gate: &ObjectReadGate) {
-        gate.released.store(true, Ordering::Release);
-        gate.release.notify_waiters();
-    }
-
     fn open_request_with_secrets(
         party_a_secret: [u8; 32],
         party_b_secret: [u8; 32],
@@ -3730,20 +3903,15 @@ mod tests {
         // real, recently-checkpointed digest — ideal for the transaction reads.
         let digest = clock_obj.previous_transaction().to_string();
 
-        // get_transaction_effects: the TryFrom needs effects.bcs in the response,
-        // which the parent "effects" mask path must pull in.
-        client
-            .get_transaction_effects(&digest)
+        // get_transaction: the TryFrom needs effects.bcs in the response, which the
+        // parent "effects" mask path must pull in; the checkpoint timestamp must be
+        // present and sane (epoch-ms), and created objects should inline.
+        let executed = client
+            .get_transaction(&digest)
             .await
-            .expect("get_transaction_effects")
-            .expect("effects for the clock's previous tx");
-
-        // get_transaction_timestamp_ms: checkpoint timestamp present + sane (epoch-ms).
-        let ts = client
-            .get_transaction_timestamp_ms(&digest)
-            .await
-            .expect("get_transaction_timestamp_ms")
-            .expect("timestamp present");
+            .expect("get_transaction")
+            .expect("transaction for the clock's previous tx");
+        let ts = executed.timestamp_ms.expect("timestamp present");
         assert!(
             ts > 1_600_000_000_000,
             "timestamp should be epoch-ms after 2020"
@@ -3847,10 +4015,6 @@ mod tests {
 
         assert_eq!(opened.tunnel_id, tunnel_id.to_string());
         assert_eq!(opened.created_at_ms, Some(1_770_000_000_123));
-        assert_eq!(
-            *chain.timestamp_digest_read.lock().unwrap(),
-            Some(Digest::ZERO.to_string())
-        );
         assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(2));
         assert!(backend.tx_kind_bytes.lock().unwrap().as_ref().is_some());
         assert_eq!(
@@ -4440,7 +4604,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batched_open_reads_created_tunnel_objects_concurrently() {
+    async fn batched_open_reads_all_created_tunnel_objects_in_one_batch() {
         let first_tunnel = Address::from_str("0x42").unwrap();
         let second_tunnel = Address::from_str("0x43").unwrap();
         let third_tunnel = Address::from_str("0x44").unwrap();
@@ -4470,8 +4634,6 @@ mod tests {
             second_tunnel,
         ]));
         *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_789);
-        let gate = Arc::new(ObjectReadGate::default());
-        *chain.object_read_gate.lock().unwrap() = Some(gate.clone());
 
         let backend = Arc::new(FakeBackend::default());
         let mut config = address_balance_config();
@@ -4488,21 +4650,11 @@ mod tests {
         let first_anchor = shared.for_open_intent(intent(1));
         let second_anchor = shared.for_open_intent(intent(2));
         let third_anchor = shared.for_open_intent(intent(3));
-        let opens = tokio::spawn(async move {
-            tokio::join!(
-                first_anchor.open(first_request),
-                second_anchor.open(second_request),
-                third_anchor.open(third_request)
-            )
-        });
-
-        assert!(
-            wait_for_object_reads(&chain, 3, Duration::from_millis(100)).await,
-            "all created tunnel objects should be requested before the first object read completes"
+        let (first, second, third) = tokio::join!(
+            first_anchor.open(first_request),
+            second_anchor.open(second_request),
+            third_anchor.open(third_request)
         );
-        release_object_reads(&gate);
-
-        let (first, second, third) = opens.await.expect("open join");
         assert_eq!(
             first.expect("first open").tunnel_id,
             first_tunnel.to_string()
@@ -4514,6 +4666,13 @@ mod tests {
         assert_eq!(
             third.expect("third open").tunnel_id,
             third_tunnel.to_string()
+        );
+        // The three tunnels batch into one open tx; with no inlined objects the
+        // mapping falls back to a single batched read of all three created objects.
+        assert_eq!(
+            *chain.object_read_count.lock().unwrap(),
+            3,
+            "batched open reads each created tunnel object exactly once"
         );
     }
 
@@ -4817,10 +4976,6 @@ mod tests {
         assert_eq!(
             *chain.transaction_digest_read.lock().unwrap(),
             Some("EXECUTED".into())
-        );
-        assert_eq!(
-            *chain.timestamp_digest_read.lock().unwrap(),
-            Some(Digest::ZERO.to_string())
         );
         assert_eq!(
             backend

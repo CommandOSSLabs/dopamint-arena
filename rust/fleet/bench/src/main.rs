@@ -42,12 +42,20 @@ fn main() {
         ColorMode::Auto => RenderStyle::Plain,
     };
 
-    if opts.trace {
-        let env_filter = tracing_subscriber::EnvFilter::new(
+    // Always install a subscriber writing to stderr so the report on stdout stays
+    // clean. Without `--trace` we still surface `warn`+ so anchor-level failures
+    // (RPC rate limits, transport stalls) that stall a swarm are diagnosable.
+    let env_filter = if opts.trace {
+        tracing_subscriber::EnvFilter::new(
             "fleet_bench=debug,sui_tunnel_anchor=debug,tunnel_harness=info",
-        );
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    }
+        )
+    } else {
+        tracing_subscriber::EnvFilter::new("warn")
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .init();
 
     let sui_context = match opts.anchor_mode {
         AnchorMode::Memory => None,

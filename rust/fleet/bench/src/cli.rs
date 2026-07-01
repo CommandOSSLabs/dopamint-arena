@@ -332,7 +332,7 @@ struct Raw {
     /// Stake funding source used by the single-funder profile.
     #[arg(
         long = "sui-stake-source",
-        default_value = "coin-object",
+        default_value = "address-balance",
         value_name = "coin-object|address-balance"
     )]
     sui_stake_source: String,
@@ -1070,6 +1070,8 @@ mod tests {
             "0xabc",
             "--sui-funder-priv-key",
             "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-stake-source",
+            "coin-object",
             "--sui-funder-stake-coin-id",
             "0xcoin",
         ])
@@ -1207,12 +1209,10 @@ mod tests {
         let err = parse_v(&["--anchor", "sui"]).unwrap_err();
         assert!(err.contains("sui-rpc-url"), "{err}");
         assert!(err.contains("sui-funder-priv-key"), "{err}");
-        assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
 
         let err = parse_v(&["--anchor", "sui", "--transcript-recorder", "memory"]).unwrap_err();
         assert!(err.contains("sui-rpc-url"), "{err}");
         assert!(err.contains("sui-funder-priv-key"), "{err}");
-        assert!(err.contains("sui-funder-stake-coin-id"), "{err}");
     }
 
     #[test]
@@ -1310,6 +1310,8 @@ mod tests {
             "0xabc",
             "--sui-funder-priv-key",
             "suiprivkey1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            "--sui-stake-source",
+            "coin-object",
             "--sui-funder-stake-coin-id",
             "0xcoin",
         ])
