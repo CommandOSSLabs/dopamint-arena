@@ -448,8 +448,13 @@ mod tests {
             InMemoryTranscriptRecorder::new(),
         );
 
-        // Bound the wait so a bot-side regression fails fast instead of hanging CI.
-        let human_outcome = tokio::time::timeout(Duration::from_secs(10), human)
+        // Bound the wait so a genuine bot-side hang fails the test instead of stalling CI until the
+        // global job timeout. The bound must clear a REAL match's wall-clock on a loaded CI runner:
+        // `cargo test` runs the whole backend suite in parallel and oversubscribes the box's cores,
+        // where an equivalent stand-in match (bot-fleet's `bot_plays_a_full_match…`) legitimately
+        // takes ~90s — so the former 10s fired spuriously. 180s still catches a true deadlock (which
+        // never completes) while tolerating a slow, contended runner.
+        let human_outcome = tokio::time::timeout(Duration::from_secs(180), human)
             .await
             .expect("the match settles in time")
             .expect("human (party A) plays to settlement over the bus");

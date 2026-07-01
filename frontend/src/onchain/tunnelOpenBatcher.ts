@@ -211,9 +211,12 @@ export class TunnelOpenBatcher {
             chunkTotal,
           );
       for (const p of chunkPending) {
-        // A deposit targets a KNOWN tunnel (`p.req.tunnelId`) — resolve to it directly. Resolving by
-        // party-A address collides in multi-game arena: every game shares the user's wallet as party A,
-        // so the address→tunnelId map keeps only one entry and all games would get the same tunnel.
+        // Deposit mode: the tunnel already exists and its id is the request INPUT, so resolve to it
+        // directly. `map` is keyed by party-A ADDRESS, which collides when a batch shares one wallet
+        // — the arena case: every game deposits seat A from the same address (only the per-game eph
+        // pubkey differs), so the map collapses to a single entry and would hand every game the same
+        // (wrong) tunnel, making its co-signed tunnelId disagree with the bot's. Open mode has no id
+        // upfront (its tunnels are created by this PTB), so it still resolves via the map.
         const id = deposit
           ? p.req.tunnelId
           : map.get(normalizeSuiAddress(p.req.partyA.address));
