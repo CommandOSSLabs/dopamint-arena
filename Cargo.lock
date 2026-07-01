@@ -2797,6 +2797,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "transcript-store",
  "url",
 ]
 
@@ -8370,6 +8371,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
+ "futures",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

@@ -33,7 +33,12 @@
 use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
+
+/// Max concurrent chunk GETs during reassembly. A large transcript is ~25 chunks (25 MB / 1 MB), so
+/// this fans the reader's S3 round-trips out enough to hide latency without an unbounded burst.
+const CHUNK_FETCH_CONCURRENCY: usize = 16;
 
 /// Errors returned by this crate. `#[non_exhaustive]` so new variants don't break consumers.
 #[derive(Debug, thiserror::Error)]
@@ -281,30 +286,36 @@ impl S3TranscriptStore {
         tunnel_id: &str,
         manifest: &TranscriptManifest,
     ) -> Result<Vec<u8>> {
-        let mut transcript = Vec::with_capacity(manifest.total_bytes as usize);
-        for seq in 0..manifest.chunk_count {
-            let key = chunk_key(&self.prefix, tunnel_id, seq);
-            let bytes =
+        let chunk_count = manifest.chunk_count;
+        // Fetch chunks with bounded concurrency but concatenate in seq order (`buffered`, NOT
+        // `buffer_unordered`) so the reassembled bytes are byte-identical to a sequential read — the
+        // Merkle root the caller recomputes depends on exact entry order.
+        let chunks: Vec<Vec<u8>> = stream::iter(0..chunk_count)
+            .map(|seq| async move {
+                let key = chunk_key(&self.prefix, tunnel_id, seq);
                 self.get_bytes(&key, "get_chunk")
                     .await?
                     .ok_or_else(|| Error::Incomplete {
                         tunnel_id: tunnel_id.to_string(),
-                        detail: format!(
-                            "manifest lists {} chunks but {key} is missing",
-                            manifest.chunk_count
-                        ),
-                    })?;
-            transcript.extend_from_slice(&bytes);
-        }
-        if transcript.len() as u64 != manifest.total_bytes {
+                        detail: format!("manifest lists {chunk_count} chunks but {key} is missing"),
+                    })
+            })
+            .buffered(CHUNK_FETCH_CONCURRENCY)
+            .try_collect()
+            .await?;
+        let total: usize = chunks.iter().map(Vec::len).sum();
+        if total as u64 != manifest.total_bytes {
             return Err(Error::Incomplete {
                 tunnel_id: tunnel_id.to_string(),
                 detail: format!(
-                    "manifest says {} bytes, reassembled {}",
-                    manifest.total_bytes,
-                    transcript.len()
+                    "manifest says {} bytes, reassembled {total}",
+                    manifest.total_bytes
                 ),
             });
+        }
+        let mut transcript = Vec::with_capacity(manifest.total_bytes as usize);
+        for chunk in chunks {
+            transcript.extend_from_slice(&chunk);
         }
         Ok(transcript)
     }

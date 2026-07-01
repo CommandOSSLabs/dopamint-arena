@@ -4,17 +4,29 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{HeaderName, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::Router;
 use shared::{LifecycleKind, SettlementQuery, SettlementStore};
+use transcript_store::TranscriptChunkReader;
+
+/// Names the transcript wire format so the browser verifier picks the right decode path: the
+/// server-owned streamed chunks are entries-only (root/balances come from the settlement row), while
+/// the legacy Walrus blob is a whole settle body (header + entries).
+const TRANSCRIPT_FORMAT_HEADER: &str = "x-transcript-format";
+const FORMAT_ENTRIES: &str = "entries";
+const FORMAT_BODY: &str = "body";
 
 #[derive(Clone)]
 pub struct ApiState {
     pub store: Arc<dyn SettlementStore>,
     pub walrus_aggregator_url: String,
     pub http: reqwest::Client,
+    /// Reassembles the bot-streamed transcript chunks. `None` = no S3 configured; `/transcript`
+    /// then serves only the legacy one-object Walrus blob.
+    pub chunks: Option<Arc<dyn TranscriptChunkReader>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -65,18 +77,44 @@ async fn detail(State(s): State<ApiState>, Path(digest): Path<String>) -> Respon
     }
 }
 
-/// Proxy the Walrus transcript blob so the browser fetches it same-origin (and we can cache
-/// / shield the public aggregator). 404 when the settlement has no archived transcript.
+/// Serve a settlement's transcript for the in-browser verifier. Prefers the server-owned streamed
+/// chunks (entries-only; the verifier reads root/balances from the settlement row) and falls back to
+/// the legacy one-object Walrus blob (a whole settle body) during the transition. The
+/// `x-transcript-format` header tells the verifier which decode path to take. 404 when neither
+/// source has the transcript.
 async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Response {
-    let blob_id = match s.store.get(&digest).await {
-        Ok(Some(row)) => row.walrus_blob_id,
+    let row = match s.store.get(&digest).await {
+        Ok(Some(row)) => row,
         Ok(None) => return (StatusCode::NOT_FOUND, "no such settlement").into_response(),
         Err(e) => {
             tracing::error!(error = %e, "settlement store error");
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
         }
     };
-    let Some(blob_id) = blob_id else {
+    // Chunks are the source of truth once the bot owns the transcript; a transient S3 error falls
+    // through to Walrus rather than failing, so verification degrades gracefully mid-migration.
+    if let Some(chunks) = &s.chunks {
+        match chunks.read_transcript(&row.tunnel_id).await {
+            Ok(Some(bytes)) => {
+                return (
+                    [
+                        (CONTENT_TYPE, "application/octet-stream"),
+                        (
+                            HeaderName::from_static(TRANSCRIPT_FORMAT_HEADER),
+                            FORMAT_ENTRIES,
+                        ),
+                    ],
+                    bytes,
+                )
+                    .into_response();
+            }
+            Ok(None) => {} // no chunks for this tunnel — fall back to the Walrus blob
+            Err(e) => {
+                tracing::warn!(error = %e, tunnel = %row.tunnel_id, "chunk read failed; trying Walrus");
+            }
+        }
+    }
+    let Some(blob_id) = row.walrus_blob_id else {
         return (
             StatusCode::NOT_FOUND,
             "settlement has no archived transcript",
@@ -98,9 +136,13 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
         Ok(resp) => match resp.bytes().await {
             // The blob is opaque to us — v2 transcripts are binary (octet-stream); legacy v1 blobs
             // are JSON but the in-browser verifier reads them as bytes either way. Advertise the
-            // honest type so non-browser consumers (curl, CDN sniff) don't mishandle binary.
+            // honest type so non-browser consumers (curl, CDN sniff) don't mishandle binary. The
+            // format header marks it a whole settle body (header + entries), not entries-only chunks.
             Ok(body) => (
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                [
+                    (CONTENT_TYPE, "application/octet-stream"),
+                    (HeaderName::from_static(TRANSCRIPT_FORMAT_HEADER), FORMAT_BODY),
+                ],
                 body,
             )
                 .into_response(),
@@ -208,6 +250,7 @@ mod tests {
             store: Arc::new(store),
             walrus_aggregator_url: "https://agg.example".into(),
             http: reqwest::Client::new(),
+            chunks: None,
         }
     }
 
@@ -318,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn transcript_404_when_no_blob() {
-        let app = router(state_with(vec![settled("a", 10)])); // walrus_blob_id None
+        let app = router(state_with(vec![settled("a", 10)])); // walrus_blob_id None, chunks None
         let res = app
             .oneshot(
                 Request::builder()
@@ -329,5 +372,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    // When the bot has streamed chunks for the tunnel, /transcript serves the reassembled
+    // entries-only bytes and marks the format so the verifier reads root/balances from the row —
+    // it must NOT fall back to the (absent) Walrus blob.
+    #[tokio::test]
+    async fn transcript_serves_reassembled_chunks_as_entries() {
+        use transcript_store::testing::FakeChunkStore;
+        use transcript_store::{TranscriptChunkWriter, TranscriptManifest};
+
+        let fake = Arc::new(FakeChunkStore::default());
+        fake.put_chunk("0xtun", 0, b"co-signed-entry-bytes".to_vec())
+            .await
+            .unwrap();
+        fake.seal("0xtun", &TranscriptManifest::new(1, 21, "0xroot".into(), 1))
+            .await
+            .unwrap();
+
+        let mut state = state_with(vec![settled("a", 10)]); // tunnel_id "0xtun", no walrus blob
+        state.chunks = Some(fake as Arc<dyn TranscriptChunkReader>);
+        let app = router(state);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements/a/transcript")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(TRANSCRIPT_FORMAT_HEADER).unwrap(),
+            FORMAT_ENTRIES
+        );
+        let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"co-signed-entry-bytes");
     }
 }
