@@ -419,7 +419,7 @@ where
                 .as_ref()
                 .is_some_and(DriverRunControl::is_hard_stopped)
             {
-                match Self::recv_or_stop(frame_transport, run_control.as_ref()).await? {
+                match Self::recv_or_stop(frame_transport, run_control.as_ref(), false).await? {
                     DriverRecv::Frame(bytes) => {
                         let out = seat.handle_frame(&bytes)?;
                         for f in out {
@@ -493,7 +493,12 @@ where
                 continue;
             }
 
-            match Self::recv_or_stop(frame_transport, run_control.as_ref()).await? {
+            let allow_graceful_stop = run_control.as_ref().is_some_and(|control| {
+                control.is_graceful() && moves > 0 && seat.can_gracefully_close()
+            });
+            match Self::recv_or_stop(frame_transport, run_control.as_ref(), allow_graceful_stop)
+                .await?
+            {
                 DriverRecv::Frame(bytes) => {
                     let out = seat.handle_frame(&bytes)?;
                     for f in out {
@@ -593,6 +598,7 @@ where
     async fn recv_or_stop(
         frame_transport: &Ch,
         run_control: Option<&DriverRunControl>,
+        allow_graceful_stop: bool,
     ) -> Result<DriverRecv, HarnessError> {
         let Some(run_control) = run_control else {
             return match frame_transport.recv().await? {
@@ -603,6 +609,11 @@ where
 
         let mut stop_rx = run_control.subscribe();
         loop {
+            let graceful_stop_allowed =
+                allow_graceful_stop && run_control.stopped() && run_control.is_graceful();
+            if graceful_stop_allowed {
+                return Ok(DriverRecv::Stopped);
+            }
             if run_control.is_hard_stopped() {
                 if !run_control.has_outstanding_reserved_move() {
                     return Ok(DriverRecv::Stopped);
@@ -630,11 +641,18 @@ where
                     return match frame? {
                         Some(bytes) => Ok(DriverRecv::Frame(bytes)),
                         None if run_control.is_hard_stopped() => Ok(DriverRecv::Stopped),
+                        None if allow_graceful_stop && run_control.stopped() && run_control.is_graceful() => {
+                            Ok(DriverRecv::Stopped)
+                        }
                         None => Ok(DriverRecv::Closed),
                     };
                 }
                 changed = stop_rx.changed() => {
-                    if changed.is_err() {
+                    if changed.is_err()
+                        || (allow_graceful_stop
+                            && run_control.stopped()
+                            && run_control.is_graceful())
+                    {
                         return Ok(DriverRecv::Stopped);
                     }
                 }
@@ -923,6 +941,28 @@ mod tests {
         }
     }
 
+    struct StopOnRecvCallTransport<T> {
+        inner: T,
+        run_control: DriverRunControl,
+        recv_calls: Arc<AtomicU64>,
+        stop_on_call: u64,
+    }
+
+    impl<T: FrameTransport> FrameTransport for StopOnRecvCallTransport<T> {
+        async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+            self.inner.send(bytes).await
+        }
+
+        async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
+            let call = self.recv_calls.fetch_add(1, Ordering::Relaxed) + 1;
+            if call == self.stop_on_call {
+                self.run_control.request_stop();
+                tokio::task::yield_now().await;
+            }
+            self.inner.recv().await
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_control_move_limit_stops_non_terminal_drivers_and_settles() {
         let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
@@ -1006,6 +1046,56 @@ mod tests {
         })
         .await
         .expect("drivers should stop at the first close boundary after the limit");
+
+        let (out_a, _) = out_a.unwrap();
+        let (out_b, _) = out_b.unwrap();
+        assert_eq!(out_a.moves, 3);
+        assert_eq!(out_b.moves, 3);
+        assert_eq!(run_control.moves(), 3);
+        assert!(run_control.stopped());
+        assert_eq!(settled.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn graceful_external_stop_wakes_receiver_at_close_boundary() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 0, Arc::clone(&settled), Arc::clone(&requests));
+        let run_control = DriverRunControl::graceful_unbounded();
+        let recv_calls = Arc::new(AtomicU64::new(0));
+
+        let driver_a = PartyDriver::new(
+            repeating_parts(Seat::A, &secret_a, pk_b),
+            RepeatingStrategy,
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+        let driver_b = PartyDriver::new(
+            repeating_parts(Seat::B, &secret_b, pk_a),
+            RepeatingStrategy,
+            StopOnRecvCallTransport {
+                inner: ch_b,
+                run_control: run_control.clone(),
+                recv_calls,
+                stop_on_call: 4,
+            },
+            anchor,
+            NullTranscriptRecorder,
+        )
+        .with_run_control(run_control.clone());
+
+        let (out_a, out_b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1))
+        })
+        .await
+        .expect("graceful stop should wake a receiver already parked at a close boundary");
 
         let (out_a, _) = out_a.unwrap();
         let (out_b, _) = out_b.unwrap();

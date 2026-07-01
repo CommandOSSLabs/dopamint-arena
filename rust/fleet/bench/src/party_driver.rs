@@ -10,15 +10,16 @@ use sui_tunnel_anchor::{
     AnchorCostSnapshot, SuiOpenIntentAnchor, SuiOpenIntentId, SuiPtbMetricsSnapshot,
     SuiSponsoredAnchor, SuiSponsoredAnchorConfig,
 };
+use tokio::sync::oneshot;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move, BlackjackV2Strategy};
 use tunnel_blackjack::{BjMove, BjState, Blackjack, BlackjackStrategy};
 use tunnel_harness::instrument::{InstrumentedAnchor, InstrumentedRecorder, InstrumentedTransport};
 use tunnel_harness::{
-    Balances, DriverRunControl, FrameCodec, HarnessError, InMemoryAnchor, InMemoryFrameTransport,
-    InMemoryTranscriptRecorder, LocalSigner, MoveStrategy, MoveStrategyContext,
-    NullTranscriptRecorder, OpenedTunnel, PartyDriver, Protocol, Seat, SeatParts, SettledTunnel,
-    SettlementMode, Signer, Transcript, TranscriptEntry, TranscriptError, TranscriptRecorder,
-    TunnelAnchor, TunnelAnchorError, TunnelOpenRequest, TunnelSettleRequest,
+    Balances, DriverObserver, DriverRunControl, DriverStart, FrameCodec, HarnessError,
+    InMemoryAnchor, InMemoryFrameTransport, InMemoryTranscriptRecorder, LocalSigner, MoveStrategy,
+    MoveStrategyContext, NullTranscriptRecorder, OpenedTunnel, PartyDriver, Protocol, Seat,
+    SeatParts, SettledTunnel, SettlementMode, Signer, Transcript, TranscriptEntry, TranscriptError,
+    TranscriptRecorder, TunnelAnchor, TunnelAnchorError, TunnelOpenRequest, TunnelSettleRequest,
 };
 use tunnel_telemetry::{CollectingSink, StageId, TelemetrySink};
 
@@ -142,12 +143,14 @@ pub struct TunnelTelemetry {
 pub(crate) struct StageWindowRecorder {
     origin: Instant,
     state: Arc<Mutex<StageWindowState>>,
+    play_started: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Default)]
 struct StageWindowState {
     open: StageWindow,
     settle: StageWindow,
+    first_play_start: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -161,6 +164,7 @@ impl StageWindowRecorder {
         Self {
             origin: Instant::now(),
             state: Arc::new(Mutex::new(StageWindowState::default())),
+            play_started: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -196,6 +200,41 @@ impl StageWindowRecorder {
         let millis = (last_end - first_start).as_millis();
         millis.max(1)
     }
+
+    fn record_play_started(&self, start: Instant) {
+        let start = start.saturating_duration_since(self.origin);
+        let mut state = self.state.lock().expect("stage window mutex poisoned");
+        if state.first_play_start.is_none() {
+            state.first_play_start = Some(start);
+            self.play_started.notify_waiters();
+        }
+    }
+
+    pub(crate) fn first_play_started(&self) -> Option<Instant> {
+        let state = self.state.lock().expect("stage window mutex poisoned");
+        state
+            .first_play_start
+            .and_then(|start| self.origin.checked_add(start))
+    }
+
+    pub(crate) async fn wait_for_first_play_start(&self) -> Instant {
+        loop {
+            if let Some(start) = self.first_play_started() {
+                return start;
+            }
+            self.play_started.notified().await;
+        }
+    }
+}
+
+struct PlayStartObserver {
+    stage_windows: StageWindowRecorder,
+}
+
+impl DriverObserver for PlayStartObserver {
+    fn on_started(&mut self, _start: &DriverStart<'_>) {
+        self.stage_windows.record_play_started(Instant::now());
+    }
 }
 
 /// A cloneable anchor that dispatches to either the in-memory or sponsored-Sui backend.
@@ -220,19 +259,45 @@ impl BenchAnchorInner {
             Self::Sui(a) => a.settlement_mode(),
         }
     }
+
+    async fn open(&self, request: TunnelOpenRequest) -> Result<OpenedTunnel, TunnelAnchorError> {
+        match self {
+            Self::Memory(a) => a.open(request).await,
+            Self::Sui(a) => a.open(request).await,
+        }
+    }
+
+    async fn settle(
+        &self,
+        request: TunnelSettleRequest,
+    ) -> Result<SettledTunnel, TunnelAnchorError> {
+        match self {
+            Self::Memory(a) => a.settle(request).await,
+            Self::Sui(a) => a.settle(request).await,
+        }
+    }
 }
 
 #[derive(Clone)]
 struct BenchAnchor {
     inner: BenchAnchorInner,
     stage_windows: Option<StageWindowRecorder>,
+    submitter: Option<BenchSubmitter>,
+    seat: Seat,
 }
 
 impl BenchAnchor {
-    fn new(inner: BenchAnchorInner, stage_windows: Option<StageWindowRecorder>) -> Self {
+    fn new(
+        inner: BenchAnchorInner,
+        stage_windows: Option<StageWindowRecorder>,
+        submitter: Option<BenchSubmitter>,
+        seat: Seat,
+    ) -> Self {
         Self {
             inner,
             stage_windows,
+            submitter,
+            seat,
         }
     }
 
@@ -240,6 +305,188 @@ impl BenchAnchor {
         if let Some(recorder) = &self.stage_windows {
             recorder.record(stage, start, end);
         }
+    }
+}
+
+type OpenResult = Result<OpenedTunnel, TunnelAnchorError>;
+type SettleResult = Result<SettledTunnel, TunnelAnchorError>;
+
+#[derive(Clone)]
+struct BenchSubmitter {
+    inner: Arc<Mutex<BenchSubmitterState>>,
+}
+
+#[derive(Default)]
+struct BenchSubmitterState {
+    open: BenchSubmitterOpenState,
+    settle: BenchSubmitterSettleState,
+}
+
+#[derive(Default)]
+struct BenchSubmitterOpenState {
+    result: Option<OpenResult>,
+    waiters: Vec<oneshot::Sender<OpenResult>>,
+}
+
+#[derive(Default)]
+struct BenchSubmitterSettleState {
+    request_a: Option<TunnelSettleRequest>,
+    request_b: Option<TunnelSettleRequest>,
+    result: Option<SettleResult>,
+    waiters: Vec<oneshot::Sender<SettleResult>>,
+}
+
+impl BenchSubmitter {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BenchSubmitterState::default())),
+        }
+    }
+
+    async fn open_as_seat(
+        &self,
+        seat: Seat,
+        inner: &BenchAnchorInner,
+        request: TunnelOpenRequest,
+    ) -> OpenResult {
+        if seat == Seat::A {
+            let result = inner.open(request).await;
+            self.complete_open(&result);
+            return result;
+        }
+
+        let receiver = {
+            let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+            if let Some(result) = &state.open.result {
+                return clone_open_result(result);
+            }
+            let (sender, receiver) = oneshot::channel();
+            state.open.waiters.push(sender);
+            receiver
+        };
+        receiver
+            .await
+            .map_err(|_| TunnelAnchorError::Unavailable("bench open submitter dropped".into()))?
+    }
+
+    fn complete_open(&self, result: &OpenResult) {
+        let waiters = {
+            let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+            state.open.result = Some(clone_open_result(result));
+            std::mem::take(&mut state.open.waiters)
+        };
+        for waiter in waiters {
+            let _ = waiter.send(clone_open_result(result));
+        }
+    }
+
+    async fn settle_as_seat(
+        &self,
+        seat: Seat,
+        inner: &BenchAnchorInner,
+        request: TunnelSettleRequest,
+    ) -> SettleResult {
+        let receiver = {
+            let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+            if let Some(result) = &state.settle.result {
+                return clone_settle_result(result);
+            }
+            match seat {
+                Seat::A => state.settle.request_a = Some(request),
+                Seat::B => state.settle.request_b = Some(request),
+            }
+            let (sender, receiver) = oneshot::channel();
+            state.settle.waiters.push(sender);
+            receiver
+        };
+
+        if seat == Seat::A {
+            self.submit_settle_when_ready(inner).await;
+        }
+
+        receiver
+            .await
+            .map_err(|_| TunnelAnchorError::Unavailable("bench settle submitter dropped".into()))?
+    }
+
+    async fn submit_settle_when_ready(&self, inner: &BenchAnchorInner) {
+        loop {
+            let maybe_requests = {
+                let state = self.inner.lock().expect("bench submitter mutex poisoned");
+                match (&state.settle.request_a, &state.settle.request_b) {
+                    (Some(a), Some(b)) => Some((clone_settle_request(a), clone_settle_request(b))),
+                    _ => None,
+                }
+            };
+            let Some((request_a, request_b)) = maybe_requests else {
+                tokio::task::yield_now().await;
+                continue;
+            };
+
+            let (result_a, result_b) =
+                tokio::join!(inner.settle(request_a), inner.settle(request_b));
+            let result = result_a.or(result_b);
+            self.complete_settle(&result);
+            break;
+        }
+    }
+
+    fn complete_settle(&self, result: &SettleResult) {
+        let waiters = {
+            let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+            if state.settle.result.is_some() {
+                return;
+            }
+            state.settle.result = Some(clone_settle_result(result));
+            std::mem::take(&mut state.settle.waiters)
+        };
+        for waiter in waiters {
+            let _ = waiter.send(clone_settle_result(result));
+        }
+    }
+}
+
+fn clone_open_result(result: &OpenResult) -> OpenResult {
+    result
+        .as_ref()
+        .map(clone_opened_tunnel)
+        .map_err(Clone::clone)
+}
+
+fn clone_settle_result(result: &SettleResult) -> SettleResult {
+    result
+        .as_ref()
+        .map(clone_settled_tunnel)
+        .map_err(Clone::clone)
+}
+
+fn clone_opened_tunnel(opened: &OpenedTunnel) -> OpenedTunnel {
+    OpenedTunnel {
+        tunnel_id: opened.tunnel_id.clone(),
+        onchain_nonce: opened.onchain_nonce,
+        created_at_ms: opened.created_at_ms,
+        created: false,
+    }
+}
+
+fn clone_settled_tunnel(settled: &SettledTunnel) -> SettledTunnel {
+    SettledTunnel {
+        digest: settled.digest.clone(),
+        final_balances: settled.final_balances,
+    }
+}
+
+fn clone_settle_request(request: &TunnelSettleRequest) -> TunnelSettleRequest {
+    TunnelSettleRequest {
+        by: request.by,
+        tunnel_id: request.tunnel_id.clone(),
+        party_a_balance: request.party_a_balance,
+        party_b_balance: request.party_b_balance,
+        final_nonce: request.final_nonce,
+        timestamp: request.timestamp,
+        signature: request.signature,
+        transcript_root: request.transcript_root,
+        transcript_entries: request.transcript_entries.clone(),
     }
 }
 
@@ -253,9 +500,15 @@ impl TunnelAnchor for BenchAnchor {
         let protocol = request.protocol.as_str().to_owned();
         tracing::debug!(anchor, protocol, "anchor open start");
         let started = Instant::now();
-        let result = match &self.inner {
-            BenchAnchorInner::Memory(a) => a.open(request).await,
-            BenchAnchorInner::Sui(a) => a.open(request).await,
+        let result = if let Some(submitter) = &self.submitter {
+            submitter
+                .open_as_seat(self.seat, &self.inner, request)
+                .await
+        } else {
+            match &self.inner {
+                BenchAnchorInner::Memory(a) => a.open(request).await,
+                BenchAnchorInner::Sui(a) => a.open(request).await,
+            }
         };
         self.record_stage(StageId::Open, started, Instant::now());
         match &result {
@@ -281,9 +534,15 @@ impl TunnelAnchor for BenchAnchor {
         let final_nonce = request.final_nonce;
         tracing::debug!(anchor, tunnel_id, ?by, final_nonce, "anchor settle start");
         let started = Instant::now();
-        let result = match &self.inner {
-            BenchAnchorInner::Memory(a) => a.settle(request).await,
-            BenchAnchorInner::Sui(a) => a.settle(request).await,
+        let result = if let Some(submitter) = &self.submitter {
+            submitter
+                .settle_as_seat(self.seat, &self.inner, request)
+                .await
+        } else {
+            match &self.inner {
+                BenchAnchorInner::Memory(a) => a.settle(request).await,
+                BenchAnchorInner::Sui(a) => a.settle(request).await,
+            }
         };
         self.record_stage(StageId::Settle, started, Instant::now());
         match &result {
@@ -405,7 +664,8 @@ where
     let (bytes_a_ctr, sink_ch_a) = ch_a.handle();
     let (bytes_b_ctr, sink_ch_b) = ch_b.handle();
 
-    // One anchor shared (cloned) into both seats.
+    // One logical anchor per tunnel. Sui bench mode makes seat A the only
+    // on-chain submitter while seat B waits on the same lifecycle result.
     let inner_anchor = match anchor_mode {
         AnchorMode::Memory => BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id(tunnel_id)),
         AnchorMode::SuiSponsored => {
@@ -415,12 +675,23 @@ where
     // Recorder choice follows the anchor's settlement mode, so capture it before
     // the anchor is moved into the wrapper.
     let settlement_mode = inner_anchor.settlement_mode();
-    let anchor = InstrumentedAnchor::new(
-        BenchAnchor::new(inner_anchor, stage_windows),
+    let submitter = matches!(anchor_mode, AnchorMode::SuiSponsored).then(BenchSubmitter::new);
+    let anchor_a = InstrumentedAnchor::new(
+        BenchAnchor::new(
+            inner_anchor.clone(),
+            stage_windows.clone(),
+            submitter.clone(),
+            Seat::A,
+        ),
         CollectingSink::with_capacity(capacity),
     );
-    // Keep a clone outside the drivers to read counters after join.
-    let anchor_handle = anchor.clone();
+    let anchor_b = InstrumentedAnchor::new(
+        BenchAnchor::new(inner_anchor, stage_windows.clone(), submitter, Seat::B),
+        CollectingSink::with_capacity(capacity),
+    );
+    // Keep handles outside the drivers to read counters after join.
+    let anchor_a_handle = anchor_a.clone();
+    let anchor_b_handle = anchor_b.clone();
 
     // Per-seat recorder: no-op for rootless anchors, in-memory for anchors that
     // settle against a transcript root (sponsored Sui). Wiring the no-op for the
@@ -444,7 +715,7 @@ where
         },
         strategy_a,
         ch_a,
-        anchor.clone(),
+        anchor_a,
         rec_a,
         C::default(),
     );
@@ -458,7 +729,7 @@ where
         },
         strategy_b,
         ch_b,
-        anchor,
+        anchor_b,
         rec_b,
         C::default(),
     );
@@ -471,6 +742,18 @@ where
         driver_b.with_run_control(control.clone())
     } else {
         driver_b
+    };
+    let (driver_a, driver_b) = if let Some(stage_windows) = stage_windows.as_ref() {
+        (
+            driver_a.observe(Box::new(PlayStartObserver {
+                stage_windows: stage_windows.clone(),
+            })),
+            driver_b.observe(Box::new(PlayStartObserver {
+                stage_windows: stage_windows.clone(),
+            })),
+        )
+    } else {
+        (driver_a, driver_b)
     };
 
     let started = Instant::now();
@@ -508,8 +791,8 @@ where
     let bytes_a = bytes_a_ctr.load(std::sync::atomic::Ordering::Relaxed);
     let bytes_b = bytes_b_ctr.load(std::sync::atomic::Ordering::Relaxed);
 
-    let open_ok = anchor_handle.opened() >= 1;
-    let settle_ok = anchor_handle.closed() >= 1;
+    let open_ok = anchor_a_handle.opened() + anchor_b_handle.opened() >= 1;
+    let settle_ok = anchor_a_handle.closed() + anchor_b_handle.closed() >= 1;
     if open_ok {
         tracing::info!(tunnel_id, "tunnel opened");
     }
@@ -519,10 +802,11 @@ where
 
     // Merge all sinks into one CollectingSink.
     let mut sink = CollectingSink::with_capacity(capacity * 5);
-    // Drain anchor sink (requires no other clones of anchor_handle remaining).
-    // Both seats open/settle the shared anchor, so collapse each stage's two
+    // Drain anchor sinks (requires no other clones of the handles remaining).
+    // Both seats pass through bench anchors, so collapse each stage's two
     // samples to the minimum — see `record_min_sample`.
-    let anchor_sink = anchor_handle.into_sink();
+    let mut anchor_sink = anchor_a_handle.into_sink();
+    anchor_sink.merge(anchor_b_handle.into_sink());
     record_min_sample(&mut sink, &anchor_sink, StageId::Open);
     record_min_sample(&mut sink, &anchor_sink, StageId::Settle);
     // Drain transport sinks via their Arc handles.
@@ -681,6 +965,10 @@ impl Protocol for SeededBlackjack {
         tunnel_blackjack::is_terminal_with_round_cap(s, self.round_cap)
     }
 
+    fn can_gracefully_close(&self, s: &Self::State) -> bool {
+        s.phase == tunnel_blackjack::Phase::RoundOver
+    }
+
     fn sample_move(
         &self,
         state: &Self::State,
@@ -781,6 +1069,135 @@ mod tests {
 
         assert_eq!(recorder.active_elapsed_ms(StageId::Open), 1);
         assert_eq!(recorder.active_elapsed_ms(StageId::Settle), 0);
+    }
+
+    #[tokio::test]
+    async fn stage_window_recorder_notifies_first_play_start() {
+        let recorder = StageWindowRecorder::new();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(5),
+                recorder.wait_for_first_play_start()
+            )
+            .await
+            .is_err(),
+            "play window should not start before a driver enters the move loop"
+        );
+
+        let started = Instant::now();
+        recorder.record_play_started(started);
+        let observed = tokio::time::timeout(
+            Duration::from_millis(50),
+            recorder.wait_for_first_play_start(),
+        )
+        .await
+        .expect("play start notification");
+
+        assert!(observed >= started);
+        assert_eq!(recorder.first_play_started(), Some(observed));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_makes_seat_b_wait_for_seat_a_open() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let request = TunnelOpenRequest {
+            protocol: tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1")
+                .expect("protocol id"),
+            party_a: [1u8; 32],
+            party_b: [2u8; 32],
+            initial: Balances { a: 1, b: 1 },
+        };
+
+        let b = {
+            let submitter = submitter.clone();
+            let inner = inner.clone();
+            tokio::spawn(async move { submitter.open_as_seat(Seat::B, &inner, request).await })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!b.is_finished(), "seat B must wait for seat A submitter");
+
+        let opened_a = submitter
+            .open_as_seat(
+                Seat::A,
+                &inner,
+                TunnelOpenRequest {
+                    protocol: tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1")
+                        .expect("protocol id"),
+                    party_a: [1u8; 32],
+                    party_b: [2u8; 32],
+                    initial: Balances { a: 1, b: 1 },
+                },
+            )
+            .await
+            .expect("seat A open");
+        let opened_b = b.await.expect("seat B join").expect("seat B open");
+
+        assert_eq!(opened_a.tunnel_id, "0x1");
+        assert_eq!(opened_b.tunnel_id, "0x1");
+        assert!(opened_a.created);
+        assert!(!opened_b.created);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_makes_seat_a_submit_paired_settle() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
+        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+        let protocol =
+            tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1").expect("protocol id");
+        inner
+            .open(TunnelOpenRequest {
+                protocol,
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                initial: Balances { a: 1, b: 1 },
+            })
+            .await
+            .expect("open");
+        let settlement = tunnel_core::wire::Settlement {
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+        };
+        let msg = tunnel_core::wire::serialize_settlement(&settlement);
+        let request_a = TunnelSettleRequest {
+            by: Seat::A,
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+            signature: signer_a.sign(&msg),
+            transcript_root: None,
+            transcript_entries: Vec::new(),
+        };
+        let request_b = TunnelSettleRequest {
+            by: Seat::B,
+            signature: signer_b.sign(&msg),
+            ..clone_settle_request(&request_a)
+        };
+
+        let b = {
+            let submitter = submitter.clone();
+            let inner = inner.clone();
+            tokio::spawn(async move { submitter.settle_as_seat(Seat::B, &inner, request_b).await })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!b.is_finished(), "seat B must wait for seat A submitter");
+
+        let settled_a = submitter
+            .settle_as_seat(Seat::A, &inner, request_a)
+            .await
+            .expect("seat A settle");
+        let settled_b = b.await.expect("seat B join").expect("seat B settle");
+
+        assert_eq!(settled_a.digest, settled_b.digest);
+        assert_eq!(settled_a.final_balances, Balances { a: 1, b: 1 });
+        assert_eq!(settled_b.final_balances, Balances { a: 1, b: 1 });
     }
 
     /// End-to-end: `record_transcript: true` on the (rootless) memory anchor wires

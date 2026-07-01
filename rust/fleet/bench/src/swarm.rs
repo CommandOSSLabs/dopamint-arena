@@ -364,8 +364,6 @@ pub fn run_lifecycle_pipeline(
     let stage_windows = StageWindowRecorder::new();
     let stage_windows_for_tasks = stage_windows.clone();
     let (samples, move_window_elapsed_ms, tunnels_aborted) = runtime.block_on(async move {
-        let move_window_started = Instant::now();
-        let deadline = move_window_started + Duration::from_secs(duration_secs);
         let kit_for = |index: u64| -> SeatKit {
             if preinitialize {
                 preinit_kits[index as usize % preinit_kits.len()].clone()
@@ -399,14 +397,40 @@ pub fn run_lifecycle_pipeline(
 
         let mut samples = Vec::new();
         let mut tunnels_aborted = 0;
+        let Some(move_window_started) = wait_for_first_play_window(
+            &stage_windows_for_tasks,
+            &mut tasks,
+            &mut samples,
+            &mut tunnels_aborted,
+        )
+        .await
+        else {
+            return (samples, 0, tunnels_aborted);
+        };
+        let deadline = move_window_started + Duration::from_secs(duration_secs);
         let stop_observed_at = loop {
             if reached_move_target(&samples, moves) || run_control_for_tasks.stopped() {
                 break Instant::now();
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                run_control_for_tasks.request_stop();
-                break Instant::now();
+                if run_control_for_tasks.moves() > 0 {
+                    run_control_for_tasks.request_stop();
+                    break Instant::now();
+                }
+                match tokio::time::timeout(Duration::from_millis(1), tasks.join_next()).await {
+                    Ok(Some(result)) => {
+                        if record_tunnel_join(&mut samples, result) {
+                            tunnels_aborted += 1;
+                        }
+                        if tasks.is_empty() {
+                            break Instant::now();
+                        }
+                    }
+                    Ok(None) => break Instant::now(),
+                    Err(_) => {}
+                }
+                continue;
             }
 
             let poll_window = remaining.min(Duration::from_millis(10));
@@ -480,6 +504,36 @@ pub fn run_lifecycle_pipeline(
         "fleet lifecycle pipeline done"
     );
     outcome
+}
+
+async fn wait_for_first_play_window(
+    stage_windows: &StageWindowRecorder,
+    tasks: &mut JoinSet<TunnelSample>,
+    samples: &mut Vec<TunnelSample>,
+    tunnels_aborted: &mut u64,
+) -> Option<Instant> {
+    loop {
+        if let Some(start) = stage_windows.first_play_started() {
+            return Some(start);
+        }
+
+        tokio::select! {
+            start = stage_windows.wait_for_first_play_start() => return Some(start),
+            result = tasks.join_next() => {
+                match result {
+                    Some(result) => {
+                        if record_tunnel_join(samples, result) {
+                            *tunnels_aborted += 1;
+                        }
+                        if tasks.is_empty() {
+                            return stage_windows.first_play_started();
+                        }
+                    }
+                    None => return stage_windows.first_play_started(),
+                }
+            }
+        }
+    }
 }
 
 fn random_seat_kit() -> SeatKit {
@@ -1004,7 +1058,12 @@ mod tests {
 
         assert_eq!(out.tunnels_claimed, 1);
         assert_eq!(out.tunnels_settled, 1);
-        assert_eq!(out.moves, 143);
+        assert!(out.moves > 0);
+        assert!(
+            out.moves < 143,
+            "duration=0 should stop at the first graceful close boundary, got {} moves",
+            out.moves
+        );
         assert_eq!(out.tunnels_aborted, 0);
     }
 
