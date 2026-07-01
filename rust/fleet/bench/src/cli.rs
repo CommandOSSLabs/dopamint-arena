@@ -6,6 +6,7 @@ use clap::{CommandFactory, Parser};
 use sui_tunnel_anchor::{
     SuiFundingProfile, SuiOpenBatchingConfig, SuiOpenMode, SuiSettleMode, SuiStakeSource,
 };
+use tunnel_blackjack::MIN_BET as BLACKJACK_BET_MIN_BET;
 use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,6 +90,8 @@ pub struct BenchOpts {
     pub duration_secs: u64,
     /// Optional global move cap across the benchmark run.
     pub moves: Option<u64>,
+    /// Per-seat initial tunnel balance. Total Sui open deposit is twice this.
+    pub initial_balance: u64,
     /// Tunnel lifecycle pool size: `auto` or a fixed in-flight count.
     pub tunnel_concurrency: ConcurrencyMode,
     /// Show the per-move latency breakdown — per-frame transport send/recv (and
@@ -143,6 +146,7 @@ chain transactions.",
 fleet-bench --anchor memory --signer-init-mode per-tunnel --tunnel-concurrency 50 --scenario golden --frame-codec postcard\n  \
 fleet-bench --signer-init-mode pre-initialized --tunnel-concurrency 1000 --frame-codec bcs\n  \
 fleet-bench --protocol-ids blackjack.v2 --tunnel-concurrency 100 --scenario varied --transcript-recorder memory\n  \
+fleet-bench --protocol-ids blackjack.v2 --initial-balance 1 --anchor sui-sponsored --tunnel-concurrency 255\n  \
 fleet-bench --protocol-ids caro.v1,blackjack.v2 --tunnel-concurrency 100\n  \
 fleet-bench --protocol-ids all --tunnel-concurrency 50\n\n\
 Signer init mode values:\n  \
@@ -160,6 +164,9 @@ Frame codec values:\n  \
 json: TS-parity wire for bot-vs-user and regression baselines\n  \
 bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
 postcard: compact default candidate for bot-vs-bot\n\n\
+Initial balance:\n  \
+--initial-balance is the per-seat tunnel balance; total open deposit is twice this value.\n  \
+Some protocols have larger minimums, e.g. blackjack.bet.v1 requires 25.\n\n\
 Color values:\n  \
 auto: colorize when stdout is a terminal\n  \
 always: force ANSI color\n  \
@@ -183,10 +190,10 @@ Sui sponsored anchor flags:\n  \
 --sui-stake-source coin-object: split both stakes from --sui-funder-stake-coin-id\n  \
 --sui-stake-source address-balance: withdraw the total stake from the sender balance\n  \
 --sui-open-batch-size: max sponsored open requests per PTB batch; default 255, maximum 255\n  \
---sui-open-batch-flush-ms: open batch flush cadence in milliseconds; default 250\n  \
+--sui-open-batch-flush-ms: open batch idle debounce in milliseconds; default 250\n  \
 --sui-disable-open-batching: execute each sponsored open request without the batch queue\n\n\
 --sui-settle-batch-size: max PTB settle requests per batch; default 681, maximum 681\n  \
---sui-settle-batch-flush-ms: settle batch flush cadence in milliseconds; default 250\n  \
+--sui-settle-batch-flush-ms: settle batch idle debounce in milliseconds; default 250\n  \
 --sui-disable-settle-batching: execute each PTB settlement without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
@@ -202,6 +209,9 @@ struct Raw {
     /// Optional global move cap across the benchmark run.
     #[arg(long = "moves", value_name = "N")]
     moves: Option<u64>,
+    /// Per-seat initial tunnel balance. Total open deposit is twice this.
+    #[arg(long = "initial-balance", default_value_t = 200, value_name = "N")]
+    initial_balance: u64,
     /// Tunnel lifecycle pool size: `auto` or a fixed in-flight count.
     #[arg(
         long = "tunnel-concurrency",
@@ -314,7 +324,7 @@ struct Raw {
     /// Maximum Sui sponsored open requests per PTB batch.
     #[arg(long = "sui-open-batch-size", default_value_t = 255, value_name = "N")]
     sui_open_batch_size: usize,
-    /// Sui open PTB batch flush interval in milliseconds.
+    /// Sui open PTB batch idle debounce in milliseconds.
     #[arg(
         long = "sui-open-batch-flush-ms",
         default_value_t = 250,
@@ -331,7 +341,7 @@ struct Raw {
         value_name = "N"
     )]
     sui_settle_batch_size: usize,
-    /// Sui settle PTB batch flush interval in milliseconds.
+    /// Sui settle PTB batch idle debounce in milliseconds.
     #[arg(
         long = "sui-settle-batch-flush-ms",
         default_value_t = 250,
@@ -383,6 +393,33 @@ fn resolve_protocol_ids(raw: &str) -> Result<Vec<&'static str>, String> {
     Ok(resolved)
 }
 
+fn minimum_initial_balance(protocol_id: &str) -> u64 {
+    match protocol_id {
+        BLACKJACK_BET_V1 => BLACKJACK_BET_MIN_BET,
+        _ => 1,
+    }
+}
+
+fn validate_initial_balance(
+    protocol_ids: &[&'static str],
+    initial_balance: u64,
+) -> Result<(), String> {
+    if initial_balance == 0 {
+        return Err("--initial-balance must be greater than 0".to_string());
+    }
+    if let Some((protocol_id, minimum)) = protocol_ids
+        .iter()
+        .copied()
+        .map(|protocol_id| (protocol_id, minimum_initial_balance(protocol_id)))
+        .find(|(_, minimum)| initial_balance < *minimum)
+    {
+        return Err(format!(
+            "--initial-balance {initial_balance} is too small for {protocol_id}; minimum is {minimum}"
+        ));
+    }
+    Ok(())
+}
+
 pub fn help_text() -> String {
     let mut help = Vec::new();
     // The after-help embeds hand-formatted example lines wider than 100 cols.
@@ -429,6 +466,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     if raw.moves == Some(0) {
         return Err("--moves must be greater than 0".to_string());
     }
+    validate_initial_balance(&protocol_ids, raw.initial_balance)?;
 
     let signer_init_mode = match raw.signer_init_mode.as_str() {
         "per-tunnel" => SignerInitMode::PerTunnel,
@@ -617,6 +655,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         workers,
         duration_secs: raw.duration,
         moves: raw.moves,
+        initial_balance: raw.initial_balance,
         tunnel_concurrency,
         per_move_latency: raw.per_move_latency,
         trace: raw.trace,
@@ -670,6 +709,33 @@ mod tests {
         let err = parse_v(&["--moves", "0"]).unwrap_err();
 
         assert!(err.contains("--moves must be greater than 0"), "{err}");
+    }
+
+    #[test]
+    fn initial_balance_one_is_allowed_for_blackjack_v2() {
+        let opts = parse_v(&["--protocol-ids", "blackjack.v2", "--initial-balance", "1"])
+            .expect("blackjack.v2 supports a one-unit per-seat initial balance");
+
+        assert_eq!(opts.initial_balance, 1);
+    }
+
+    #[test]
+    fn initial_balance_rejects_protocols_with_larger_minimums() {
+        let err = parse_v(&["--initial-balance", "1"]).unwrap_err();
+
+        assert!(err.contains("blackjack.bet.v1"), "{err}");
+        assert!(err.contains("25"), "{err}");
+    }
+
+    #[test]
+    fn rejects_zero_initial_balance() {
+        let err =
+            parse_v(&["--protocol-ids", "blackjack.v2", "--initial-balance", "0"]).unwrap_err();
+
+        assert!(
+            err.contains("--initial-balance must be greater than 0"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1445,6 +1511,8 @@ mod tests {
         assert!(help.contains("--sui-stake-source <coin-object|address-balance>"));
         assert!(help.contains("coin-object: split both stakes from --sui-funder-stake-coin-id"));
         assert!(help.contains("address-balance: withdraw the total stake from the sender balance"));
+        assert!(help.contains("--initial-balance"));
+        assert!(help.contains("total open deposit is twice this value"));
         assert!(help.contains("--sui-open-batch-size <N>"));
         assert!(help.contains("default 255, maximum 255"));
         assert!(help.contains("--sui-open-batch-flush-ms <MS>"));

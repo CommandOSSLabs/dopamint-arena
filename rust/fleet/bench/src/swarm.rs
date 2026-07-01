@@ -154,6 +154,7 @@ async fn run_one_tunnel(
     anchor_mode: AnchorMode,
     sui_context: Option<SuiSponsoredBenchContext>,
     protocol_id: &'static str,
+    initial_balance: u64,
     telemetry: TunnelTelemetry,
     kit: SeatKit,
     run_control: Option<DriverRunControl>,
@@ -175,6 +176,7 @@ async fn run_one_tunnel(
         run_control,
         kit: &kit,
         tunnel_id: &tunnel_id,
+        initial_balance,
         anchor_mode,
         sui_context: sui_context.as_ref(),
         telemetry,
@@ -247,6 +249,7 @@ pub fn run_lifecycle_pipeline(
     anchor_mode: AnchorMode,
     sui_context: Option<&SuiSponsoredBenchContext>,
     protocol_id: &'static str,
+    initial_balance: u64,
     telemetry: TunnelTelemetry,
     preinitialize: bool,
 ) -> SwarmOutcome {
@@ -305,6 +308,7 @@ pub fn run_lifecycle_pipeline(
                 anchor_mode,
                 sui_context.clone(),
                 protocol_id,
+                initial_balance,
                 telemetry,
                 kit_for(index),
                 Some(run_control_for_tasks.clone()),
@@ -460,6 +464,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -513,6 +518,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -542,6 +548,7 @@ mod tests {
                         AnchorMode::Memory,
                         None,
                         BLACKJACK_BET_V1,
+                        crate::protocols::DEFAULT_BALANCE,
                         TunnelTelemetry {
                             collect: false,
                             record_transcript: false,
@@ -582,6 +589,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -605,6 +613,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -621,6 +630,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -637,6 +647,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -663,6 +674,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             tunnel_core::protocol_id::BLACKJACK_V2,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -672,6 +684,30 @@ mod tests {
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
         assert!(out.bytes > 0);
+    }
+
+    #[test]
+    fn blackjack_v2_runs_with_one_unit_initial_balance() {
+        let out = run_lifecycle_pipeline(
+            1,
+            3600,
+            Some(1),
+            1,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            tunnel_core::protocol_id::BLACKJACK_V2,
+            1,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            false,
+        );
+        assert!(out.moves > 0);
+        assert_eq!(out.tunnels_opened, 1);
+        assert_eq!(out.tunnels_settled, 1);
     }
 
     #[test]
@@ -686,6 +722,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             tunnel_core::protocol_id::PAYMENTS_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -708,6 +745,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect,
                 record_transcript: false,
@@ -745,6 +783,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -777,6 +816,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -805,6 +845,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
@@ -831,6 +872,7 @@ mod tests {
             AnchorMode::Memory,
             None,
             BLACKJACK_BET_V1,
+            crate::protocols::DEFAULT_BALANCE,
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,

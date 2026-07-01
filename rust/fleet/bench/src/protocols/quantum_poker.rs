@@ -1,4 +1,4 @@
-use super::{play_with_strategies, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -15,8 +15,10 @@ pub(crate) async fn play(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
+    let ante = initial_balance.min(tunnel_quantum_poker::ANTE);
     play_with_strategies(
-        QuantumPoker::new(3),
+        QuantumPoker::with_ante(3, ante),
         QuantumPokerStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
         QuantumPokerStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
         codec,
@@ -25,8 +27,8 @@ pub(crate) async fn play(
         seed,
         kit,
         tunnel_id,
-        2_000,
-        2_000,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

@@ -107,6 +107,7 @@ fn run_protocol(
         opts.anchor_mode,
         sui_context,
         protocol_id,
+        opts.initial_balance,
         telemetry,
         preinitialize,
     );
@@ -125,6 +126,7 @@ mod tests {
             workers: 4,
             duration_secs: 15,
             moves: None,
+            initial_balance: 200,
             tunnel_concurrency,
             per_move_latency: false,
             trace: false,

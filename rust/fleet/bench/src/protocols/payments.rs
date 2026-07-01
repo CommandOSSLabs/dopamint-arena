@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -14,8 +14,9 @@ pub(crate) async fn play(
     sui_context: Option<&SuiSponsoredBenchContext>,
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
-    let payment_amount = 5;
-    let max_transfers = DEFAULT_BALANCE / payment_amount;
+    let initial_balance = current_initial_balance();
+    let payment_amount = initial_balance.min(5);
+    let max_transfers = initial_balance / payment_amount;
     play_with_strategies(
         Payments { max_transfers },
         PaymentsStrategy::new(payment_amount).expect("valid payments strategy"),
@@ -26,8 +27,8 @@ pub(crate) async fn play(
         card_seed.unwrap_or(0),
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

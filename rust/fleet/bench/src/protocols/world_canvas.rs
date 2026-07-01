@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -17,6 +17,7 @@ pub(crate) async fn play_cell(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     let protocol = WorldCanvasCell::new(256, 16, MAX_MOVES).expect("valid cell canvas");
     play_with_strategies(
         protocol,
@@ -28,8 +29,8 @@ pub(crate) async fn play_cell(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )
@@ -46,6 +47,7 @@ pub(crate) async fn play_stroke(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         WorldCanvasStroke,
         WorldCanvasStrokeStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
@@ -56,8 +58,8 @@ pub(crate) async fn play_stroke(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

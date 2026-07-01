@@ -826,19 +826,21 @@ async fn run_settle_batch_worker(
 }
 
 fn open_batch_deadline(items: &[OpenBatchItem], config: &SuiOpenBatchingConfig) -> Instant {
-    let oldest = items
-        .first()
+    let newest = items
+        .iter()
         .map(|item| item.enqueued_at)
+        .max()
         .unwrap_or_else(Instant::now);
-    oldest + Duration::from_millis(config.flush_interval_ms)
+    newest + Duration::from_millis(config.flush_interval_ms)
 }
 
 fn settle_batch_deadline(items: &[SettleBatchItem], config: &SuiOpenBatchingConfig) -> Instant {
-    let oldest = items
-        .first()
+    let newest = items
+        .iter()
         .map(|item| item.enqueued_at)
+        .max()
         .unwrap_or_else(Instant::now);
-    oldest + Duration::from_millis(config.flush_interval_ms)
+    newest + Duration::from_millis(config.flush_interval_ms)
 }
 
 fn send_open_group_result(
@@ -3024,17 +3026,28 @@ mod tests {
     }
 
     #[test]
-    fn open_batch_deadline_uses_flush_interval_only() {
+    fn open_batch_deadline_waits_from_newest_item() {
         let now = Instant::now();
-        let (responder, _receiver) = oneshot::channel();
-        let items = vec![OpenBatchItem {
-            key: OpenKey {
-                intent_id: intent(1),
+        let (responder_a, _receiver_a) = oneshot::channel();
+        let (responder_b, _receiver_b) = oneshot::channel();
+        let items = vec![
+            OpenBatchItem {
+                key: OpenKey {
+                    intent_id: intent(1),
+                },
+                request: open_request(),
+                responder: responder_a,
+                enqueued_at: now,
             },
-            request: open_request(),
-            responder,
-            enqueued_at: now,
-        }];
+            OpenBatchItem {
+                key: OpenKey {
+                    intent_id: intent(2),
+                },
+                request: open_request(),
+                responder: responder_b,
+                enqueued_at: now + Duration::from_millis(10),
+            },
+        ];
         let config = SuiOpenBatchingConfig {
             enabled: true,
             max_batch_size: 255,
@@ -3043,7 +3056,7 @@ mod tests {
 
         assert_eq!(
             open_batch_deadline(&items, &config),
-            now + Duration::from_millis(25)
+            now + Duration::from_millis(35)
         );
     }
 
@@ -3056,14 +3069,22 @@ mod tests {
     }
 
     #[test]
-    fn settle_batch_deadline_uses_flush_interval_only() {
+    fn settle_batch_deadline_waits_from_newest_item() {
         let now = Instant::now();
-        let (responder, _receiver) = oneshot::channel();
-        let items = vec![SettleBatchItem {
-            prepared: prepared_settle("0x1"),
-            responder,
-            enqueued_at: now,
-        }];
+        let (responder_a, _receiver_a) = oneshot::channel();
+        let (responder_b, _receiver_b) = oneshot::channel();
+        let items = vec![
+            SettleBatchItem {
+                prepared: prepared_settle("0x1"),
+                responder: responder_a,
+                enqueued_at: now,
+            },
+            SettleBatchItem {
+                prepared: prepared_settle("0x2"),
+                responder: responder_b,
+                enqueued_at: now + Duration::from_millis(10),
+            },
+        ];
         let config = SuiOpenBatchingConfig {
             enabled: true,
             max_batch_size: 681,
@@ -3072,7 +3093,7 @@ mod tests {
 
         assert_eq!(
             settle_batch_deadline(&items, &config),
-            now + Duration::from_millis(25)
+            now + Duration::from_millis(35)
         );
     }
 

@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -15,6 +15,7 @@ pub(crate) async fn play(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         Chat,
         ChatStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
@@ -25,8 +26,8 @@ pub(crate) async fn play(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

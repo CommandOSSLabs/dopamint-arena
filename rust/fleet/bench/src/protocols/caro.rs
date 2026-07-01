@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -15,6 +15,7 @@ pub(crate) async fn play_single(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         Caro::default(),
         CaroStrategy::with_seed(15, CaroStrength::Strong, seed ^ 0xA5A5_5A5A_D0D0_1CE5)
@@ -27,8 +28,8 @@ pub(crate) async fn play_single(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )
@@ -45,6 +46,7 @@ pub(crate) async fn play_series(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         CaroSeries::new(3, 15, 0).expect("valid caro series"),
         CaroSeriesStrategy::with_seed(3, 15, CaroStrength::Strong, seed ^ 0xA5A5_5A5A_D0D0_1CE5)
@@ -57,8 +59,8 @@ pub(crate) async fn play_series(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

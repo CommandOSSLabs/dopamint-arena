@@ -394,6 +394,7 @@ mod tests {
             workers,
             duration_secs: 15,
             moves: None,
+            initial_balance: crate::protocols::DEFAULT_BALANCE,
             tunnel_concurrency: ConcurrencyMode::Fixed(64),
             per_move_latency: false,
             trace: false,

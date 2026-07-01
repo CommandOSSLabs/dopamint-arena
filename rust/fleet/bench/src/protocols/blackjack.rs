@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SeatKit;
 use crate::party_driver::TunnelTelemetry;
@@ -16,6 +16,7 @@ pub(crate) async fn play_bet(
     sui_context: Option<&SuiSponsoredBenchContext>,
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
+    let initial_balance = current_initial_balance();
     // SeededBlackjack injects the card_seed into Protocol::initial_state,
     // replacing the old configure-hook approach.
     play_with_strategies(
@@ -28,8 +29,8 @@ pub(crate) async fn play_bet(
         card_seed.unwrap_or(0),
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )
@@ -45,6 +46,7 @@ pub(crate) async fn play_duel(
     sui_context: Option<&SuiSponsoredBenchContext>,
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         BlackjackDuel,
         BlackjackDuelStrategy,
@@ -55,8 +57,8 @@ pub(crate) async fn play_duel(
         card_seed.unwrap_or(0),
         kit,
         tunnel_id,
-        20_000_000,
-        20_000_000,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )
@@ -73,6 +75,7 @@ pub(crate) async fn play_v2(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         BlackjackV2,
         BlackjackV2Strategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
@@ -83,8 +86,8 @@ pub(crate) async fn play_v2(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )
