@@ -199,6 +199,7 @@ pub async fn join_and_spawn(
 /// Drive the co-located bot (party B) to settlement over the relay bus. The tunnel already exists
 /// (created at allocate); `RelayBridgedAnchor::open` resolves it with no chain call. There is no
 /// join wait or wake — the bot is spawned already paired with a live `MatchRecord`.
+#[allow(clippy::too_many_arguments)]
 async fn drive_arena_bot(
     game: &str,
     match_id: &str,
@@ -253,6 +254,7 @@ async fn drive_arena_bot(
 /// transport/anchor are game-agnostic; this is the one place protocol+strategy are chosen, so adding
 /// a game is a single arm here — once its Rust protocol byte-matches the FE's TS protocol (verified
 /// by a cross-language golden test) and it has a `MoveStrategy`. Returns the move count.
+#[allow(clippy::too_many_arguments)]
 async fn play_game(
     game: &str,
     channel: MatchChannel<BusRelayTransport>,

@@ -22,12 +22,12 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use transcript_store::{TranscriptChunkWriter, TranscriptManifest};
 use tunnel_core::wire::{encode_settle_entry, SettleBodyEntry, SETTLE_BODY_VERSION};
 use tunnel_harness::{
     StreamingRootRecorder, Transcript, TranscriptEntry, TranscriptError, TranscriptRecorder,
     TranscriptSettleEntry,
 };
-use transcript_store::{TranscriptChunkWriter, TranscriptManifest};
 
 /// Flush a chunk once the buffer reaches ~1 MB (~4000 entries). Bounds per-session RAM and caps
 /// `PutObject`s at ~⌈25 MB / 1 MB⌉ per match — one S3 call per ~4000 moves, never per move.

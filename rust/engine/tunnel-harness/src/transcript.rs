@@ -674,8 +674,9 @@ mod tests {
     #[test]
     fn streaming_root_matches_whole_tree_for_all_sizes() {
         for n in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 31, 100, 1000] {
-            let leaves: Vec<[u8; 32]> =
-                (0..n).map(|i| blake2b256(&(i as u64).to_le_bytes())).collect();
+            let leaves: Vec<[u8; 32]> = (0..n)
+                .map(|i| blake2b256(&(i as u64).to_le_bytes()))
+                .collect();
             let mut acc = StreamingMerkleRoot::new();
             for l in &leaves {
                 acc.push(*l);
@@ -698,7 +699,11 @@ mod tests {
             acc.push(leaf);
         }
         // ceil(log2(100000)) = 17 → the carry vec never exceeds 17 levels.
-        assert!(acc.carry.len() <= 17, "carry levels {} exceed 17", acc.carry.len());
+        assert!(
+            acc.carry.len() <= 17,
+            "carry levels {} exceed 17",
+            acc.carry.len()
+        );
         assert_eq!(acc.root(), transcript_root(&leaves));
     }
 

@@ -362,7 +362,10 @@ mod tests {
     #[tokio::test]
     async fn transcript_reads_from_s3_when_present() {
         let mut objects = std::collections::HashMap::new();
-        objects.insert(("0xtun".to_string(), "a".to_string()), b"\x02settle-body-bytes".to_vec());
+        objects.insert(
+            ("0xtun".to_string(), "a".to_string()),
+            b"\x02settle-body-bytes".to_vec(),
+        );
         let s3 = Arc::new(transcript_store::testing::FakeReader { objects })
             as Arc<dyn transcript_store::TranscriptReader>;
         let app = router(state_with_s3(vec![settled("a", 10)], Some(s3)));

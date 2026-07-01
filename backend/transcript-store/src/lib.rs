@@ -251,7 +251,14 @@ impl S3TranscriptStore {
     }
 
     async fn get_bytes(&self, key: &str, op: &'static str) -> Result<Option<Vec<u8>>> {
-        match self.client.get_object().bucket(&self.bucket).key(key).send().await {
+        match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
             Ok(out) => {
                 let bytes = out
                     .body
@@ -277,12 +284,16 @@ impl S3TranscriptStore {
         let mut transcript = Vec::with_capacity(manifest.total_bytes as usize);
         for seq in 0..manifest.chunk_count {
             let key = chunk_key(&self.prefix, tunnel_id, seq);
-            let bytes = self.get_bytes(&key, "get_chunk").await?.ok_or_else(|| {
-                Error::Incomplete {
-                    tunnel_id: tunnel_id.to_string(),
-                    detail: format!("manifest lists {} chunks but {key} is missing", manifest.chunk_count),
-                }
-            })?;
+            let bytes =
+                self.get_bytes(&key, "get_chunk")
+                    .await?
+                    .ok_or_else(|| Error::Incomplete {
+                        tunnel_id: tunnel_id.to_string(),
+                        detail: format!(
+                            "manifest lists {} chunks but {key} is missing",
+                            manifest.chunk_count
+                        ),
+                    })?;
             transcript.extend_from_slice(&bytes);
         }
         if transcript.len() as u64 != manifest.total_bytes {
@@ -311,7 +322,10 @@ impl S3TranscriptStore {
             if let Some(token) = &continuation {
                 req = req.continuation_token(token);
             }
-            let out = req.send().await.map_err(|e| s3_err("list", &list_prefix, e))?;
+            let out = req
+                .send()
+                .await
+                .map_err(|e| s3_err("list", &list_prefix, e))?;
             for obj in out.contents() {
                 if let Some(k) = obj.key() {
                     keys.push(k.to_string());
@@ -422,10 +436,8 @@ impl TranscriptChunkReader for S3TranscriptStore {
         let key = manifest_key(&self.prefix, tunnel_id);
         match self.get_bytes(&key, "get_manifest").await? {
             Some(bytes) => {
-                let manifest = serde_json::from_slice(&bytes).map_err(|e| Error::Manifest {
-                    key,
-                    source: e,
-                })?;
+                let manifest = serde_json::from_slice(&bytes)
+                    .map_err(|e| Error::Manifest { key, source: e })?;
                 Ok(Some(manifest))
             }
             None => Ok(None),
@@ -436,7 +448,9 @@ impl TranscriptChunkReader for S3TranscriptStore {
         // Prefer the sealed manifest (exact count + completeness check, no LIST); fall back to
         // listing chunk objects for an unsealed / abandoned transcript.
         if let Some(manifest) = self.read_manifest(tunnel_id).await? {
-            return Ok(Some(self.reassemble_from_manifest(tunnel_id, &manifest).await?));
+            return Ok(Some(
+                self.reassemble_from_manifest(tunnel_id, &manifest).await?,
+            ));
         }
         self.reassemble_from_list(tunnel_id).await
     }
@@ -579,14 +593,26 @@ mod tests {
     #[test]
     fn transcript_key_is_prefix_stable() {
         assert_eq!(transcript_key("", "0xt", "DiG"), "transcripts/0xt/DiG.bin");
-        assert_eq!(transcript_key("dev/", "0xt", "DiG"), "dev/transcripts/0xt/DiG.bin");
-        assert_eq!(transcript_key("dev", "0xt", "DiG"), "dev/transcripts/0xt/DiG.bin");
+        assert_eq!(
+            transcript_key("dev/", "0xt", "DiG"),
+            "dev/transcripts/0xt/DiG.bin"
+        );
+        assert_eq!(
+            transcript_key("dev", "0xt", "DiG"),
+            "dev/transcripts/0xt/DiG.bin"
+        );
     }
 
     #[test]
     fn chunk_and_manifest_keys_are_seq_ordered_and_distinct() {
-        assert_eq!(chunk_key("", "0xt", 0), "transcripts/0xt/chunk-00000000.bin");
-        assert_eq!(chunk_key("dev", "0xt", 42), "dev/transcripts/0xt/chunk-00000042.bin");
+        assert_eq!(
+            chunk_key("", "0xt", 0),
+            "transcripts/0xt/chunk-00000000.bin"
+        );
+        assert_eq!(
+            chunk_key("dev", "0xt", 42),
+            "dev/transcripts/0xt/chunk-00000042.bin"
+        );
         assert_eq!(manifest_key("", "0xt"), "transcripts/0xt/manifest.json");
         // Reassembly relies on lexicographic order equaling numeric order.
         assert!(chunk_key("", "t", 9) < chunk_key("", "t", 10));

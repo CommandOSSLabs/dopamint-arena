@@ -83,7 +83,11 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
                 Effect: "Allow",
                 // PutObject: tunnel-manager archives at settle. GetObject: the explorer API
                 // (same task role) reads the archived transcript to verify from S3.
-                Action: ["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload"],
+                Action: [
+                  "s3:PutObject",
+                  "s3:GetObject",
+                  "s3:AbortMultipartUpload",
+                ],
                 Resource: `${bucketArn}/*`,
               },
               {

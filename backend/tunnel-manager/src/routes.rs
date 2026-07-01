@@ -1513,7 +1513,10 @@ mod tests {
             &body.to_vec(),
             "archived bytes must match the settle body"
         );
-        assert_eq!(arch_tunnel, &tunnel_id, "archived under the settle tunnel id");
+        assert_eq!(
+            arch_tunnel, &tunnel_id,
+            "archived under the settle tunnel id"
+        );
         assert_eq!(arch_digest, "DiG123", "archived under the close tx digest");
     }
 

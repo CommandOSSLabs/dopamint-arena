@@ -171,42 +171,43 @@ export function createExplorerServices(
       args.corsAllowedOrigins ?? pulumi.output(undefined),
       args.s3TranscriptsBucket ?? pulumi.output(undefined),
     ])
-    .apply(([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins, s3Bucket]) =>
-      JSON.stringify([
-        {
-          name: "api",
-          image: `${repo}:${tag}`,
-          essential: true,
-          command: ["/usr/local/bin/api"],
-          portMappings: [{ containerPort: 8080, protocol: "tcp" }],
-          environment: [
-            {
-              name: "WALRUS_AGGREGATOR_URL",
-              value: "https://aggregator.walrus-testnet.walrus.space",
-            },
-            { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
-            ...(corsAllowedOrigins
-              ? [{ name: "CORS_ALLOWED_ORIGINS", value: corsAllowedOrigins }]
-              : []),
-            ...(s3Bucket
-              ? [{ name: "S3_TRANSCRIPTS_BUCKET", value: s3Bucket }]
-              : []),
-          ],
-          secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
-          logConfiguration: logConfig(logGroup, "explorer-api"),
-          healthCheck: {
-            command: [
-              "CMD-SHELL",
-              "curl -f http://localhost:8080/health/ready || exit 1",
+    .apply(
+      ([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins, s3Bucket]) =>
+        JSON.stringify([
+          {
+            name: "api",
+            image: `${repo}:${tag}`,
+            essential: true,
+            command: ["/usr/local/bin/api"],
+            portMappings: [{ containerPort: 8080, protocol: "tcp" }],
+            environment: [
+              {
+                name: "WALRUS_AGGREGATOR_URL",
+                value: "https://aggregator.walrus-testnet.walrus.space",
+              },
+              { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
+              ...(corsAllowedOrigins
+                ? [{ name: "CORS_ALLOWED_ORIGINS", value: corsAllowedOrigins }]
+                : []),
+              ...(s3Bucket
+                ? [{ name: "S3_TRANSCRIPTS_BUCKET", value: s3Bucket }]
+                : []),
             ],
-            interval: 30,
-            timeout: 5,
-            retries: 3,
-            startPeriod: 30,
+            secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
+            logConfiguration: logConfig(logGroup, "explorer-api"),
+            healthCheck: {
+              command: [
+                "CMD-SHELL",
+                "curl -f http://localhost:8080/health/ready || exit 1",
+              ],
+              interval: 30,
+              timeout: 5,
+              retries: 3,
+              startPeriod: 30,
+            },
+            stopTimeout: 30,
           },
-          stopTimeout: 30,
-        },
-      ]),
+        ]),
     );
 
   const apiTd = new aws.ecs.TaskDefinition(`${n}-explorer-api-td`, {
