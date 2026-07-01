@@ -418,7 +418,9 @@ mod tests {
         );
 
         // Bound the wait so a bot-side regression fails fast instead of hanging CI.
-        let human_outcome = tokio::time::timeout(Duration::from_secs(10), human)
+        // CI runners can be heavily contended; the bus end-to-end test needs ~60s there,
+        // so give this co-located variant the same headroom.
+        let human_outcome = tokio::time::timeout(Duration::from_secs(60), human)
             .await
             .expect("the match settles in time")
             .expect("human (party A) plays to settlement over the bus");
