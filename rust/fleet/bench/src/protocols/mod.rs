@@ -468,31 +468,47 @@ pub(crate) async fn play_tunnel_for(request: PlayTunnelRequest<'_>) -> TunnelOut
 mod tests {
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn request_run_control_reaches_protocol_runner() {
-        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
-        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
-        let kit = SeatKit::new(&sa, &sb);
-        let run_control = DriverRunControl::with_move_limit(2);
-
-        let outcome = play_tunnel_for(PlayTunnelRequest {
-            protocol_id: BLACKJACK_BET_V1,
-            codec: FrameCodecKind::Json,
-            card_seed: None,
-            run_control: Some(run_control.clone()),
-            kit: &kit,
-            tunnel_id: "0x1",
-            initial_balance: DEFAULT_BALANCE,
-            max_moves_per_tunnel: 2,
-            anchor_mode: AnchorMode::Memory,
-            sui_context: None,
-            telemetry: TunnelTelemetry {
-                collect: false,
-                record_transcript: false,
-            },
-            stage_windows: None,
-        })
-        .await;
+    #[test]
+    fn request_run_control_reaches_protocol_runner() {
+        let (run_control, outcome) = std::thread::Builder::new()
+            .name("fleet-protocol-run-control-test".into())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .worker_threads(2)
+                    .build()
+                    .expect("test runtime");
+                runtime.block_on(async {
+                    let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+                    let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+                    let kit = SeatKit::new(&sa, &sb);
+                    let run_control = DriverRunControl::with_move_limit(2);
+                    let outcome = play_tunnel_for(PlayTunnelRequest {
+                        protocol_id: BLACKJACK_BET_V1,
+                        codec: FrameCodecKind::Json,
+                        card_seed: None,
+                        run_control: Some(run_control.clone()),
+                        kit: &kit,
+                        tunnel_id: "0x1",
+                        initial_balance: DEFAULT_BALANCE,
+                        max_moves_per_tunnel: 2,
+                        anchor_mode: AnchorMode::Memory,
+                        sui_context: None,
+                        telemetry: TunnelTelemetry {
+                            collect: false,
+                            record_transcript: false,
+                            heartbeat: None,
+                        },
+                        stage_windows: None,
+                    })
+                    .await;
+                    (run_control, outcome)
+                })
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("protocol run-control test thread");
 
         assert!(run_control.stopped());
         assert_eq!(run_control.moves(), outcome.moves);
@@ -504,30 +520,45 @@ mod tests {
         assert_eq!(outcome.final_balances.sum(), 400);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn tic_tac_toe_series_uses_requested_continuation_cap() {
-        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
-        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
-        let kit = SeatKit::new(&sa, &sb);
-
-        let outcome = play_tunnel_for(PlayTunnelRequest {
-            protocol_id: TIC_TAC_TOE_SERIES_V1,
-            codec: FrameCodecKind::Json,
-            card_seed: None,
-            run_control: None,
-            kit: &kit,
-            tunnel_id: "0x1",
-            initial_balance: DEFAULT_BALANCE,
-            max_moves_per_tunnel: 40,
-            anchor_mode: AnchorMode::Memory,
-            sui_context: None,
-            telemetry: TunnelTelemetry {
-                collect: false,
-                record_transcript: false,
-            },
-            stage_windows: None,
-        })
-        .await;
+    #[test]
+    fn tic_tac_toe_series_uses_requested_continuation_cap() {
+        let outcome = std::thread::Builder::new()
+            .name("fleet-protocol-tic-tac-toe-test".into())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .worker_threads(2)
+                    .build()
+                    .expect("test runtime");
+                runtime.block_on(async {
+                    let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+                    let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+                    let kit = SeatKit::new(&sa, &sb);
+                    play_tunnel_for(PlayTunnelRequest {
+                        protocol_id: TIC_TAC_TOE_SERIES_V1,
+                        codec: FrameCodecKind::Json,
+                        card_seed: None,
+                        run_control: None,
+                        kit: &kit,
+                        tunnel_id: "0x1",
+                        initial_balance: DEFAULT_BALANCE,
+                        max_moves_per_tunnel: 40,
+                        anchor_mode: AnchorMode::Memory,
+                        sui_context: None,
+                        telemetry: TunnelTelemetry {
+                            collect: false,
+                            record_transcript: false,
+                            heartbeat: None,
+                        },
+                        stage_windows: None,
+                    })
+                    .await
+                })
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("tic-tac-toe protocol test thread");
 
         assert!(outcome.moves > 29);
         assert!(outcome.settle_ok, "natural series terminal still settles");

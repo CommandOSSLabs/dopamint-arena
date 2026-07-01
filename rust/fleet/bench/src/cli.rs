@@ -2,6 +2,7 @@
 //! resolves `--workers auto`, and rejects unsupported transport/anchor modes with
 //! explanatory errors rather than silently ignoring them.
 
+use crate::heartbeat::HeartbeatSetup;
 use clap::{CommandFactory, Parser};
 use sui_tunnel_anchor::{
     SuiFundingProfile, SuiOpenBatchingConfig, SuiOpenMode, SuiSettleMode, SuiStakeSource,
@@ -120,6 +121,8 @@ pub struct BenchOpts {
     pub color_mode: ColorMode,
     /// Transcript recorder implementation (`None` by default).
     pub transcript_recorder: TranscriptRecorderMode,
+    /// Optional heartbeat setup for backend live stats; resolved before timing.
+    pub heartbeat: Option<HeartbeatSetup>,
     /// Sponsored Sui anchor configuration, present only when `anchor_mode == SuiSponsored`.
     pub sui_anchor: Option<SuiSponsoredAnchorOpts>,
 }
@@ -203,7 +206,10 @@ Sui sponsored anchor flags:\n  \
 --sui-disable-settle-batching: execute each PTB settlement without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
-memory: retain committed transitions in memory during each tunnel; useful for measuring recorder overhead"
+memory: retain committed transitions in memory during each tunnel; useful for measuring recorder overhead\n\n\
+Heartbeat flags:\n  \
+--heartbeat-url registers a stats session before timing starts, then attaches the existing /heartbeat API\n  \
+as fire-and-forget telemetry. Heartbeat POSTs are never awaited by the move loop or elapsed timer."
 )]
 struct Raw {
     /// Number of Tokio runtime worker threads, or `auto` to use available CPU parallelism.
@@ -261,6 +267,12 @@ struct Raw {
         value_name = "none|memory"
     )]
     transcript_recorder: String,
+    /// Tunnel-manager base URL for fire-and-forget heartbeat telemetry.
+    #[arg(long = "heartbeat-url", value_name = "URL")]
+    heartbeat_url: Option<String>,
+    /// Heartbeat aggregation cadence in milliseconds.
+    #[arg(long = "heartbeat-flush-ms", default_value_t = 1000, value_name = "MS")]
+    heartbeat_flush_ms: u64,
     #[arg(long, hide = true)]
     onchain: bool,
     /// Frame transport. Only `local` is implemented in this synchronous bench.
@@ -538,6 +550,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         }
     };
 
+    let heartbeat = parse_heartbeat_setup(raw.heartbeat_url, raw.heartbeat_flush_ms)?;
+
     let sui_anchor = if anchor_mode == AnchorMode::SuiSponsored {
         let mut missing = Vec::new();
         if raw.sui_rpc_url.is_none() {
@@ -683,8 +697,26 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         anchor_mode,
         color_mode,
         transcript_recorder,
+        heartbeat,
         sui_anchor,
     })
+}
+
+fn parse_heartbeat_setup(
+    base_url: Option<String>,
+    flush_interval_ms: u64,
+) -> Result<Option<HeartbeatSetup>, String> {
+    if flush_interval_ms == 0 {
+        return Err("--heartbeat-flush-ms must be greater than 0".to_string());
+    }
+    let Some(base_url) = base_url else {
+        return Ok(None);
+    };
+
+    Ok(Some(HeartbeatSetup {
+        base_url: base_url.trim_end_matches('/').to_owned(),
+        flush_interval_ms,
+    }))
 }
 
 #[cfg(test)]
@@ -719,6 +751,35 @@ mod tests {
         let opts = parse_v(&["--moves", "1000000"]).unwrap();
 
         assert_eq!(opts.moves, Some(MoveTarget::Count(1_000_000)));
+    }
+
+    #[test]
+    fn parses_heartbeat_config() {
+        let opts = parse_v(&[
+            "--heartbeat-url",
+            "http://manager/",
+            "--heartbeat-flush-ms",
+            "250",
+        ])
+        .unwrap();
+        let heartbeat = opts.heartbeat.expect("heartbeat setup");
+
+        assert_eq!(heartbeat.base_url, "http://manager");
+        assert_eq!(heartbeat.flush_interval_ms, 250);
+    }
+
+    #[test]
+    fn heartbeat_session_flags_are_internal_setup_now() {
+        let err = parse_v(&[
+            "--heartbeat-url",
+            "http://manager",
+            "--heartbeat-session-id",
+            "sess-1",
+        ])
+        .unwrap_err();
+
+        assert!(err.contains("unexpected argument"), "{err}");
+        assert!(err.contains("--heartbeat-session-id"), "{err}");
     }
 
     #[test]

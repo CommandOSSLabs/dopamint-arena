@@ -4,6 +4,7 @@
 //! golden-stable for blackjack.bet.v1 with the default seed (143 moves, 75_982 bytes/tunnel).
 
 use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts};
+use crate::heartbeat::HeartbeatConfig;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sui_tunnel_anchor::{
@@ -130,13 +131,16 @@ impl SeatKit {
 }
 
 /// Per-tunnel telemetry knobs threaded from the CLI to the tunnel runner.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct TunnelTelemetry {
     /// `--per-move-latency`: preallocate per-tunnel sample buffers.
     pub collect: bool,
     /// `--transcript-recorder memory` (or a root-settling anchor): wire the
     /// in-memory transcript recorder instead of the no-op.
     pub record_transcript: bool,
+    /// Optional backend heartbeat sink for live stats. Attached only to seat A
+    /// so the in-process bench pair does not double-count committed moves.
+    pub heartbeat: Option<HeartbeatConfig>,
 }
 
 #[derive(Clone)]
@@ -155,8 +159,7 @@ struct StageWindowState {
 
 #[derive(Default)]
 struct StageWindow {
-    first_start: Option<Duration>,
-    last_end: Option<Duration>,
+    intervals: Vec<(Duration, Duration)>,
 }
 
 impl StageWindowRecorder {
@@ -177,8 +180,7 @@ impl StageWindowRecorder {
             StageId::Settle => &mut state.settle,
             _ => return,
         };
-        window.first_start = Some(window.first_start.map_or(start, |first| first.min(start)));
-        window.last_end = Some(window.last_end.map_or(end, |last| last.max(end)));
+        window.intervals.push((start, end.max(start)));
     }
 
     pub(crate) fn active_elapsed_ms(&self, stage: StageId) -> u128 {
@@ -188,16 +190,24 @@ impl StageWindowRecorder {
             StageId::Settle => &state.settle,
             _ => return 0,
         };
-        let Some(first_start) = window.first_start else {
-            return 0;
-        };
-        let Some(last_end) = window.last_end else {
-            return 0;
-        };
-        if last_end < first_start {
+        if window.intervals.is_empty() {
             return 0;
         }
-        let millis = (last_end - first_start).as_millis();
+        let mut intervals = window.intervals.clone();
+        intervals.sort_by_key(|(start, _)| *start);
+        let mut active = Duration::ZERO;
+        let (mut current_start, mut current_end) = intervals[0];
+        for (start, end) in intervals.into_iter().skip(1) {
+            if start <= current_end {
+                current_end = current_end.max(end);
+            } else {
+                active += current_end.saturating_sub(current_start);
+                current_start = start;
+                current_end = end;
+            }
+        }
+        active += current_end.saturating_sub(current_start);
+        let millis = active.as_millis();
         millis.max(1)
     }
 
@@ -355,6 +365,17 @@ impl BenchSubmitter {
         inner: &BenchAnchorInner,
         request: TunnelOpenRequest,
     ) -> OpenResult {
+        self.open_as_seat_with_pair_timeout(seat, inner, request, None)
+            .await
+    }
+
+    async fn open_as_seat_with_pair_timeout(
+        &self,
+        seat: Seat,
+        inner: &BenchAnchorInner,
+        request: TunnelOpenRequest,
+        pair_timeout: Option<Duration>,
+    ) -> OpenResult {
         if seat == Seat::A {
             let result = inner.open(request).await;
             self.complete_open(&result);
@@ -370,9 +391,8 @@ impl BenchSubmitter {
             state.open.waiters.push(sender);
             receiver
         };
-        let shared_result = receiver
-            .await
-            .map_err(|_| TunnelAnchorError::Unavailable("bench open submitter dropped".into()))?;
+        let shared_result =
+            await_submitter_result(receiver, pair_timeout, "paired open submitter").await?;
         clone_open_result(&shared_result)
     }
 
@@ -380,6 +400,9 @@ impl BenchSubmitter {
         let shared_result = Arc::new(clone_open_result(result));
         let waiters = {
             let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+            if state.open.result.is_some() {
+                return;
+            }
             state.open.result = Some(Arc::clone(&shared_result));
             std::mem::take(&mut state.open.waiters)
         };
@@ -393,6 +416,17 @@ impl BenchSubmitter {
         seat: Seat,
         inner: &BenchAnchorInner,
         request: TunnelSettleRequest,
+    ) -> SettleResult {
+        self.settle_as_seat_with_pair_timeout(seat, inner, request, None)
+            .await
+    }
+
+    async fn settle_as_seat_with_pair_timeout(
+        &self,
+        seat: Seat,
+        inner: &BenchAnchorInner,
+        request: TunnelSettleRequest,
+        pair_timeout: Option<Duration>,
     ) -> SettleResult {
         let receiver = {
             let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
@@ -412,20 +446,29 @@ impl BenchSubmitter {
         };
 
         if seat == Seat::A {
-            self.submit_settle_when_ready(inner).await;
+            if let Err(error) = self.submit_settle_when_ready(inner, pair_timeout).await {
+                let result = Err(error);
+                self.complete_settle(&result);
+            }
         }
 
-        let shared_result = receiver
-            .await
-            .map_err(|_| TunnelAnchorError::Unavailable("bench settle submitter dropped".into()))?;
+        let shared_result =
+            await_submitter_result(receiver, pair_timeout, "paired settle submitter").await?;
         clone_settle_result(&shared_result)
     }
 
-    async fn submit_settle_when_ready(&self, inner: &BenchAnchorInner) {
+    async fn submit_settle_when_ready(
+        &self,
+        inner: &BenchAnchorInner,
+        pair_timeout: Option<Duration>,
+    ) -> Result<(), TunnelAnchorError> {
         loop {
             let notified = self.settle_ready.notified();
             let maybe_requests = {
                 let state = self.inner.lock().expect("bench submitter mutex poisoned");
+                if let Some(result) = &state.settle.result {
+                    return clone_settle_result(result).map(|_| ());
+                }
                 match (&state.settle.request_a, &state.settle.request_b) {
                     (Some(a), Some(b)) => Some((clone_settle_request(a), clone_settle_request(b))),
                     _ => None,
@@ -433,8 +476,13 @@ impl BenchSubmitter {
             };
             let Some((request_a, request_b)) = maybe_requests else {
                 self.increment_settle_ready_waiters_for_test();
-                notified.await;
+                let wait_result = await_submitter_notify(notified, pair_timeout).await;
                 self.decrement_settle_ready_waiters_for_test();
+                wait_result.map_err(|_| {
+                    TunnelAnchorError::Unavailable(
+                        "timed out waiting for paired settle request".into(),
+                    )
+                })?;
                 continue;
             };
 
@@ -442,7 +490,7 @@ impl BenchSubmitter {
                 tokio::join!(inner.settle(request_a), inner.settle(request_b));
             let result = result_a.or(result_b);
             self.complete_settle(&result);
-            break;
+            return Ok(());
         }
     }
 
@@ -459,6 +507,39 @@ impl BenchSubmitter {
         for waiter in waiters {
             let _ = waiter.send(Arc::clone(&shared_result));
         }
+    }
+
+    fn abort(&self, reason: impl Into<String>) {
+        let reason = reason.into();
+        let open_result: SharedOpenResult = Arc::new(Err(TunnelAnchorError::Unavailable(format!(
+            "bench submitter aborted paired open: {reason}"
+        ))));
+        let settle_result: SharedSettleResult = Arc::new(Err(TunnelAnchorError::Unavailable(
+            format!("bench submitter aborted paired settle: {reason}"),
+        )));
+        let (open_waiters, settle_waiters) = {
+            let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+            let open_waiters = if state.open.result.is_none() {
+                state.open.result = Some(Arc::clone(&open_result));
+                std::mem::take(&mut state.open.waiters)
+            } else {
+                Vec::new()
+            };
+            let settle_waiters = if state.settle.result.is_none() {
+                state.settle.result = Some(Arc::clone(&settle_result));
+                std::mem::take(&mut state.settle.waiters)
+            } else {
+                Vec::new()
+            };
+            (open_waiters, settle_waiters)
+        };
+        for waiter in open_waiters {
+            let _ = waiter.send(Arc::clone(&open_result));
+        }
+        for waiter in settle_waiters {
+            let _ = waiter.send(Arc::clone(&settle_result));
+        }
+        self.settle_ready.notify_waiters();
     }
 
     #[cfg(test)]
@@ -553,6 +634,33 @@ fn clone_settle_request(request: &TunnelSettleRequest) -> TunnelSettleRequest {
         transcript_root: request.transcript_root,
         transcript_entries: request.transcript_entries.clone(),
     }
+}
+
+async fn await_submitter_result<T>(
+    receiver: oneshot::Receiver<T>,
+    timeout: Option<Duration>,
+    label: &str,
+) -> Result<T, TunnelAnchorError> {
+    let result = match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, receiver).await.map_err(|_| {
+            TunnelAnchorError::Unavailable(format!("timed out waiting for {label}"))
+        })?,
+        None => receiver.await,
+    };
+    result.map_err(|_| TunnelAnchorError::Unavailable(format!("bench {label} dropped")))
+}
+
+async fn await_submitter_notify(
+    notified: impl std::future::Future<Output = ()>,
+    timeout: Option<Duration>,
+) -> Result<(), ()> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, notified)
+            .await
+            .map_err(|_| ())?,
+        None => notified.await,
+    }
+    Ok(())
 }
 
 impl TunnelAnchor for BenchAnchor {
@@ -749,6 +857,7 @@ where
     // the anchor is moved into the wrapper.
     let settlement_mode = inner_anchor.settlement_mode();
     let submitter = matches!(anchor_mode, AnchorMode::SuiSponsored).then(BenchSubmitter::new);
+    let submitter_for_supervisor = submitter.clone();
     let anchor_a = InstrumentedAnchor::new(
         BenchAnchor::new(
             inner_anchor.clone(),
@@ -816,6 +925,11 @@ where
     } else {
         driver_b
     };
+    let driver_a = if let Some(heartbeat) = telemetry.heartbeat.as_ref() {
+        driver_a.observe(Box::new(heartbeat.reporter()))
+    } else {
+        driver_a
+    };
     let (driver_a, driver_b) = if let Some(stage_windows) = stage_windows.as_ref() {
         (
             driver_a.observe(Box::new(PlayStartObserver {
@@ -834,16 +948,40 @@ where
     // path, keeping the varint (postcard) and JSON digit-count stable.
     let mut clock_a = CREATED_AT;
     let mut clock_b = CREATED_AT;
-    let (res_a, res_b) = tokio::join!(
-        driver_a.run(max_moves, move || {
-            clock_a += 1;
-            clock_a
-        }),
-        driver_b.run(max_moves, move || {
-            clock_b += 1;
-            clock_b
-        }),
-    );
+    let run_a = driver_a.run(max_moves, move || {
+        clock_a += 1;
+        clock_a
+    });
+    let run_b = driver_b.run(max_moves, move || {
+        clock_b += 1;
+        clock_b
+    });
+    tokio::pin!(run_a);
+    tokio::pin!(run_b);
+    let mut res_a = None;
+    let mut res_b = None;
+    while res_a.is_none() || res_b.is_none() {
+        tokio::select! {
+            result = &mut run_a, if res_a.is_none() => {
+                if let Err(error) = &result {
+                    if let Some(submitter) = submitter_for_supervisor.as_ref() {
+                        submitter.abort(format!("seat A driver completed with error: {error:?}"));
+                    }
+                }
+                res_a = Some(result);
+            }
+            result = &mut run_b, if res_b.is_none() => {
+                if let Err(error) = &result {
+                    if let Some(submitter) = submitter_for_supervisor.as_ref() {
+                        submitter.abort(format!("seat B driver completed with error: {error:?}"));
+                    }
+                }
+                res_b = Some(result);
+            }
+        }
+    }
+    let res_a = res_a.expect("seat A driver result");
+    let res_b = res_b.expect("seat B driver result");
     let e2e_ns = started.elapsed().as_nanos();
 
     let (outcome_a, rec_a_returned) = match res_a {
@@ -958,6 +1096,7 @@ pub async fn play_tunnel_seeded<C: FrameCodec<BjMove> + Default>(
         TunnelTelemetry {
             collect: false,
             record_transcript: false,
+            heartbeat: None,
         },
         None,
         None,
@@ -990,6 +1129,7 @@ pub async fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
         TunnelTelemetry {
             collect: false,
             record_transcript: false,
+            heartbeat: None,
         },
         None,
         None,
@@ -1133,6 +1273,95 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heartbeat_posts_committed_move_deltas_from_seat_a() {
+        use crate::heartbeat::HeartbeatConfig;
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sess-1/heartbeat"))
+            .and(header("authorization", "Bearer tok-1"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1..)
+            .mount(&server)
+            .await;
+
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let kit = SeatKit::new(&sa, &sb);
+        let outcome = play_protocol_tunnel_with_strategies::<
+            SeededBlackjack,
+            JsonFrameCodec,
+            SeededBlackjackStrategy,
+            SeededBlackjackStrategy,
+        >(
+            SeededBlackjack {
+                card_seed: None,
+                round_cap: 4,
+            },
+            SeededBlackjackStrategy { round_cap: 4 },
+            SeededBlackjackStrategy { round_cap: 4 },
+            &kit,
+            "0xabc",
+            200,
+            200,
+            1000,
+            AnchorMode::Memory,
+            None,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+                heartbeat: Some(HeartbeatConfig {
+                    base_url: server.uri(),
+                    session_id: "sess-1".into(),
+                    stats_token: "tok-1".into(),
+                    flush_interval_ms: 1,
+                }),
+            },
+            None,
+            None,
+        )
+        .await;
+
+        assert!(outcome.moves > 0);
+        assert!(outcome.play_ns > 0);
+
+        let requests = tokio::time::timeout(Duration::from_millis(250), async {
+            loop {
+                let requests = server.received_requests().await.unwrap();
+                let actions = requests
+                    .iter()
+                    .map(|request| {
+                        let body: serde_json::Value =
+                            serde_json::from_slice(&request.body).unwrap();
+                        body["actionsDelta"].as_u64().unwrap()
+                    })
+                    .sum::<u64>();
+                if actions >= outcome.moves {
+                    return requests;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("heartbeat posts");
+        let actions = requests
+            .iter()
+            .map(|request| {
+                let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                body["actionsDelta"].as_u64().unwrap()
+            })
+            .sum::<u64>();
+        assert_eq!(actions, outcome.moves);
+
+        let first: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(first["tunnelId"], "0xabc");
+        assert!(first["actionsDelta"].as_u64().unwrap() > 0);
+        assert!(first["windowMs"].as_u64().unwrap() > 0);
+    }
+
     #[test]
     fn recorder_matches_anchor_settlement_mode() {
         // Regression: a transcript-root anchor (sponsored Sui) needs a recorder
@@ -1167,6 +1396,30 @@ mod tests {
 
         assert_eq!(recorder.active_elapsed_ms(StageId::Open), 1);
         assert_eq!(recorder.active_elapsed_ms(StageId::Settle), 0);
+    }
+
+    #[test]
+    fn stage_window_recorder_uses_union_of_active_intervals() {
+        let recorder = StageWindowRecorder::new();
+        let base = recorder.origin;
+
+        recorder.record(
+            StageId::Open,
+            base + Duration::from_millis(10),
+            base + Duration::from_millis(110),
+        );
+        recorder.record(
+            StageId::Open,
+            base + Duration::from_millis(40),
+            base + Duration::from_millis(80),
+        );
+        recorder.record(
+            StageId::Open,
+            base + Duration::from_millis(200),
+            base + Duration::from_millis(250),
+        );
+
+        assert_eq!(recorder.active_elapsed_ms(StageId::Open), 150);
     }
 
     #[tokio::test]
@@ -1240,6 +1493,71 @@ mod tests {
             1,
             "submitter should retain one shared open result after waiters drain"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_times_out_when_paired_open_never_arrives() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let result = submitter
+            .open_as_seat_with_pair_timeout(
+                Seat::B,
+                &inner,
+                TunnelOpenRequest {
+                    protocol: tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1")
+                        .expect("protocol id"),
+                    party_a: [1u8; 32],
+                    party_b: [2u8; 32],
+                    initial: Balances { a: 1, b: 1 },
+                },
+                Some(Duration::from_millis(5)),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(TunnelAnchorError::Unavailable(message))
+                if message.contains("paired open")
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_abort_wakes_paired_open_waiter() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let b = {
+            let submitter = submitter.clone();
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                submitter
+                    .open_as_seat_with_pair_timeout(
+                        Seat::B,
+                        &inner,
+                        TunnelOpenRequest {
+                            protocol: tunnel_core::protocol_id::ProtocolId::parse(
+                                "test.protocol.v1",
+                            )
+                            .expect("protocol id"),
+                            party_a: [1u8; 32],
+                            party_b: [2u8; 32],
+                            initial: Balances { a: 1, b: 1 },
+                        },
+                        Some(Duration::from_secs(60)),
+                    )
+                    .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!b.is_finished(), "seat B must be waiting for paired open");
+        submitter.abort("seat A failed");
+
+        let result = b.await.expect("seat B join");
+        assert!(matches!(
+            result,
+            Err(TunnelAnchorError::Unavailable(message))
+                if message.contains("aborted paired open")
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1375,6 +1693,119 @@ mod tests {
         assert_eq!(settled_a.digest, settled_b.digest);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_times_out_when_paired_settle_never_arrives() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
+        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+        let protocol =
+            tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1").expect("protocol id");
+        inner
+            .open(TunnelOpenRequest {
+                protocol,
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                initial: Balances { a: 1, b: 1 },
+            })
+            .await
+            .expect("open");
+        let settlement = tunnel_core::wire::Settlement {
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+        };
+        let msg = tunnel_core::wire::serialize_settlement(&settlement);
+        let result = submitter
+            .settle_as_seat_with_pair_timeout(
+                Seat::A,
+                &inner,
+                TunnelSettleRequest {
+                    by: Seat::A,
+                    tunnel_id: "0x1".into(),
+                    party_a_balance: 1,
+                    party_b_balance: 1,
+                    final_nonce: 1,
+                    timestamp: 7,
+                    signature: signer_a.sign(&msg),
+                    transcript_root: None,
+                    transcript_entries: Vec::new(),
+                },
+                Some(Duration::from_millis(5)),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(TunnelAnchorError::Unavailable(message))
+                if message.contains("paired settle")
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_abort_wakes_paired_settle_waiter() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
+        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+        let protocol =
+            tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1").expect("protocol id");
+        inner
+            .open(TunnelOpenRequest {
+                protocol,
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                initial: Balances { a: 1, b: 1 },
+            })
+            .await
+            .expect("open");
+        let settlement = tunnel_core::wire::Settlement {
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+        };
+        let msg = tunnel_core::wire::serialize_settlement(&settlement);
+        let a = {
+            let submitter = submitter.clone();
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                submitter
+                    .settle_as_seat_with_pair_timeout(
+                        Seat::A,
+                        &inner,
+                        TunnelSettleRequest {
+                            by: Seat::A,
+                            tunnel_id: "0x1".into(),
+                            party_a_balance: 1,
+                            party_b_balance: 1,
+                            final_nonce: 1,
+                            timestamp: 7,
+                            signature: signer_a.sign(&msg),
+                            transcript_root: None,
+                            transcript_entries: Vec::new(),
+                        },
+                        Some(Duration::from_secs(60)),
+                    )
+                    .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!a.is_finished(), "seat A must be waiting for paired settle");
+        submitter.abort("seat B failed");
+
+        let result = a.await.expect("seat A join");
+        assert!(matches!(
+            result,
+            Err(TunnelAnchorError::Unavailable(message))
+                if message.contains("aborted paired settle")
+        ));
+    }
+
     /// End-to-end: `record_transcript: true` on the (rootless) memory anchor wires
     /// the in-memory recorder, records every move, and still settles cleanly —
     /// the `--transcript-recorder memory` path on the memory anchor.
@@ -1405,6 +1836,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: true,
+                heartbeat: None,
             },
             None,
             None,
@@ -1445,6 +1877,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             Some(run_control.clone()),
             None,
@@ -1493,6 +1926,7 @@ mod tests {
             TunnelTelemetry {
                 collect: true,
                 record_transcript: false,
+                heartbeat: None,
             },
             None,
             None,
@@ -1560,6 +1994,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             None,
             None,

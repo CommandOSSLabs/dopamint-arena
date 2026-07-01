@@ -17,6 +17,8 @@ use tokio::task::{JoinError, JoinSet};
 use tunnel_harness::DriverRunControl;
 use tunnel_telemetry::{CollectingSink, RunTelemetry};
 
+const TUNNEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Golden seat A secret: bytes 0x01..0x20.
 pub const SEAT_A: [u8; 32] = {
     let mut k = [0u8; 32];
@@ -416,7 +418,7 @@ pub fn run_lifecycle_pipeline(
                 protocol_id,
                 initial_balance,
                 max_moves_per_tunnel,
-                telemetry,
+                telemetry.clone(),
                 kit_for(index),
                 Some(run_control_for_tasks.clone()),
                 Some(stage_windows_for_tasks.clone()),
@@ -437,6 +439,7 @@ pub fn run_lifecycle_pipeline(
             &mut tasks,
             &mut samples,
             &mut tunnels_aborted,
+            TUNNEL_DRAIN_TIMEOUT,
         )
         .await
         else {
@@ -487,11 +490,13 @@ pub fn run_lifecycle_pipeline(
             }
         };
 
-        while let Some(result) = tasks.join_next().await {
-            if record_tunnel_join(&mut samples, result) {
-                tunnels_aborted += 1;
-            }
-        }
+        drain_join_set_with_timeout(
+            &mut tasks,
+            &mut samples,
+            &mut tunnels_aborted,
+            TUNNEL_DRAIN_TIMEOUT,
+        )
+        .await;
 
         (
             samples,
@@ -546,10 +551,18 @@ async fn wait_for_first_play_window(
     tasks: &mut JoinSet<TunnelSample>,
     samples: &mut Vec<TunnelSample>,
     tunnels_aborted: &mut u64,
+    timeout: Duration,
 ) -> Option<Instant> {
+    let now = Instant::now();
+    let deadline = now.checked_add(timeout).unwrap_or(now);
     loop {
         if let Some(start) = stage_windows.first_play_started() {
             return Some(start);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            drain_join_set_with_timeout(tasks, samples, tunnels_aborted, Duration::ZERO).await;
+            return stage_windows.first_play_started();
         }
 
         tokio::select! {
@@ -567,6 +580,52 @@ async fn wait_for_first_play_window(
                     None => return stage_windows.first_play_started(),
                 }
             }
+            _ = tokio::time::sleep(remaining) => {
+                drain_join_set_with_timeout(tasks, samples, tunnels_aborted, Duration::ZERO).await;
+                return stage_windows.first_play_started();
+            }
+        }
+    }
+}
+
+async fn drain_join_set_with_timeout(
+    tasks: &mut JoinSet<TunnelSample>,
+    samples: &mut Vec<TunnelSample>,
+    tunnels_aborted: &mut u64,
+    timeout: Duration,
+) {
+    let now = Instant::now();
+    let deadline = now.checked_add(timeout).unwrap_or(now);
+    while !tasks.is_empty() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, tasks.join_next()).await {
+            Ok(Some(result)) => {
+                if record_tunnel_join(samples, result) {
+                    *tunnels_aborted += 1;
+                }
+            }
+            Ok(None) => return,
+            Err(_) => break,
+        }
+    }
+
+    if tasks.is_empty() {
+        return;
+    }
+
+    let pending = tasks.len();
+    tracing::warn!(
+        pending,
+        timeout_ms = timeout.as_millis(),
+        "aborting tunnel tasks that did not finish final drain"
+    );
+    tasks.abort_all();
+    while let Some(result) = tasks.join_next().await {
+        if record_tunnel_join(samples, result) {
+            *tunnels_aborted += 1;
         }
     }
 }
@@ -641,6 +700,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -680,6 +740,71 @@ mod tests {
     }
 
     #[test]
+    fn final_drain_aborts_pending_tunnel_tasks_after_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let (samples, aborted, empty) = runtime.block_on(async {
+            let mut tasks = JoinSet::new();
+            tasks.spawn(async {
+                std::future::pending::<()>().await;
+                #[allow(unreachable_code)]
+                sample_with_tps(1.0)
+            });
+
+            let mut samples = Vec::new();
+            let mut aborted = 0;
+            drain_join_set_with_timeout(
+                &mut tasks,
+                &mut samples,
+                &mut aborted,
+                Duration::from_millis(5),
+            )
+            .await;
+            (samples, aborted, tasks.is_empty())
+        });
+
+        assert!(samples.is_empty());
+        assert_eq!(aborted, 1);
+        assert!(empty);
+    }
+
+    #[test]
+    fn first_play_wait_aborts_pending_tunnel_tasks_after_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let (start, samples, aborted, empty) = runtime.block_on(async {
+            let stage_windows = StageWindowRecorder::new();
+            let mut tasks = JoinSet::new();
+            tasks.spawn(async {
+                std::future::pending::<()>().await;
+                #[allow(unreachable_code)]
+                sample_with_tps(1.0)
+            });
+
+            let mut samples = Vec::new();
+            let mut aborted = 0;
+            let start = wait_for_first_play_window(
+                &stage_windows,
+                &mut tasks,
+                &mut samples,
+                &mut aborted,
+                Duration::from_millis(5),
+            )
+            .await;
+            (start, samples, aborted, tasks.is_empty())
+        });
+
+        assert!(start.is_none());
+        assert!(samples.is_empty());
+        assert_eq!(aborted, 1);
+        assert!(empty);
+    }
+
+    #[test]
     fn preinitialized_lifecycle_pool_executes() {
         let out = run_lifecycle_pipeline(
             2,
@@ -695,6 +820,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             true,
         );
@@ -731,6 +857,7 @@ mod tests {
                                 TunnelTelemetry {
                                     collect: false,
                                     record_transcript: false,
+                                    heartbeat: None,
                                 },
                                 random_seat_kit(),
                                 Some(run_control),
@@ -775,6 +902,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -799,6 +927,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -816,6 +945,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -833,6 +963,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -860,6 +991,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -884,6 +1016,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -908,6 +1041,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -931,6 +1065,7 @@ mod tests {
             TunnelTelemetry {
                 collect,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         )
@@ -969,6 +1104,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -1002,6 +1138,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -1028,6 +1165,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -1069,6 +1207,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );
@@ -1094,6 +1233,7 @@ mod tests {
             TunnelTelemetry {
                 collect: false,
                 record_transcript: false,
+                heartbeat: None,
             },
             false,
         );

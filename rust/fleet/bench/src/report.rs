@@ -308,7 +308,7 @@ pub fn render_with_style(
 ) -> String {
     let secs = simple.elapsed_ms as f64 / 1000.0;
     let mut out = format!(
-        "{}\n{}\n\n{}\n  - moves              {}\n  - tunnels            {}\n  - wall move-TPS      {:.1}\n  - play-only move-TPS {:.1}\n\n{}\n  - opened={}  closed={}  failed={}  aborted={}  open-rate={:.1}/s  close-rate={:.1}/s\n  - moves/tunnel p50={:.1} p90={:.1} avg={:.1} peak={:.1}\n",
+        "{}\n{}\n\n{}\n  - moves              {}\n  - tunnels            {}\n  - wall move-TPS      {:.1}\n  - play-only move-TPS {:.1}\n\n{}\n  - opened={}  closed={}  failed={}  aborted={}  open-rate={:.1}/s over {}  close-rate={:.1}/s over {}\n  - moves/tunnel p50={:.1} p90={:.1} avg={:.1} peak={:.1}\n",
         style.title(format!(
             "{} fleet-bench {protocol_id}",
             run_label(opts.anchor_mode)
@@ -331,7 +331,9 @@ pub fn render_with_style(
         humanize::count(simple.tunnels_failed),
         humanize::count(simple.tunnels_aborted),
         rate_per_sec(simple.tunnels_opened, simple.open_active_elapsed_ms),
+        humanize::dur_ns(simple.open_active_elapsed_ms as f64 * 1_000_000.0),
         rate_per_sec(simple.tunnels_settled, simple.settle_active_elapsed_ms),
+        humanize::dur_ns(simple.settle_active_elapsed_ms as f64 * 1_000_000.0),
         simple.moves_dist.p50,
         simple.moves_dist.p90,
         simple.moves_dist.avg,
@@ -499,6 +501,7 @@ mod tests {
             anchor_mode: AnchorMode::Memory,
             color_mode: ColorMode::Never,
             transcript_recorder: TranscriptRecorderMode::None,
+            heartbeat: None,
             sui_anchor: None,
         }
     }
@@ -674,7 +677,7 @@ mod tests {
         );
         assert!(
             s.contains(
-                "  - opened=3  closed=3  failed=0  aborted=0  open-rate=3.0/s  close-rate=3.0/s"
+                "  - opened=3  closed=3  failed=0  aborted=0  open-rate=3.0/s over 1.0s  close-rate=3.0/s over 1.0s"
             ),
             "got:\n{s}"
         );
@@ -743,7 +746,7 @@ mod tests {
 
         assert!(
             s.contains(
-                "  - opened=4  closed=10  failed=0  aborted=0  open-rate=2.0/s  close-rate=2.0/s"
+                "  - opened=4  closed=10  failed=0  aborted=0  open-rate=2.0/s over 2.0s  close-rate=2.0/s over 5.0s"
             ),
             "got:\n{s}"
         );

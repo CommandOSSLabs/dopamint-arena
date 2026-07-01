@@ -6,6 +6,7 @@ use std::io::IsTerminal;
 use fleet_bench::cli::{
     self, AnchorMode, ColorMode, ConcurrencyMode, SignerInitMode, TranscriptRecorderMode,
 };
+use fleet_bench::heartbeat::HeartbeatConfig;
 use fleet_bench::party_driver::{
     build_sui_sponsored_bench_context, SuiSponsoredBenchContext, TunnelTelemetry,
 };
@@ -91,9 +92,11 @@ fn run_protocol(
     protocol_id: &'static str,
 ) -> (swarm::SwarmOutcome, resources::ResourceSummary) {
     let preinitialize = matches!(opts.signer_init_mode, SignerInitMode::PreInitialized);
+    let heartbeat = resolve_heartbeat(opts, protocol_id);
     let telemetry = TunnelTelemetry {
         collect: opts.per_move_latency,
         record_transcript: matches!(opts.transcript_recorder, TranscriptRecorderMode::Memory),
+        heartbeat,
     };
     let tunnel_pool = tunnel_pool_for_run(opts);
     let sampler = resources::start(250, opts.workers);
@@ -112,6 +115,21 @@ fn run_protocol(
         preinitialize,
     );
     (outcome, sampler.stop())
+}
+
+fn resolve_heartbeat(opts: &cli::BenchOpts, protocol_id: &'static str) -> Option<HeartbeatConfig> {
+    let setup = opts.heartbeat.as_ref()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("heartbeat setup runtime");
+    match runtime.block_on(setup.register(protocol_id)) {
+        Ok(config) => Some(config),
+        Err(error) => {
+            eprintln!("{error}; continuing without heartbeat telemetry");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +155,7 @@ mod tests {
             anchor_mode: AnchorMode::Memory,
             color_mode: ColorMode::Never,
             transcript_recorder: TranscriptRecorderMode::None,
+            heartbeat: None,
             sui_anchor: None::<SuiSponsoredAnchorOpts>,
         }
     }

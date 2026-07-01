@@ -2910,8 +2910,12 @@ name = "fleet-bench"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "fleet-serve",
  "getrandom 0.2.17",
  "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
  "sui-tunnel-anchor",
  "sysinfo",
  "tokio",
@@ -2931,6 +2935,7 @@ dependencies = [
  "tunnel-telemetry",
  "tunnel-tic-tac-toe",
  "tunnel-world-canvas",
+ "wiremock",
 ]
 
 [[package]]
