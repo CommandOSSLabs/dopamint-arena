@@ -19,6 +19,10 @@ export interface ExplorerServicesArgs {
   listener: aws.lb.Listener;
   // Comma-separated list of origins allowed by the CORS layer. Omitted => permissive CORS.
   corsAllowedOrigins?: pulumi.Input<string>;
+  // Transcripts bucket the api reads to verify from S3 (primary; Walrus is the fallback).
+  // Injected as S3_TRANSCRIPTS_BUCKET plaintext env. Omitted => Walrus-only. Must match the
+  // bucket + prefix tunnel-manager archives to (`Backend.ts` `s3TranscriptsBucket`).
+  s3TranscriptsBucket?: pulumi.Input<string>;
 }
 
 export interface ExplorerServicesOutputs {
@@ -165,8 +169,9 @@ export function createExplorerServices(
       args.logGroupName,
       args.databaseUrlSecretArn,
       args.corsAllowedOrigins ?? pulumi.output(undefined),
+      args.s3TranscriptsBucket ?? pulumi.output(undefined),
     ])
-    .apply(([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins]) =>
+    .apply(([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins, s3Bucket]) =>
       JSON.stringify([
         {
           name: "api",
@@ -182,6 +187,9 @@ export function createExplorerServices(
             { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
             ...(corsAllowedOrigins
               ? [{ name: "CORS_ALLOWED_ORIGINS", value: corsAllowedOrigins }]
+              : []),
+            ...(s3Bucket
+              ? [{ name: "S3_TRANSCRIPTS_BUCKET", value: s3Bucket }]
               : []),
           ],
           secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],

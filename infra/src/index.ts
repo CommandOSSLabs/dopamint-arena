@@ -223,6 +223,9 @@ const explorer = createExplorerServices({
   vpcId: network.vpcId,
   listener: alb.listener,
   corsAllowedOrigins: cfg.corsAllowedOrigins,
+  // The api reads the archived transcript from S3 (primary) to verify; same bucket
+  // tunnel-manager archives to. Task role gets s3:GetObject via taskRoleTranscriptsBucketArn.
+  s3TranscriptsBucket: transcriptsBucket.bucketName,
 });
 
 createBackendAlias({
