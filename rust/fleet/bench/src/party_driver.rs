@@ -310,6 +310,8 @@ impl BenchAnchor {
 
 type OpenResult = Result<OpenedTunnel, TunnelAnchorError>;
 type SettleResult = Result<SettledTunnel, TunnelAnchorError>;
+type SharedOpenResult = Arc<OpenResult>;
+type SharedSettleResult = Arc<SettleResult>;
 
 #[derive(Clone)]
 struct BenchSubmitter {
@@ -325,16 +327,16 @@ struct BenchSubmitterState {
 
 #[derive(Default)]
 struct BenchSubmitterOpenState {
-    result: Option<OpenResult>,
-    waiters: Vec<oneshot::Sender<OpenResult>>,
+    result: Option<SharedOpenResult>,
+    waiters: Vec<oneshot::Sender<SharedOpenResult>>,
 }
 
 #[derive(Default)]
 struct BenchSubmitterSettleState {
     request_a: Option<TunnelSettleRequest>,
     request_b: Option<TunnelSettleRequest>,
-    result: Option<SettleResult>,
-    waiters: Vec<oneshot::Sender<SettleResult>>,
+    result: Option<SharedSettleResult>,
+    waiters: Vec<oneshot::Sender<SharedSettleResult>>,
     #[cfg(test)]
     ready_waiters: usize,
 }
@@ -368,19 +370,21 @@ impl BenchSubmitter {
             state.open.waiters.push(sender);
             receiver
         };
-        receiver
+        let shared_result = receiver
             .await
-            .map_err(|_| TunnelAnchorError::Unavailable("bench open submitter dropped".into()))?
+            .map_err(|_| TunnelAnchorError::Unavailable("bench open submitter dropped".into()))?;
+        clone_open_result(&shared_result)
     }
 
     fn complete_open(&self, result: &OpenResult) {
+        let shared_result = Arc::new(clone_open_result(result));
         let waiters = {
             let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
-            state.open.result = Some(clone_open_result(result));
+            state.open.result = Some(Arc::clone(&shared_result));
             std::mem::take(&mut state.open.waiters)
         };
         for waiter in waiters {
-            let _ = waiter.send(clone_open_result(result));
+            let _ = waiter.send(Arc::clone(&shared_result));
         }
     }
 
@@ -411,9 +415,10 @@ impl BenchSubmitter {
             self.submit_settle_when_ready(inner).await;
         }
 
-        receiver
+        let shared_result = receiver
             .await
-            .map_err(|_| TunnelAnchorError::Unavailable("bench settle submitter dropped".into()))?
+            .map_err(|_| TunnelAnchorError::Unavailable("bench settle submitter dropped".into()))?;
+        clone_settle_result(&shared_result)
     }
 
     async fn submit_settle_when_ready(&self, inner: &BenchAnchorInner) {
@@ -442,16 +447,17 @@ impl BenchSubmitter {
     }
 
     fn complete_settle(&self, result: &SettleResult) {
+        let shared_result = Arc::new(clone_settle_result(result));
         let waiters = {
             let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
             if state.settle.result.is_some() {
                 return;
             }
-            state.settle.result = Some(clone_settle_result(result));
+            state.settle.result = Some(Arc::clone(&shared_result));
             std::mem::take(&mut state.settle.waiters)
         };
         for waiter in waiters {
-            let _ = waiter.send(clone_settle_result(result));
+            let _ = waiter.send(Arc::clone(&shared_result));
         }
     }
 
@@ -480,6 +486,28 @@ impl BenchSubmitter {
             .expect("bench submitter mutex poisoned")
             .settle
             .ready_waiters
+    }
+
+    #[cfg(test)]
+    fn stored_open_result_strong_count_for_test(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("bench submitter mutex poisoned")
+            .open
+            .result
+            .as_ref()
+            .map_or(0, Arc::strong_count)
+    }
+
+    #[cfg(test)]
+    fn stored_settle_result_strong_count_for_test(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("bench submitter mutex poisoned")
+            .settle
+            .result
+            .as_ref()
+            .map_or(0, Arc::strong_count)
     }
 }
 
@@ -1182,6 +1210,11 @@ mod tests {
         assert_eq!(opened_b.tunnel_id, "0x1");
         assert!(opened_a.created);
         assert!(!opened_b.created);
+        assert_eq!(
+            submitter.stored_open_result_strong_count_for_test(),
+            1,
+            "submitter should retain one shared open result after waiters drain"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1243,6 +1276,11 @@ mod tests {
         assert_eq!(settled_a.digest, settled_b.digest);
         assert_eq!(settled_a.final_balances, Balances { a: 1, b: 1 });
         assert_eq!(settled_b.final_balances, Balances { a: 1, b: 1 });
+        assert_eq!(
+            submitter.stored_settle_result_strong_count_for_test(),
+            1,
+            "submitter should retain one shared settle result after waiters drain"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -4,7 +4,7 @@
 use crate::cli::{AnchorMode, BenchOpts, TranscriptRecorderMode};
 use crate::humanize;
 use crate::resources::ResourceSummary;
-use crate::swarm::SwarmOutcome;
+use crate::swarm::{SuiPtbFlushReasonCounts, SwarmOutcome};
 use tunnel_telemetry::{Distribution, StageId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +143,32 @@ fn ptb_batch_line(label: &str, count: u64, d: &Distribution) -> Option<String> {
         d.avg,
         d.peak,
     ))
+}
+
+fn ptb_flush_reason_line(label: &str, reasons: SuiPtbFlushReasonCounts) -> Option<String> {
+    let mut parts = Vec::new();
+    if reasons.immediate > 0 {
+        parts.push(format!("immediate={}", humanize::count(reasons.immediate)));
+    }
+    if reasons.full > 0 {
+        parts.push(format!("full={}", humanize::count(reasons.full)));
+    }
+    if reasons.debounce > 0 {
+        parts.push(format!("debounce={}", humanize::count(reasons.debounce)));
+    }
+    if reasons.shutdown > 0 {
+        parts.push(format!("shutdown={}", humanize::count(reasons.shutdown)));
+    }
+    if reasons.retry_split > 0 {
+        parts.push(format!(
+            "retry-split={}",
+            humanize::count(reasons.retry_split)
+        ));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!("  - {label} flush-reasons {}", parts.join(" ")))
 }
 
 fn tx_digest_line(label: &str, tx_digests: &[String]) -> Option<String> {
@@ -367,6 +393,11 @@ pub fn render_with_style(
             out.push_str(&line);
             out.push('\n');
         }
+        if let Some(line) = ptb_flush_reason_line("open", simple.sui_ptb_metrics.open_flush_reasons)
+        {
+            out.push_str(&line);
+            out.push('\n');
+        }
         if let Some(line) = tx_digest_line("open", &simple.sui_ptb_metrics.open_tx_digests) {
             out.push_str(&line);
             out.push('\n');
@@ -376,6 +407,12 @@ pub fn render_with_style(
             simple.sui_ptb_metrics.settle_count,
             &simple.sui_ptb_metrics.settle_batch_size,
         ) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) =
+            ptb_flush_reason_line("settle", simple.sui_ptb_metrics.settle_flush_reasons)
+        {
             out.push_str(&line);
             out.push('\n');
         }
@@ -566,6 +603,15 @@ mod tests {
             settle_count: 1,
             open_batch_size: crate::stats::summarize(&[2.0, 4.0]),
             settle_batch_size: crate::stats::summarize(&[3.0]),
+            open_flush_reasons: crate::swarm::SuiPtbFlushReasonCounts {
+                full: 1,
+                debounce: 1,
+                ..Default::default()
+            },
+            settle_flush_reasons: crate::swarm::SuiPtbFlushReasonCounts {
+                retry_split: 1,
+                ..Default::default()
+            },
             open_tx_digests: vec!["openA".into(), "openB".into()],
             settle_tx_digests: vec!["settleA".into()],
         };
@@ -579,7 +625,15 @@ mod tests {
 
         assert!(s.contains("Sui PTBs"), "got:\n{s}");
         assert!(s.contains("open: ptbs=2 batch-size"), "got:\n{s}");
+        assert!(
+            s.contains("open flush-reasons full=1 debounce=1"),
+            "got:\n{s}"
+        );
         assert!(s.contains("settle: ptbs=1 batch-size"), "got:\n{s}");
+        assert!(
+            s.contains("settle flush-reasons retry-split=1"),
+            "got:\n{s}"
+        );
         assert!(s.contains("open txDigests=openA, openB"), "got:\n{s}");
         assert!(s.contains("settle txDigests=settleA"), "got:\n{s}");
     }

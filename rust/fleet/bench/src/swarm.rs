@@ -10,7 +10,9 @@ use crate::party_driver::{
 use crate::protocols::{play_tunnel_for, PlayTunnelRequest};
 use crate::stats::{summarize, Distribution};
 use std::time::{Duration, Instant};
-use sui_tunnel_anchor::{AnchorCostSnapshot, SuiPtbExecution, SuiPtbMetricsSnapshot};
+use sui_tunnel_anchor::{
+    AnchorCostSnapshot, SuiPtbExecution, SuiPtbFlushReason, SuiPtbMetricsSnapshot,
+};
 use tokio::task::{JoinError, JoinSet};
 use tunnel_harness::DriverRunControl;
 use tunnel_telemetry::{CollectingSink, RunTelemetry};
@@ -85,8 +87,31 @@ pub struct SuiPtbMetrics {
     pub settle_count: u64,
     pub open_batch_size: Distribution,
     pub settle_batch_size: Distribution,
+    pub open_flush_reasons: SuiPtbFlushReasonCounts,
+    pub settle_flush_reasons: SuiPtbFlushReasonCounts,
     pub open_tx_digests: Vec<String>,
     pub settle_tx_digests: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SuiPtbFlushReasonCounts {
+    pub immediate: u64,
+    pub full: u64,
+    pub debounce: u64,
+    pub shutdown: u64,
+    pub retry_split: u64,
+}
+
+impl SuiPtbFlushReasonCounts {
+    fn record(&mut self, reason: SuiPtbFlushReason) {
+        match reason {
+            SuiPtbFlushReason::Immediate => self.immediate += 1,
+            SuiPtbFlushReason::Full => self.full += 1,
+            SuiPtbFlushReason::Debounce => self.debounce += 1,
+            SuiPtbFlushReason::Shutdown => self.shutdown += 1,
+            SuiPtbFlushReason::RetrySplit => self.retry_split += 1,
+        }
+    }
 }
 
 /// Distinct, valid hex tunnel id per tunnel (offset by 1 to avoid the all-zero address).
@@ -98,28 +123,39 @@ fn ptb_metrics_delta(before: SuiPtbMetricsSnapshot, after: SuiPtbMetricsSnapshot
     fn execution_delta(
         before_len: usize,
         after: Vec<SuiPtbExecution>,
-    ) -> (u64, Distribution, Vec<String>) {
+    ) -> (u64, Distribution, SuiPtbFlushReasonCounts, Vec<String>) {
         let executions = after.into_iter().skip(before_len).collect::<Vec<_>>();
         let batch_sizes = executions
             .iter()
             .map(|execution| execution.batch_size as f64)
             .collect::<Vec<_>>();
+        let mut flush_reasons = SuiPtbFlushReasonCounts::default();
+        for execution in &executions {
+            flush_reasons.record(execution.flush_reason);
+        }
         let tx_digests = executions
             .into_iter()
             .map(|execution| execution.tx_digest)
             .collect::<Vec<_>>();
-        (tx_digests.len() as u64, summarize(&batch_sizes), tx_digests)
+        (
+            tx_digests.len() as u64,
+            summarize(&batch_sizes),
+            flush_reasons,
+            tx_digests,
+        )
     }
 
-    let (open_count, open_batch_size, open_tx_digests) =
+    let (open_count, open_batch_size, open_flush_reasons, open_tx_digests) =
         execution_delta(before.open.len(), after.open);
-    let (settle_count, settle_batch_size, settle_tx_digests) =
+    let (settle_count, settle_batch_size, settle_flush_reasons, settle_tx_digests) =
         execution_delta(before.settle.len(), after.settle);
     SuiPtbMetrics {
         open_count,
         settle_count,
         open_batch_size,
         settle_batch_size,
+        open_flush_reasons,
+        settle_flush_reasons,
         open_tx_digests,
         settle_tx_digests,
     }

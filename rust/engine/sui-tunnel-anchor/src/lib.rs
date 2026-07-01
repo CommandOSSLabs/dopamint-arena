@@ -94,6 +94,17 @@ pub struct SuiPtbMetricsSnapshot {
 pub struct SuiPtbExecution {
     pub tx_digest: String,
     pub batch_size: usize,
+    pub flush_reason: SuiPtbFlushReason,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SuiPtbFlushReason {
+    #[default]
+    Immediate,
+    Full,
+    Debounce,
+    Shutdown,
+    RetrySplit,
 }
 
 /// Net MIST consumed by a transaction: computation + storage − rebate.
@@ -699,12 +710,16 @@ impl SuiSponsoredAnchorShared {
         }
     }
 
-    async fn flush_open_batch(&self, items: Vec<OpenBatchItem>) {
-        self.anchor_for_executor().execute_open_batch(items).await;
+    async fn flush_open_batch(&self, items: Vec<OpenBatchItem>, reason: SuiPtbFlushReason) {
+        self.anchor_for_executor()
+            .execute_open_batch(items, reason)
+            .await;
     }
 
-    async fn flush_settle_batch(&self, items: Vec<SettleBatchItem>) {
-        self.anchor_for_executor().execute_settle_batch(items).await;
+    async fn flush_settle_batch(&self, items: Vec<SettleBatchItem>, reason: SuiPtbFlushReason) {
+        self.anchor_for_executor()
+            .execute_settle_batch(items, reason)
+            .await;
     }
 }
 
@@ -801,7 +816,12 @@ async fn run_open_batch_worker(
         }
 
         if open_batch_logical_request_count(&pending) >= max_batch_size {
-            spawn_open_batch_flush(&shared, &mut flushes, std::mem::take(&mut pending));
+            spawn_open_batch_flush(
+                &shared,
+                &mut flushes,
+                std::mem::take(&mut pending),
+                SuiPtbFlushReason::Full,
+            );
             continue;
         }
 
@@ -811,13 +831,23 @@ async fn run_open_batch_worker(
                 match maybe_item {
                     Some(item) => pending.push(item),
                     None => {
-                        spawn_open_batch_flush(&shared, &mut flushes, std::mem::take(&mut pending));
+                        spawn_open_batch_flush(
+                            &shared,
+                            &mut flushes,
+                            std::mem::take(&mut pending),
+                            SuiPtbFlushReason::Shutdown,
+                        );
                         break;
                     }
                 }
             }
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
-                spawn_open_batch_flush(&shared, &mut flushes, std::mem::take(&mut pending));
+                spawn_open_batch_flush(
+                    &shared,
+                    &mut flushes,
+                    std::mem::take(&mut pending),
+                    SuiPtbFlushReason::Debounce,
+                );
             }
         }
     }
@@ -843,7 +873,12 @@ async fn run_settle_batch_worker(
         }
 
         if pending.len() >= max_batch_size {
-            spawn_settle_batch_flush(&shared, &mut flushes, std::mem::take(&mut pending));
+            spawn_settle_batch_flush(
+                &shared,
+                &mut flushes,
+                std::mem::take(&mut pending),
+                SuiPtbFlushReason::Full,
+            );
             continue;
         }
 
@@ -857,13 +892,19 @@ async fn run_settle_batch_worker(
                             &shared,
                             &mut flushes,
                             std::mem::take(&mut pending),
+                            SuiPtbFlushReason::Shutdown,
                         );
                         break;
                     }
                 }
             }
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
-                spawn_settle_batch_flush(&shared, &mut flushes, std::mem::take(&mut pending));
+                spawn_settle_batch_flush(
+                    &shared,
+                    &mut flushes,
+                    std::mem::take(&mut pending),
+                    SuiPtbFlushReason::Debounce,
+                );
             }
         }
     }
@@ -875,13 +916,14 @@ fn spawn_open_batch_flush(
     shared: &SuiSponsoredAnchorShared,
     flushes: &mut tokio::task::JoinSet<()>,
     items: Vec<OpenBatchItem>,
+    reason: SuiPtbFlushReason,
 ) {
     if items.is_empty() {
         return;
     }
     let shared = shared.clone();
     flushes.spawn(async move {
-        shared.flush_open_batch(items).await;
+        shared.flush_open_batch(items, reason).await;
     });
 }
 
@@ -889,13 +931,14 @@ fn spawn_settle_batch_flush(
     shared: &SuiSponsoredAnchorShared,
     flushes: &mut tokio::task::JoinSet<()>,
     items: Vec<SettleBatchItem>,
+    reason: SuiPtbFlushReason,
 ) {
     if items.is_empty() {
         return;
     }
     let shared = shared.clone();
     flushes.spawn(async move {
-        shared.flush_settle_batch(items).await;
+        shared.flush_settle_batch(items, reason).await;
     });
 }
 
@@ -1095,14 +1138,25 @@ impl SuiSponsoredAnchor {
         matches!(self.config.settle_mode, SuiSettleMode::DirectSettle)
     }
 
-    fn record_open_ptb(&self, tx_digest: String, batch_size: usize) {
+    fn record_open_ptb(
+        &self,
+        tx_digest: String,
+        batch_size: usize,
+        flush_reason: SuiPtbFlushReason,
+    ) {
         self.ptb_metrics.lock().unwrap().open.push(SuiPtbExecution {
             tx_digest,
             batch_size,
+            flush_reason,
         });
     }
 
-    fn record_settle_ptb(&self, tx_digest: String, batch_size: usize) {
+    fn record_settle_ptb(
+        &self,
+        tx_digest: String,
+        batch_size: usize,
+        flush_reason: SuiPtbFlushReason,
+    ) {
         self.ptb_metrics
             .lock()
             .unwrap()
@@ -1110,6 +1164,7 @@ impl SuiSponsoredAnchor {
             .push(SuiPtbExecution {
                 tx_digest,
                 batch_size,
+                flush_reason,
             });
     }
 
@@ -1131,7 +1186,8 @@ impl SuiSponsoredAnchor {
                     })?;
                     executor.submit(key.clone(), request).await
                 } else {
-                    self.open_single_uncached(key.clone(), request).await
+                    self.open_single_uncached(key.clone(), request, SuiPtbFlushReason::Immediate)
+                        .await
                 };
                 self.complete_pending_open(&key, &result);
                 result
@@ -1198,13 +1254,14 @@ impl SuiSponsoredAnchor {
         &self,
         key: OpenKey,
         request: TunnelOpenRequest,
+        flush_reason: SuiPtbFlushReason,
     ) -> Result<OpenedTunnel, TunnelAnchorError> {
         let kind = self.build_open_kind_for_config(&request).await?;
         let effects = self.execute_open_kind(kind).await?;
         self.cost
             .add(self.open_gas_paid_by_funder(), net_gas_mist(&effects));
         ensure_success(&effects)?;
-        self.record_open_ptb(transaction_digest(&effects), 1);
+        self.record_open_ptb(transaction_digest(&effects), 1, flush_reason);
         let (tunnel_id, created_at_ms, shared_initial_version) =
             self.opened_from_effects(&effects).await?;
         let record = OpenRecord {
@@ -1225,7 +1282,7 @@ impl SuiSponsoredAnchor {
         })
     }
 
-    async fn execute_open_batch(&self, items: Vec<OpenBatchItem>) {
+    async fn execute_open_batch(&self, items: Vec<OpenBatchItem>, reason: SuiPtbFlushReason) {
         let started = Instant::now();
         tracing::debug!(items = items.len(), "sui open batch start");
         let mut uncached_items = Vec::new();
@@ -1293,7 +1350,9 @@ impl SuiSponsoredAnchor {
 
         let single_group_count = single_groups.len();
         for group in single_groups {
-            let result = self.open_single_uncached(group.key, group.request).await;
+            let result = self
+                .open_single_uncached(group.key, group.request, reason)
+                .await;
             send_open_group_result(group.responders, result);
         }
 
@@ -1303,7 +1362,7 @@ impl SuiSponsoredAnchor {
             elapsed_ms = started.elapsed().as_millis(),
             "sui open batch grouped"
         );
-        self.execute_open_groups_or_split(safe_groups).await;
+        self.execute_open_groups_or_split(safe_groups, reason).await;
         tracing::debug!(
             elapsed_ms = started.elapsed().as_millis(),
             "sui open batch done"
@@ -1313,13 +1372,16 @@ impl SuiSponsoredAnchor {
     fn execute_open_groups_or_split(
         &self,
         mut groups: Vec<OpenBatchGroup>,
+        reason: SuiPtbFlushReason,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             match groups.len() {
                 0 => {}
                 1 => {
                     let group = groups.pop().expect("one open group");
-                    let result = self.open_single_uncached(group.key, group.request).await;
+                    let result = self
+                        .open_single_uncached(group.key, group.request, reason)
+                        .await;
                     send_open_group_result(group.responders, result);
                 }
                 _ => {
@@ -1332,7 +1394,7 @@ impl SuiSponsoredAnchor {
                         .map(|group| clone_open_request(&group.request))
                         .collect::<Vec<_>>();
 
-                    match self.open_batched_uncached(&keys, &requests).await {
+                    match self.open_batched_uncached(&keys, &requests, reason).await {
                         Ok(opened) => {
                             tracing::debug!(
                                 groups = groups.len(),
@@ -1349,8 +1411,16 @@ impl SuiSponsoredAnchor {
                                 "sui open batch attempt retryable; splitting"
                             );
                             let right_groups = groups.split_off(groups.len() / 2);
-                            self.execute_open_groups_or_split(groups).await;
-                            self.execute_open_groups_or_split(right_groups).await;
+                            self.execute_open_groups_or_split(
+                                groups,
+                                SuiPtbFlushReason::RetrySplit,
+                            )
+                            .await;
+                            self.execute_open_groups_or_split(
+                                right_groups,
+                                SuiPtbFlushReason::RetrySplit,
+                            )
+                            .await;
                         }
                         Err(OpenBatchAttemptError::Final(error)) => {
                             tracing::warn!(
@@ -1389,6 +1459,7 @@ impl SuiSponsoredAnchor {
         &self,
         keys: &[OpenKey],
         requests: &[TunnelOpenRequest],
+        flush_reason: SuiPtbFlushReason,
     ) -> Result<Vec<OpenedTunnel>, OpenBatchAttemptError> {
         let started = Instant::now();
         tracing::debug!(requests = requests.len(), "sui open batch build start");
@@ -1413,7 +1484,7 @@ impl SuiSponsoredAnchor {
             "sui open batch execute done"
         );
         ensure_success(&effects).map_err(OpenBatchAttemptError::Retryable)?;
-        self.record_open_ptb(transaction_digest(&effects), requests.len());
+        self.record_open_ptb(transaction_digest(&effects), requests.len(), flush_reason);
         let opened = self
             .map_created_tunnels_to_open_requests(&effects, requests)
             .await
@@ -2265,7 +2336,9 @@ impl SuiSponsoredAnchor {
             if let Some(executor) = &self.settle_batch_executor {
                 return executor.submit(prepared).await;
             }
-            let mut settled = self.execute_prepared_settle_batch(vec![prepared]).await?;
+            let mut settled = self
+                .execute_prepared_settle_batch(vec![prepared], SuiPtbFlushReason::Immediate)
+                .await?;
             return settled
                 .pop()
                 .ok_or_else(|| TunnelAnchorError::Unavailable("empty settle batch result".into()));
@@ -2293,7 +2366,7 @@ impl SuiSponsoredAnchor {
                 );
             }
         }
-        self.record_settle_ptb(body.tx_digest.clone(), 1);
+        self.record_settle_ptb(body.tx_digest.clone(), 1, SuiPtbFlushReason::Immediate);
         Ok(SettledTunnel {
             digest: body.tx_digest,
             final_balances: Balances {
@@ -2303,7 +2376,7 @@ impl SuiSponsoredAnchor {
         })
     }
 
-    async fn execute_settle_batch(&self, items: Vec<SettleBatchItem>) {
+    async fn execute_settle_batch(&self, items: Vec<SettleBatchItem>, reason: SuiPtbFlushReason) {
         if items.is_empty() {
             return;
         }
@@ -2311,7 +2384,7 @@ impl SuiSponsoredAnchor {
             .iter()
             .map(|item| item.prepared.clone())
             .collect::<Vec<_>>();
-        let result = self.execute_prepared_settle_batch(prepared).await;
+        let result = self.execute_prepared_settle_batch(prepared, reason).await;
         match result {
             Ok(settled) => {
                 for (item, settled) in items.into_iter().zip(settled) {
@@ -2329,11 +2402,15 @@ impl SuiSponsoredAnchor {
     async fn execute_prepared_settle_batch(
         &self,
         prepared: Vec<PreparedSettle>,
+        reason: SuiPtbFlushReason,
     ) -> Result<Vec<SettledTunnel>, TunnelAnchorError> {
-        let mut pending = vec![prepared];
+        let mut pending = vec![(prepared, reason)];
         let mut settled = Vec::new();
-        while let Some(mut batch) = pending.pop() {
-            match self.execute_prepared_settle_batch_once(batch.clone()).await {
+        while let Some((mut batch, reason)) = pending.pop() {
+            match self
+                .execute_prepared_settle_batch_once(batch.clone(), reason)
+                .await
+            {
                 Ok(mut batch_settled) => settled.append(&mut batch_settled),
                 Err(error) if batch.len() > 1 && settle_batch_error_should_split(&error) => {
                     tracing::debug!(
@@ -2342,8 +2419,8 @@ impl SuiSponsoredAnchor {
                         "sui settle batch attempt retryable; splitting"
                     );
                     let right = batch.split_off(batch.len() / 2);
-                    pending.push(right);
-                    pending.push(batch);
+                    pending.push((right, SuiPtbFlushReason::RetrySplit));
+                    pending.push((batch, SuiPtbFlushReason::RetrySplit));
                 }
                 Err(error) => return Err(error),
             }
@@ -2354,6 +2431,7 @@ impl SuiSponsoredAnchor {
     async fn execute_prepared_settle_batch_once(
         &self,
         prepared: Vec<PreparedSettle>,
+        reason: SuiPtbFlushReason,
     ) -> Result<Vec<SettledTunnel>, TunnelAnchorError> {
         let kind = self.build_batched_settle_kind(&prepared).await?;
         let effects = match self.config.settle_mode {
@@ -2365,7 +2443,7 @@ impl SuiSponsoredAnchor {
         self.cost
             .add(self.settle_gas_paid_by_funder(), net_gas_mist(&effects));
         let digest = transaction_digest(&effects);
-        self.record_settle_ptb(digest.clone(), prepared.len());
+        self.record_settle_ptb(digest.clone(), prepared.len(), reason);
         Ok(prepared
             .into_iter()
             .map(|settle| SettledTunnel {
@@ -2871,6 +2949,7 @@ mod tests {
         transaction_digest_read: StdMutex<Option<String>>,
         timestamp_digest_read: StdMutex<Option<String>>,
         first_execute_gate: StdMutex<Option<Arc<ExecuteGate>>>,
+        object_ref_read_count: StdMutex<usize>,
         object_read_count: StdMutex<usize>,
         object_read_gate: StdMutex<Option<Arc<ObjectReadGate>>>,
     }
@@ -2891,6 +2970,7 @@ mod tests {
     #[async_trait]
     impl SuiChainClient for FakeChain {
         async fn get_object_ref(&self, _object_id: Address) -> Result<ObjectReference, String> {
+            *self.object_ref_read_count.lock().unwrap() += 1;
             self.object_ref
                 .lock()
                 .unwrap()
@@ -3809,7 +3889,7 @@ mod tests {
         *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
 
         let backend = Arc::new(FakeBackend::default());
-        let mut config = config();
+        let mut config = address_balance_config();
         config.open_mode = SuiOpenMode::DirectCreateAndFund;
         config.open_batching = SuiOpenBatchingConfig {
             enabled: false,
@@ -3826,6 +3906,11 @@ mod tests {
         assert_eq!(opened.tunnel_id, tunnel_id.to_string());
         assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
         assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(
+            *chain.object_ref_read_count.lock().unwrap(),
+            0,
+            "address-balance direct open should not fetch stake coin object refs"
+        );
         assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
         assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 1);
         assert_address_balance_gas_transaction(&chain, shared.funder_address());
@@ -3886,6 +3971,16 @@ mod tests {
         assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
         assert_eq!(*chain.execute_call_count.lock().unwrap(), 1);
         assert_eq!(*chain.execute_signature_count.lock().unwrap(), Some(1));
+        assert_eq!(
+            *chain.object_ref_read_count.lock().unwrap(),
+            0,
+            "address-balance batched open should not fetch stake coin object refs"
+        );
+        assert_eq!(
+            *chain.object_read_count.lock().unwrap(),
+            2,
+            "batched open should only read the two created tunnel objects for mapping"
+        );
         assert_eq!(executed_move_call_count(&chain, "redeem_funds"), 1);
         assert_eq!(executed_move_call_count(&chain, "create_and_fund"), 2);
         assert_address_balance_gas_transaction(&chain, shared.funder_address());
@@ -4033,7 +4128,51 @@ mod tests {
         let metrics = shared.ptb_metrics_snapshot();
         assert_eq!(metrics.open.len(), 2);
         assert_eq!(metrics.open[0].batch_size, 1);
+        assert_eq!(metrics.open[0].flush_reason, SuiPtbFlushReason::Full);
         assert_eq!(metrics.open[1].batch_size, 1);
+        assert_eq!(metrics.open[1].flush_reason, SuiPtbFlushReason::Full);
+    }
+
+    #[tokio::test]
+    async fn open_batch_metrics_record_debounce_flush_reason() {
+        let tunnel = Address::from_str("0x42").unwrap();
+        let request = open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+
+        let chain = Arc::new(FakeChain::default());
+        chain
+            .objects
+            .lock()
+            .unwrap()
+            .insert(tunnel, tunnel_object_for_request(tunnel, &request));
+        chain
+            .effects_queue
+            .lock()
+            .unwrap()
+            .push_back(success_effects_with_created(vec![tunnel]));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
+
+        let backend = Arc::new(FakeBackend::default());
+        let mut config = config();
+        config.open_mode = SuiOpenMode::DirectCreateAndFund;
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 2,
+            flush_interval_ms: 1,
+        };
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
+        );
+
+        shared
+            .for_open_intent(intent(1))
+            .open(request)
+            .await
+            .expect("open");
+
+        let metrics = shared.ptb_metrics_snapshot();
+        assert_eq!(metrics.open.len(), 1);
+        assert_eq!(metrics.open[0].batch_size, 1);
+        assert_eq!(metrics.open[0].flush_reason, SuiPtbFlushReason::Debounce);
     }
 
     #[tokio::test]
@@ -5146,6 +5285,11 @@ mod tests {
             reads_after_open,
             "settle should reuse the shared initial version cached during open"
         );
+        assert_eq!(
+            *chain.object_ref_read_count.lock().unwrap(),
+            0,
+            "address-balance open/settle should not fetch coin object refs"
+        );
         assert_eq!(*backend.sponsor_call_count.lock().unwrap(), 0);
     }
 
@@ -5255,7 +5399,10 @@ mod tests {
         );
 
         let settled = shared
-            .execute_prepared_settle_batch(vec![prepared_settle("0x1"), prepared_settle("0x2")])
+            .execute_prepared_settle_batch(
+                vec![prepared_settle("0x1"), prepared_settle("0x2")],
+                SuiPtbFlushReason::Full,
+            )
             .await
             .expect("split settle should succeed");
 
@@ -5264,7 +5411,15 @@ mod tests {
         let metrics = shared.ptb_metrics_snapshot();
         assert_eq!(metrics.settle.len(), 2);
         assert_eq!(metrics.settle[0].batch_size, 1);
+        assert_eq!(
+            metrics.settle[0].flush_reason,
+            SuiPtbFlushReason::RetrySplit
+        );
         assert_eq!(metrics.settle[1].batch_size, 1);
+        assert_eq!(
+            metrics.settle[1].flush_reason,
+            SuiPtbFlushReason::RetrySplit
+        );
     }
 
     #[tokio::test]
