@@ -151,7 +151,6 @@ export class MultiGameCrossProtocol
         u64ToBeBytes(BigInt(state.gamesPlayed)),
         u64ToBeBytes(state.balanceA),
         u64ToBeBytes(state.balanceB),
-        u64ToBeBytes(BigInt(state.totalMoves)),
       ]),
     ]);
   }

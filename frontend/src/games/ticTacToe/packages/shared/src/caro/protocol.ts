@@ -324,7 +324,6 @@ export class MultiGameCaroProtocol implements Protocol<
       protocols.lengthPrefixedConcat([
         this.inner.encodeState(state.inner),
         core.u64ToBeBytes(state.gamesPlayed),
-        core.u64ToBeBytes(state.totalMoves),
       ]),
     ]);
   }

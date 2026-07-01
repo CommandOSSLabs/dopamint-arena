@@ -106,6 +106,9 @@ const AUTO_REQUEUE_MS = 150;
  */
 const BLACKJACK_MAX_MOVES_PER_ROUND = 30;
 
+/** Re-send an unconfirmed proposal on this cadence until the peer ACKs it (see the resend effect). */
+const RESEND_PENDING_MS = 1500;
+
 export type PvpPhase =
   | "idle"
   | "connecting"
@@ -991,10 +994,24 @@ export function usePvpBlackjack(): PvpView {
     return subscribeArena(tryEnter);
   }, [enterArenaMatch, phase]);
 
+  // Reliability net for a proposal whose ACK never comes back. The relay's outbound send is
+  // fire-and-forget (no queue): a move fired during a WS hiccup is dropped and — absent a full
+  // reconnect to trigger the resync handshake — never re-sent, stranding the hand on "awaiting ACK".
+  // While a proposal sits unconfirmed, re-send it. resendPending() is idempotent (the peer re-ACKs a
+  // move it already applied), so this only unsticks a genuinely-missed frame.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = tunnelRef.current;
+      if (t && t.displayState !== t.state) t.resendPending();
+    }, RESEND_PENDING_MS);
+    return () => clearInterval(id);
+  }, []);
+
   // Player Hit/Stand (only the player, only on the player's turn).
   const proposePlayer = useCallback((action: "hit" | "stand") => {
     const t = tunnelRef.current;
     if (!t) return;
+    if (t.displayState !== t.state) return; // a move already awaits the peer's ACK
     if (
       roleRef.current !== getPlayerParty(t.state.round) ||
       t.state.phase !== "player"
@@ -1014,6 +1031,9 @@ export function usePvpBlackjack(): PvpView {
     (amount: number) => {
       const t = tunnelRef.current;
       if (!t) return;
+      // One move may be in flight at a time: while a proposal awaits the peer's ACK, ignore
+      // repeat input instead of throwing "already awaiting ACK" (mirrors proposePlan's guard).
+      if (t.displayState !== t.state) return;
       if (
         roleRef.current !== getPlayerParty(t.state.round + 1n) ||
         t.state.phase !== "round_over" ||
