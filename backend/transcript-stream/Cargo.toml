@@ -1,0 +1,24 @@
+[package]
+name = "transcript-stream"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Streaming bridge: drives an engine `TranscriptRecorder` into a `transcript_store` chunk writer
+# during play (1 MB chunks + a bounded, backpressured uploader). Shared by the tunnel-manager
+# (production settle path) and fleet-bench (throughput measurement) — both drive the SAME recorder
+# against either the real `S3TranscriptStore` or the in-memory `testing::FakeChunkStore`.
+
+[dependencies]
+tunnel-core = { path = "../../rust/engine/tunnel-core" }
+tunnel-harness = { path = "../../rust/engine/tunnel-harness" }
+transcript-store = { path = "../transcript-store" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+# `testing` feature exposes `FakeChunkStore` so the recorder round-trip is unit-tested without S3.
+transcript-store = { path = "../transcript-store", features = ["testing"] }
