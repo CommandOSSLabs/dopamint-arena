@@ -494,7 +494,11 @@ mod tests {
         assert_eq!(frame_nonce(&frame_env("ack", 7)), Some(7));
         assert_eq!(frame_nonce(&resync_env(9)), None, "resync is not a frame");
         assert_eq!(resync_nonce(&resync_env(9)), Some(9));
-        assert_eq!(resync_nonce(&frame_env("move", 1)), None, "frame is not a resync");
+        assert_eq!(
+            resync_nonce(&frame_env("move", 1)),
+            None,
+            "frame is not a resync"
+        );
     }
 
     async fn resume_match(
@@ -535,7 +539,10 @@ mod tests {
                 .send_payload(frame_env(kind, nonce).into_bytes())
                 .await
                 .expect("send ok");
-            human.recv_for_test().await.expect("human gets the original");
+            human
+                .recv_for_test()
+                .await
+                .expect("human gets the original");
         }
 
         // Human resumes at nonce 1 → announce it. The bot replays n>=1 (ACK 1, MOVE 2), not n=0.
@@ -589,7 +596,10 @@ mod tests {
             .send_payload(frame_env("move", 1).into_bytes())
             .await
             .expect("send ok");
-        human.recv_for_test().await.expect("human gets the original");
+        human
+            .recv_for_test()
+            .await
+            .expect("human gets the original");
 
         state
             .bus
