@@ -338,15 +338,22 @@ export function attachResume<State, Move>(
   };
   channel.addPeerListener(peerHandler);
 
+  // On resume: announce our nonce (so a live bot targets its replay) AND re-deliver any restored
+  // in-flight move. `restoreInto` re-seats the pending WITHOUT sending, and only the generic hook
+  // called `resendPending` itself — the custom hooks (poker, tic-tac-toe/caro, battleship, blackjack)
+  // did not, so a move made just before a reload was persisted (onProposed) but never re-sent, and a
+  // bot that hadn't received it deadlocked. Doing it HERE covers every hook. Both are idempotent: an
+  // unanswered resync is harmless, and the bot re-ACKs a duplicate move; `resendPending` no-ops with
+  // nothing pending.
+  const resumeKick = () => {
+    sendResync(args);
+    args.tunnel.resendPending();
+  };
   const offOk = mp.onResumeOk((e) => {
-    // Announce our nonce on ANY resume, not only when the server reports the peer online. Against a
-    // co-located bot, presence is keyed by a seat-B address shared across a batch, so `peerOnline` is
-    // unreliable; and an unanswered resync is harmless (no peer → no reply). Sending it unconditionally
-    // lets a live bot target its replay to our nonce, and lets the resume watchdog fall back if none comes.
-    if (e.matchId === identity.matchId) sendResync(args);
+    if (e.matchId === identity.matchId) resumeKick();
   });
   const offRes = mp.onPeerResumed((e) => {
-    if (e.matchId === identity.matchId) sendResync(args);
+    if (e.matchId === identity.matchId) resumeKick();
   });
 
   const graceMs = args.graceMs ?? 3_600_000;
