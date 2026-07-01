@@ -996,6 +996,7 @@ export function usePvpTicTacToe(
     if (!t) return;
     const st = t.state;
     if (st.inner.winner !== 0 || st.inner.turn !== roleRef.current) return; // not my turn / between games
+    if (t.displayState !== st) return; // a proposal is already awaiting its ACK (e.g. a re-seated resume move)
     try {
       t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
@@ -1012,6 +1013,7 @@ export function usePvpTicTacToe(
       proto.isTerminal(t.state)
     )
       return; // X advances between games
+    if (t.displayState !== t.state) return; // a proposal is already awaiting its ACK
     try {
       t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
