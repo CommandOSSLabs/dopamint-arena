@@ -886,7 +886,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           // Build the distributed poker engine over the relay transport (mirrors findMatch's
           // startTunnelRound, but the tunnelId is the pre-created one and balances are the
           // per-seat stakes the fleet + the batched deposit just funded).
-          const proto = new QuantumPokerProtocol(HAND_CAP);
+          const proto = new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE);
           const backend = defaultBackend();
           const self = makeEndpoint(backend, wallet, ephemeral, true);
           const opp = makeEndpoint(
