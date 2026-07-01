@@ -18,7 +18,8 @@
 //!
 //! `settlement_mode()` is [`SettlementMode::TranscriptRoot`] to match the FE and `/settle`, which
 //! sign/submit `close_cooperative_with_root` (v2). The driver therefore requires a real transcript
-//! recorder (e.g. `InMemoryTranscriptRecorder`), not `NullTranscriptRecorder`.
+//! recorder (the arena uses `StreamingRootRecorder`, which computes the root incrementally), not
+//! `NullTranscriptRecorder`.
 
 use std::sync::Arc;
 

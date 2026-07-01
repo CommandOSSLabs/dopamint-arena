@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use tokio::sync::mpsc;
-use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
+use tunnel_harness::{Signer, StreamingRootRecorder};
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
@@ -176,10 +176,10 @@ async fn await_open(ctrl_rx: &mut mpsc::UnboundedReceiver<FleetServerMsg>) -> Op
 /// pairs both halves and submits the cooperative close (`POST /settle`).
 ///
 /// The connection + transport + anchor are game-agnostic; only the protocol+strategy differ, so the
-/// final step dispatches on `game` ([`play_game`]). `InMemoryTranscriptRecorder` is required (not
-/// `Null`): the anchor settles v2 (`close_cooperative_with_root`), so the driver needs the transcript
-/// to compute the root the FE also signs. On any error the caller ([`run_on_demand`]) unregisters the
-/// bot, freeing its in-flight slot.
+/// final step dispatches on `game` ([`play_game`]). `StreamingRootRecorder` is required (not
+/// `Null`): the anchor settles v2 (`close_cooperative_with_root`), so the driver needs a transcript
+/// root the FE also signs — it computes that root incrementally (O(log N)) without retaining the
+/// entries. On any error the caller ([`run_on_demand`]) unregisters the bot, freeing its slot.
 async fn play_arena_match(
     state: &SharedState,
     game: &str,
@@ -219,7 +219,16 @@ async fn play_arena_match(
         opened.match_id.clone(),
         created_at_ms,
     );
-    let moves = match play_game(game, channel, anchor, match_key, &opened.opponent_wallet).await {
+    let moves = match play_game(
+        game,
+        channel,
+        anchor,
+        match_key,
+        &opened.opponent_wallet,
+        opened.tunnel_id.clone(),
+    )
+    .await
+    {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(match_id = %opened.match_id, game = %game, "arena: bot play errored: {e:#}");
@@ -246,9 +255,11 @@ async fn play_game(
     anchor: RelayBridgedAnchor,
     match_key: DurableSigner,
     opponent_wallet: &str,
+    tunnel_id: String,
 ) -> anyhow::Result<u64> {
     // Every game drives the identical party-B seam (Role::B + a fresh transcript recorder); only the
-    // protocol's `play_*` entry differs, so each game is one arm.
+    // protocol's `play_*` entry differs, so each game is one arm. The recorder streams the v2 root
+    // incrementally (bounded RAM); it needs the tunnel id because each leaf commits to it.
     macro_rules! play {
         ($play_fn:ident) => {
             $play_fn(
@@ -257,7 +268,7 @@ async fn play_game(
                 match_key,
                 Role::B,
                 opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
+                StreamingRootRecorder::new(tunnel_id.clone()),
             )
             .await?
         };
@@ -307,6 +318,9 @@ fn random_secret() -> [u8; 32] {
 mod tests {
     use super::*;
     use crate::state::AppState;
+    // The stand-in "human" side of the settle test drives with a buffering recorder; the bot side
+    // under test uses `StreamingRootRecorder`, and the two roots must match.
+    use tunnel_harness::InMemoryTranscriptRecorder;
 
     // Inert by default: with `cap == 0` (the `FLEET_COLOCATED_COUNT=0` default) and no warm bot,
     // reserve_or_spawn spawns nothing — the guarantee that a deployed relay does not silently start
