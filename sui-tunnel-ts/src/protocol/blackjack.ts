@@ -392,6 +392,15 @@ function claimForfeit(s: BlackjackState, by: Party): BlackjackState {
   return settle(s, by);
 }
 
+/**
+ * Mint a slot secret from `rng`. Deterministic in the seed by design, so seeded
+ * sim/replay (`sim/activityGen`) reproduces a workload exactly.
+ *
+ * SECURITY: that determinism makes this UNSAFE for real stakes — salts are
+ * revealed publicly each draw, so a predictable `rng` (e.g. `Math.random` or any
+ * seeded PRNG) lets an opponent recover the generator state and steer cards. The
+ * real-money path must mint via {@link secureCommitMove}, never this.
+ */
 function randomSecret(rng: () => number): BlackjackSlotSecret {
   const b = () => Math.floor(rng() * 256) & 0xff;
   return {
@@ -573,6 +582,12 @@ export class BlackjackProtocol implements Protocol<
     return s.phase === "round_over" && !canStartRound(s);
   }
 
+  /**
+   * Pick an automatic move for `by` from `rng`. Deterministic in the seed for
+   * sim/replay. SECURITY: in `draw_commit` the minted commit secret is only as
+   * unpredictable as `rng`, so real-stakes callers must mint the commit via
+   * {@link secureCommitMove} instead and use this only for the non-secret phases.
+   */
   randomMove(
     s: BlackjackState,
     by: Party,
@@ -589,6 +604,8 @@ export class BlackjackProtocol implements Protocol<
       case "draw_commit": {
         const mine = by === "A" ? s.pendingCommitA : s.pendingCommitB;
         if (mine) return null;
+        // SECURITY: rng-derived secret — sim/replay only. Real stakes must use
+        // secureCommitMove(core.randomBytes); see randomSecret's contract.
         const secret = randomSecret(rng);
         return {
           kind: "commit",
