@@ -36,6 +36,12 @@ tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 
+# The bench spawns many worker threads that allocate heavily on the per-move
+# path (frame codec, transcript buffers); jemalloc's per-thread arenas cut the
+# global-allocator contention that otherwise caps multi-core throughput.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
+
 [dev-dependencies]
 hex.workspace = true
 serde_json = { workspace = true }

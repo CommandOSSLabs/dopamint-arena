@@ -178,9 +178,19 @@ fn tx_digest_line(label: &str, tx_digests: &[String]) -> Option<String> {
     Some(format!("  - {label} txDigests={}", tx_digests.join(", ")))
 }
 
+/// Allocator the bench binary is built against, surfaced in the legend so the
+/// reported RSS reads as an allocator artifact rather than an engine change.
+/// The bench swaps to jemalloc for throughput (see `main.rs`); the engine and
+/// production services keep the system allocator, so bench RSS is not a
+/// production working-set proxy and is not comparable across the allocator swap.
+#[cfg(not(target_env = "msvc"))]
+const BENCH_ALLOCATOR: &str = "jemalloc";
+#[cfg(target_env = "msvc")]
+const BENCH_ALLOCATOR: &str = "system";
+
 fn metric_legend(style: RenderStyle) -> String {
     format!(
-        "\n{}\n  - wall move-TPS includes open, play, settle, and chain wait time\n  - play-only move-TPS uses only the active move-production window\n  - open-rate/close-rate use active open/settle windows, not full elapsed\n  - setup overhead is non-play tunnel time as a share of tunnel e2e time\n  - Sui PTB batch-size counts logical tunnel ops after seat coalescing\n",
+        "\n{}\n  - wall move-TPS includes open, play, settle, and chain wait time\n  - play-only move-TPS uses only the active move-production window\n  - open-rate/close-rate use active open/settle windows, not full elapsed\n  - setup overhead is non-play tunnel time as a share of tunnel e2e time\n  - rss is process memory under the {BENCH_ALLOCATOR} allocator (bench build), not a production working-set proxy\n  - Sui PTB batch-size counts logical tunnel ops after seat coalescing\n",
         style.section("Metric legend"),
     )
 }

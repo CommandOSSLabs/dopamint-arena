@@ -3,6 +3,14 @@
 
 use std::io::IsTerminal;
 
+// The swarm saturates every core with allocation-heavy per-move work; jemalloc's
+// per-thread arenas remove the global-allocator lock contention that otherwise
+// caps multi-threaded throughput. Bench-binary only — never linked into the
+// engine or services. Excluded on MSVC, where jemalloc is unsupported.
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use fleet_bench::cli::{
     self, AnchorMode, ColorMode, ConcurrencyMode, SignerInitMode, TranscriptRecorderMode,
 };
