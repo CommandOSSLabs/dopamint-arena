@@ -164,6 +164,7 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
           Action: [
             "ecr:*",
             "ecs:*",
+            "application-autoscaling:*",
             "s3:*",
             "cloudfront:*",
             "logs:*",
