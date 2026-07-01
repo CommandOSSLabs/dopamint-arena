@@ -8,7 +8,13 @@ import {
   COLUMN_COUNT,
   SPAWN_COL,
 } from "./cross";
-import { CrossProtocol, WIN_LANE, TICK_CAP, MIN_STAKE } from "./cross";
+import {
+  CrossProtocol,
+  WIN_LANE,
+  TICK_CAP,
+  MIN_STAKE,
+  settleShare,
+} from "./cross";
 import type { CrossState, CrossMove } from "./cross";
 
 test("laneKind cycles grass,grass,road,road,water,rails,grass,grass after lane 2", () => {
@@ -198,6 +204,80 @@ test("randomMove carries only the acting seat's hop (2-party model)", () => {
   assert.equal(a.dirB, undefined, "A's update must not carry B's dir");
   const b = p.randomMove(s, "B", mulberry32ForTest(1)) as CrossMove;
   assert.equal(b.dirA, undefined, "B's update must not carry A's dir");
+});
+
+// ============================================
+// Settle-fairness: the cash-out invariant
+// ============================================
+
+test("settleShare splits evenly at equal progress (incl. both at zero)", () => {
+  assert.equal(settleShare(200n, 0, 0), 100n);
+  assert.equal(settleShare(200n, 300, 300), 100n);
+  assert.equal(settleShare(200n, WIN_LANE, WIN_LANE), 100n);
+});
+
+test("settleShare pays the full pot to a full-distance lead", () => {
+  assert.equal(settleShare(200n, WIN_LANE, 0), 200n);
+  assert.equal(settleShare(200n, 0, WIN_LANE), 0n);
+});
+
+test("settleShare clamps a lead beyond the race distance to winner-take-all", () => {
+  assert.equal(settleShare(200n, WIN_LANE * 3, 0), 200n);
+  assert.equal(settleShare(200n, 0, WIN_LANE * 3), 0n);
+});
+
+test("settleShare stays within [0, total]", () => {
+  for (const [x, y] of [
+    [0, 0],
+    [WIN_LANE, 0],
+    [0, WIN_LANE],
+    [123, 456],
+  ]) {
+    const s = settleShare(200n, x, y);
+    assert.ok(s >= 0n && s <= 200n, `share ${s} out of range`);
+  }
+});
+
+test("settleShare rises monotonically with the leader's own progress", () => {
+  let prev = -1n;
+  for (let scoreA = 0; scoreA <= WIN_LANE; scoreA += 60) {
+    const s = settleShare(200n, scoreA, 100);
+    assert.ok(s >= prev, `share dropped at scoreA=${scoreA}`);
+    prev = s;
+  }
+});
+
+test("settleShare never gives the leader less than half (nor the trailer more)", () => {
+  assert.ok(settleShare(200n, 400, 100) >= 100n);
+  assert.ok(settleShare(200n, 100, 400) <= 100n);
+});
+
+test("a one-lane early lead barely moves the split (no early-game nuke)", () => {
+  // The discarded raw-ratio model gave A the whole pot for a 1-vs-0 lead; guard it.
+  assert.equal(settleShare(200n, 1, 0), 100n); // floor(200 * 601 / 1200) = 100
+});
+
+test("an abandoned mid-race state settles by progress, not a frozen 50/50", () => {
+  const p = new CrossProtocol();
+  // A far ahead (grass lane 402), B behind (grass lane 102); both stay, still racing.
+  // total set explicitly so the split is meaningful regardless of MIN_STAKE.
+  const midRace: CrossState = {
+    ...p.initialState(CTX),
+    tick: 10n,
+    total: 200n,
+    balanceA: 100n,
+    balanceB: 100n,
+    players: [
+      { lane: 402, col: SPAWN_COL, score: 402, invulnTicks: 0 },
+      { lane: 102, col: SPAWN_COL, score: 102, invulnTicks: 0 },
+    ],
+  };
+  const next = p.applyMove(midRace, {}, "A");
+  assert.equal(next.winner, null); // still mid-race, no winner yet
+  const { a, b } = p.balances(next);
+  assert.equal(a + b, next.total); // conservation holds by construction
+  assert.equal(a, settleShare(next.total, 402, 102)); // leader's fair progress share
+  assert.ok(a > b, "the leader must hold more than the trailer mid-race");
 });
 
 // Local deterministic RNG for tests (mirrors the protocol's internal one).
