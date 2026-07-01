@@ -843,6 +843,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const wallet = account.address;
       installResumePersistence();
       evictExpiredRecords();
+      // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
+      autoRef.current = true;
+      setAutoState(true);
       const signExec = async (
         tx: Parameters<typeof signAndExecute>[0]["transaction"],
       ) => {
