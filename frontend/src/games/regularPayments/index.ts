@@ -1,5 +1,5 @@
 import { register } from "../registry";
-import { PaymentsWindow } from "./components/PaymentsWindow";
+import { RegularPaymentsWindow } from "./components/RegularPaymentsWindow";
 
 register({
   id: "regular-payments",
@@ -8,5 +8,5 @@ register({
   workspace: "payment",
   icon: "🛒",
   image: "/games/payment.png",
-  Window: PaymentsWindow,
+  Window: RegularPaymentsWindow,
 });

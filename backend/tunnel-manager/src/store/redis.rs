@@ -560,6 +560,40 @@ end
 return false
 "#;
 
+/// Arena reservation TTL (seconds): covers the user's deposit-signing window between `allocate` and
+/// `arena.join`. A user who never joins simply expires — no bot was ever spawned to reclaim.
+const ARENA_RES_TTL_SECS: i64 = 300;
+
+// Seed an arena reservation as a hash + TTL. KEYS[1]=arena:res:<id>
+// ARGV: 1=game 2=seat_a 3=seat_b 4=tunnel_id 5=eph_secret 6=created_at 7=ttl
+const PUT_ARENA_RESERVATION: &str = r#"
+redis.call('HSET', KEYS[1], 'game', ARGV[1], 'seat_a', ARGV[2], 'seat_b', ARGV[3], 'tunnel_id', ARGV[4], 'eph_secret', ARGV[5], 'created_at', ARGV[6], 'claimed', '0')
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[7]))
+return 1
+"#;
+
+// Atomic claim-once for play. Verifies the joining wallet is the allocator (seat_a) and that no
+// prior join claimed it, then flips 'claimed' and returns the recipe. One eval → exactly one
+// caller ever gets status 'claimed', so exactly one bot spawns under a double-join.
+// KEYS[1]=arena:res:<id>  ARGV[1]=wallet  ARGV[2]=ttl. Returns cjson {status, ...recipe}.
+const CLAIM_ARENA: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then return cjson.encode({status='notfound'}) end
+local sa = redis.call('HGET', KEYS[1], 'seat_a')
+if sa ~= ARGV[1] then return cjson.encode({status='foreign'}) end
+if redis.call('HGET', KEYS[1], 'claimed') == '1' then return cjson.encode({status='claimed_already'}) end
+redis.call('HSET', KEYS[1], 'claimed', '1')
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+return cjson.encode({
+  status='claimed',
+  game=redis.call('HGET', KEYS[1], 'game'),
+  seat_a=sa,
+  seat_b=redis.call('HGET', KEYS[1], 'seat_b'),
+  tunnel_id=redis.call('HGET', KEYS[1], 'tunnel_id'),
+  eph_secret=redis.call('HGET', KEYS[1], 'eph_secret'),
+  created_at=redis.call('HGET', KEYS[1], 'created_at')
+})
+"#;
+
 #[async_trait]
 impl MpStore for RedisMpStore {
     async fn set_presence(&self, wallet: &str, at: ConnRef) {
@@ -818,6 +852,79 @@ impl MpStore for RedisMpStore {
                 tracing::warn!(error = %e, "redis rebind_match_conn eval failed");
                 None
             }
+        }
+    }
+
+    async fn put_arena_reservation(&self, match_id: &str, rec: crate::store::ArenaReservation) {
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                PUT_ARENA_RESERVATION,
+                vec![format!("arena:res:{match_id}")],
+                vec![
+                    rec.game,
+                    rec.seat_a,
+                    rec.seat_b,
+                    rec.tunnel_id,
+                    rec.eph_secret_hex,
+                    rec.created_at_ms.to_string(),
+                    ARENA_RES_TTL_SECS.to_string(),
+                ],
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis put_arena_reservation failed");
+        }
+    }
+
+    async fn claim_arena(&self, match_id: &str, wallet: &str) -> crate::store::ArenaClaim {
+        use crate::store::{ArenaClaim, ArenaReservation};
+        let res: Result<Option<String>, _> = self
+            .pool
+            .eval(
+                CLAIM_ARENA,
+                vec![format!("arena:res:{match_id}")],
+                vec![wallet.to_owned(), ARENA_RES_TTL_SECS.to_string()],
+            )
+            .await;
+        let json = match res {
+            Ok(Some(j)) => j,
+            Ok(None) => return ArenaClaim::NotFound,
+            Err(e) => {
+                tracing::warn!(error = %e, "redis claim_arena eval failed");
+                return ArenaClaim::NotFound;
+            }
+        };
+        #[derive(serde::Deserialize)]
+        struct ClaimOut {
+            status: String,
+            game: Option<String>,
+            seat_a: Option<String>,
+            seat_b: Option<String>,
+            tunnel_id: Option<String>,
+            eph_secret: Option<String>,
+            created_at: Option<String>,
+        }
+        let Ok(out) = serde_json::from_str::<ClaimOut>(&json) else {
+            return ArenaClaim::NotFound;
+        };
+        match out.status.as_str() {
+            "claimed" => ArenaClaim::Claimed(ArenaReservation {
+                game: out.game.unwrap_or_default(),
+                seat_a: out.seat_a.unwrap_or_default(),
+                seat_b: out.seat_b.unwrap_or_default(),
+                tunnel_id: out.tunnel_id.unwrap_or_default(),
+                eph_secret_hex: out.eph_secret.unwrap_or_default(),
+                // Absent (pre-rollout reservation) or unparsable → 0, matching the FE's slow-read
+                // fallback; a real value makes the bot's settle timestamp byte-match the FE half.
+                created_at_ms: out
+                    .created_at
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
+            }),
+            "foreign" => ArenaClaim::ForeignWallet,
+            "claimed_already" => ArenaClaim::AlreadyClaimed,
+            _ => ArenaClaim::NotFound,
         }
     }
 }

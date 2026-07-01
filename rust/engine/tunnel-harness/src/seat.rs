@@ -39,6 +39,10 @@ pub struct PartyRuntime<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFra
     nonce: u64,
     pending: Option<Pending<P>>,
     last_committed: Option<TranscriptEntry<P::Move>>,
+    /// The ACK we co-signed for the most recently applied peer move, retained so a
+    /// resent MOVE whose ACK was lost can be re-acknowledged idempotently instead of
+    /// aborting the match. Mirrors the TS engine's `_latest` re-sign path.
+    last_ack: Option<AckFrame>,
 }
 
 impl<P: Protocol, S: Signer, C: FrameCodec<P::Move> + Default> PartyRuntime<P, S, C> {
@@ -69,6 +73,7 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
             nonce: 0,
             pending: None,
             last_committed: None,
+            last_ack: None,
         }
     }
 
@@ -169,6 +174,16 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     }
 
     fn on_move(&mut self, m: MoveFrame<P::Move>) -> Result<Vec<Vec<u8>>, HarnessError> {
+        // Idempotent re-ACK: a peer whose ACK was lost resends the MOVE. If we already
+        // applied this nonce, re-emit the ACK we co-signed rather than aborting on a
+        // nonce gap. Mirrors distributedTunnel.ts `onMove` (frame.nonce <= _nonce). This
+        // precedes the pending check so a peer resend is absorbed even mid-proposal.
+        if m.nonce <= self.nonce {
+            if let Some(ack) = self.last_ack.as_ref().filter(|a| a.nonce == m.nonce) {
+                return Ok(vec![self.codec.encode(&TunnelFrame::Ack(ack.clone()))]);
+            }
+            return Ok(Vec::new());
+        }
         if self.pending.is_some() {
             return Err(HarnessError::Verification("expected ack, got move".into()));
         }
@@ -182,13 +197,20 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         let next = self.protocol.apply_move(&self.state, &m.mv, by)?;
         let bals = self.protocol.balances(&next);
         if bals.a != m.party_a_balance || bals.b != m.party_b_balance {
-            return Err(HarnessError::Verification("frame balances mismatch".into()));
+            return Err(HarnessError::Verification(format!(
+                "frame balances mismatch: bot a={} b={} vs frame a={} b={} (nonce {})",
+                bals.a, bals.b, m.party_a_balance, m.party_b_balance, m.nonce
+            )));
         }
         let state_hash = blake2b256(&self.protocol.encode_state(&next));
         if state_hash != m.state_hash {
-            return Err(HarnessError::Verification(
-                "frame state_hash mismatch".into(),
-            ));
+            return Err(HarnessError::Verification(format!(
+                "frame state_hash mismatch: tunnel={} nonce={} bot={} vs frame={}",
+                self.tunnel_id,
+                m.nonce,
+                hex::encode(&state_hash[..8]),
+                hex::encode(&m.state_hash[..8]),
+            )));
         }
         let update = StateUpdate {
             tunnel_id: self.tunnel_id.clone(),
@@ -200,7 +222,16 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         };
         let msg = serialize_state_update(&update);
         if !verify(&self.opponent_pk, &msg, &m.sig_proposer) {
-            return Err(HarnessError::Verification("proposer sig failed".into()));
+            return Err(HarnessError::Verification(format!(
+                "proposer sig failed: tunnel={} nonce={} ts={} bal a={} b={} opp_pk={} sh={}",
+                self.tunnel_id,
+                m.nonce,
+                m.timestamp,
+                bals.a,
+                bals.b,
+                hex::encode(&self.opponent_pk[..8]),
+                hex::encode(&state_hash[..8]),
+            )));
         }
         let sig_responder = self.signer.sign(&msg);
         self.state = next;
@@ -216,14 +247,22 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
             sig_proposer: m.sig_proposer,
             sig_responder,
         });
-        let ack: TunnelFrame<P::Move> = TunnelFrame::Ack(AckFrame {
+        let ack = AckFrame {
             nonce: m.nonce,
             sig_responder,
-        });
-        Ok(vec![self.codec.encode(&ack)])
+        };
+        self.last_ack = Some(ack.clone());
+        Ok(vec![self.codec.encode(&TunnelFrame::Ack(ack))])
     }
 
     fn on_ack(&mut self, a: AckFrame) -> Result<Vec<Vec<u8>>, HarnessError> {
+        // Idempotent: a duplicate or delayed ACK for an already-committed nonce is a
+        // no-op. Our own resend (or the peer re-ACKing it) can produce a second ACK for
+        // a nonce we already committed; erroring would abort the match. Mirrors
+        // distributedTunnel.ts `onAck` (frame.nonce <= _nonce).
+        if a.nonce <= self.nonce {
+            return Ok(Vec::new());
+        }
         let p = self
             .pending
             .take()
@@ -442,5 +481,38 @@ mod tests {
         };
         let err = fresh.handle_frame(&mv_frame).unwrap_err();
         assert!(matches!(err, HarnessError::Verification(_)));
+    }
+
+    // A resend whose original ACK was merely delayed produces a second ACK for an
+    // already-committed nonce. The proposer must absorb it, not abort the match.
+    #[test]
+    fn duplicate_ack_is_idempotent_noop() {
+        let (mut a, mut b) = seats();
+        let mv = a.propose(TinyMove, 1).unwrap();
+        let ack = b.handle_frame(&mv).unwrap();
+        assert!(a.handle_frame(&ack[0]).unwrap().is_empty());
+        assert_eq!(a.nonce(), 1);
+        // Feeding the very same ACK again is a no-op, not "unexpected ack".
+        assert!(a.handle_frame(&ack[0]).unwrap().is_empty());
+        assert_eq!(a.nonce(), 1);
+        assert!(!a.has_pending());
+    }
+
+    // When the proposer resends a MOVE whose ACK was lost, the responder must re-emit
+    // the identical ACK it already co-signed rather than aborting on a nonce gap, and
+    // must not advance its state a second time.
+    #[test]
+    fn resent_move_is_re_acked_not_nonce_gapped() {
+        let (mut a, mut b) = seats();
+        let mv = a.propose(TinyMove, 1).unwrap();
+        let ack1 = b.handle_frame(&mv).unwrap();
+        assert_eq!(b.nonce(), 1);
+        let ack2 = b.handle_frame(&mv).unwrap();
+        assert_eq!(ack1, ack2); // same co-signed ACK, re-emitted
+        assert_eq!(b.nonce(), 1); // no double-apply
+        assert_eq!(b.balances(), Balances { a: 4, b: 6 });
+        // The resurfaced ACK still lets the proposer commit exactly once.
+        a.handle_frame(&ack2[0]).unwrap();
+        assert_eq!(a.nonce(), 1);
     }
 }

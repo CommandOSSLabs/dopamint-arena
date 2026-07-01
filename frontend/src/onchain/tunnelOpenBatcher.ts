@@ -49,8 +49,9 @@ export interface BatcherDeps {
 }
 
 /** Default PTB batch size. ~7 catalog games fit in one PTB; this caps a pathological flood under
- *  the PTB command/argument ceiling. Larger flushes chunk into ceil(N / MAX_BATCH) PTBs. */
-const DEFAULT_MAX_BATCH = 16;
+ *  the PTB command/argument ceiling (30 deposits ≈ 30 commands, ≫ under the ~1024 ceiling). Larger
+ *  flushes chunk into ceil(N / MAX_BATCH) PTBs. Matches the backend open-batch cap. */
+const DEFAULT_MAX_BATCH = 30;
 const DEFAULT_FLUSH_DELAY_MS = 30;
 
 type FundingMode = "balance" | "mtps-coin" | "sui";
@@ -210,7 +211,15 @@ export class TunnelOpenBatcher {
             chunkTotal,
           );
       for (const p of chunkPending) {
-        const id = map.get(normalizeSuiAddress(p.req.partyA.address));
+        // Deposit mode: the tunnel already exists and its id is the request INPUT, so resolve to it
+        // directly. `map` is keyed by party-A ADDRESS, which collides when a batch shares one wallet
+        // — the arena case: every game deposits seat A from the same address (only the per-game eph
+        // pubkey differs), so the map collapses to a single entry and would hand every game the same
+        // (wrong) tunnel, making its co-signed tunnelId disagree with the bot's. Open mode has no id
+        // upfront (its tunnels are created by this PTB), so it still resolves via the map.
+        const id = deposit
+          ? p.req.tunnelId
+          : map.get(normalizeSuiAddress(p.req.partyA.address));
         if (id) p.resolve(id);
         else
           p.reject(

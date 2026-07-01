@@ -292,6 +292,46 @@ test("deposit mode funds only seat A and coalesces into one PTB", async () => {
   );
 });
 
+test("deposit mode keeps each tunnel when party-A is SHARED (arena batch)", async () => {
+  // Regression for the arena stall: every arena game deposits seat A from the SAME wallet address
+  // (only the per-game ephemeral pubkey differs). The deposit result map is keyed by party-A
+  // ADDRESS, so a shared address collapses it to one entry — before the fix every request resolved
+  // to a single (last) tunnelId, so all-but-one game co-signed the WRONG tunnel_id and the bot
+  // rejected its first move ("proposer sig failed"), stalling at "opponent's turn". Each deposit
+  // must resolve to its OWN pre-opened tunnel regardless of the shared address.
+  const deps = fakeDeps({ onSign: () => {} });
+  const WALLET = "0xW";
+  const depositReq = (tunnel: string): TunnelOpenRequest => ({
+    partyA: party(WALLET), // SAME address for every game in the batch
+    partyB: party(PARTY_B_ADDR),
+    aAmount: 300n,
+    bAmount: 0n,
+    mode: "deposit",
+    tunnelId: tunnel,
+  });
+  const batcher = new TunnelOpenBatcher(() => deps, {
+    flushDelayMs: 0,
+    maxBatch: 16,
+  });
+  const [poker, battleship, caro] = await Promise.all([
+    batcher.request(depositReq("tunnel-poker")),
+    batcher.request(depositReq("tunnel-battleship")),
+    batcher.request(depositReq("tunnel-caro")),
+  ]);
+
+  assert.equal(
+    poker,
+    "tunnel-poker",
+    "poker keeps its own tunnel despite the shared wallet",
+  );
+  assert.equal(
+    battleship,
+    "tunnel-battleship",
+    "battleship keeps its own tunnel",
+  );
+  assert.equal(caro, "tunnel-caro", "caro keeps its own tunnel");
+});
+
 test("requests arriving within the debounce window share one flush", async () => {
   let signs = 0;
   const deps = fakeDeps({ onSign: () => (signs += 1) });

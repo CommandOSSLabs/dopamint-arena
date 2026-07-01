@@ -2,11 +2,12 @@
 // a total amount that unlocks LINEARLY over a duration; the recipient withdraws what's unlocked at
 // any time; the sender can top up or cancel (the recipient keeps what it earned, the rest refunds).
 //
-// Wraps the `example_streaming_payment` Move module, published as a slim standalone package (it's
+// Wraps the `streaming_payment` Move module, published as a slim standalone package (it's
 // self-contained — only `sui::` deps). Denominated in MTPS so it shares the arena's free token.
 import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { MTPS_COIN_TYPE } from "./mtps";
+import { redeemStakeFromBalance, type StakeFromBalance } from "./tunnelTx";
 
 export const STREAMING_PAYMENT_PACKAGE_ID =
   import.meta.env?.VITE_STREAMING_PAYMENT_PACKAGE_ID ?? "";
@@ -16,11 +17,9 @@ export const isStreamingPaymentConfigured = Boolean(
   STREAMING_PAYMENT_PACKAGE_ID && MTPS_COIN_TYPE,
 );
 
-const MODULE = "example_streaming_payment";
+const MODULE = "streaming_payment";
 const target = (fn: string) =>
   `${STREAMING_PAYMENT_PACKAGE_ID}::${MODULE}::${fn}`;
-const STREAM_TYPE = () =>
-  `${STREAMING_PAYMENT_PACKAGE_ID}::${MODULE}::PaymentStream<${MTPS_COIN_TYPE}>`;
 
 /** Minimum stream duration the contract accepts (`MIN_DURATION_MS` = 1 hour). */
 export const MIN_DURATION_MS = 3_600_000n;
@@ -46,21 +45,22 @@ export function streamStatusName(status: number): string {
 // ============================================
 
 /**
- * Build the create tx: split `totalAmount` MTPS off `fundsCoinId` as the stream's escrow, call
- * `create_stream` (returns the object), then share it so the recipient can withdraw against it.
+ * Build the create tx: withdraw `totalAmount` MTPS from the sender's SIP-58 address balance
+ * (ADR-0013) as the stream's escrow, call `create_stream`, then share it so the recipient can
+ * withdraw against it. Pair with {@link ensureMtpsAddressBalance} off the hot path.
  */
 export function buildCreateStreamTx(opts: {
-  fundsCoinId: string;
+  stakeFromBalance: StakeFromBalance;
   totalAmount: bigint;
   recipient: string;
   durationMs: bigint;
   memo?: string;
 }): Transaction {
   const tx = new Transaction();
-  const [funds] = tx.splitCoins(tx.object(opts.fundsCoinId), [
-    tx.pure.u64(opts.totalAmount),
-  ]);
-  const stream = tx.moveCall({
+
+  const funds = redeemStakeFromBalance(tx, opts.stakeFromBalance);
+
+  tx.moveCall({
     target: target("create_stream"),
     typeArguments: [MTPS_COIN_TYPE],
     arguments: [
@@ -74,12 +74,7 @@ export function buildCreateStreamTx(opts: {
       tx.object(SUI_CLOCK_OBJECT_ID),
     ],
   });
-  // `create_stream` returns the owned PaymentStream — share it so the recipient can withdraw.
-  tx.moveCall({
-    target: "0x2::transfer::public_share_object",
-    typeArguments: [STREAM_TYPE()],
-    arguments: [stream],
-  });
+
   return tx;
 }
 
@@ -111,14 +106,12 @@ export function buildCancelStreamTx(streamId: string): Transaction {
  */
 export function buildTopUpTx(opts: {
   streamId: string;
-  fundsCoinId: string;
+  stakeFromBalance: StakeFromBalance;
   addedAmount: bigint;
   addedDurationMs: bigint;
 }): Transaction {
   const tx = new Transaction();
-  const [funds] = tx.splitCoins(tx.object(opts.fundsCoinId), [
-    tx.pure.u64(opts.addedAmount),
-  ]);
+  const funds = redeemStakeFromBalance(tx, opts.stakeFromBalance);
   tx.moveCall({
     target: target("top_up"),
     typeArguments: [MTPS_COIN_TYPE],
@@ -195,6 +188,27 @@ export async function fetchStream(
     endMs: parseU64ish(f.end_time_ms),
     status: Number(f.status),
   };
+}
+
+/**
+ * Poll `fetchStream` until `predicate` passes — fullnode/indexer often lags right after a write.
+ */
+export async function fetchStreamAfterMutation(
+  client: StreamReader,
+  id: string,
+  predicate: (fields: StreamFields) => boolean,
+  opts?: { attempts?: number; delayMs?: number },
+): Promise<StreamFields | null> {
+  const attempts = opts?.attempts ?? 10;
+  const delayMs = opts?.delayMs ?? 600;
+
+  for (let i = 0; i < attempts; i++) {
+    const fresh = await fetchStream(client, id);
+    if (fresh && predicate(fresh)) return fresh;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  return fetchStream(client, id);
 }
 
 /** Find the `PaymentStream` created by a `buildCreateStreamTx` execution (polls past indexer lag). */

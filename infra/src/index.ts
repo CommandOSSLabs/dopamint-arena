@@ -200,10 +200,14 @@ const backend = createBackend({
 const backendService = createBackendService({
   name: `dopamint-${cfg.environment}`,
   clusterId: ecs.clusterArn,
+  clusterName: ecs.clusterName,
   taskDefinitionArn: backend.taskDefinitionArn,
   targetGroupArn: alb.targetGroup.arn,
   securityGroupId: sgs.backend.id,
   subnetIds: network.privateSubnetIds,
+  minCapacity: cfg.backendMinCapacity,
+  maxCapacity: cfg.backendMaxCapacity,
+  targetCpuPercent: cfg.backendTargetCpu,
   listener: alb.listener,
 });
 

@@ -1,30 +1,20 @@
-//! Co-located fleet supervisor (ADR-0024): in-process bots that register into the [`crate::fleet`]
-//! `BotPool` and play arena matches over the relay bus, instead of holding a `/v1/fleet` WebSocket.
-//! Removing the per-bot socket is the capacity swap at 5000 CCU.
+//! Co-located arena bots (ADR-0024 + ADR-0005 co-location): the bot's play task is spawned at
+//! `arena.join`, **on the same instance as the user's WebSocket**, so every relayed frame stays
+//! in-process (no cross-instance hop). It is NOT spawned at `allocate` — allocate only writes a
+//! small shared reservation recipe (`{game, seat_b, tunnel_id, eph_secret}`) to the control store
+//! via [`reserve_arena_slot_on`]/`put_arena_reservation`, which ANY instance can read to reconstruct
+//! party B when the user actually shows up.
 //!
-//! **Inert by default** (`FLEET_COLOCATED_COUNT=0`) — the deployed relay spawns nothing unless
-//! explicitly enabled. Bots are spawned **purely on demand** by `arena_allocate` via
-//! [`reserve_or_spawn`]: a co-located bot is spawned per allocated seat, up to the per-game cap.
-//! Each bot is one-shot: await `Opened` → [`play_arena_match`] (bind to the
-//! [`crate::fleet::arena_rendezvous`], wait for the human to join, then drive the game over a
-//! [`BusRelayTransport`] with the [`crate::fleet::arena_anchor::RelayBridgedAnchor`] to settlement) →
-//! unregister (freeing its in-flight slot).
-//!
-//! The remaining on-chain dependency is seat-B funding: when the wallet pool is configured, a bot
-//! draws a funded address from it ([`reserve_or_spawn`]) and the [`crate::fleet::arena_opener`]
-//! `SuiArenaOpener` creates + funds seat B; unconfigured, [`bot_address`] is a deterministic
-//! placeholder and the opener is `Noop` (the dev/test default). The off-chain spine — routing,
-//! co-signed play, settle-half emission — is complete here.
-
-use std::sync::Arc;
-use std::time::Duration;
+//! **Still pure on-demand:** one short-lived task per real match, no warm pool. Because the spawn
+//! trigger is the join (not the allocate), a user who allocates but never joins spawns nothing — the
+//! reservation simply TTL-expires. The on-chain tunnel + seat-B funding happen in the `allocate`
+//! handler (`SuiArenaOpener`), independent of the bot task; the bot resolves the pre-created tunnel
+//! and co-signs with the per-match ephemeral key it re-derives from the reservation recipe.
 
 use anyhow::bail;
-use tokio::sync::mpsc;
 use transcript_store::TranscriptChunkWriter;
-use tunnel_harness::Signer;
-
 use transcript_stream::{ChunkUpload, S3StreamingRecorder};
+use tunnel_harness::Signer;
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
@@ -36,39 +26,42 @@ use fleet_core::Role;
 
 use crate::fleet::arena_anchor::RelayBridgedAnchor;
 use crate::fleet::bus_transport::{BusRelayConnection, BusRelayTransport};
-use crate::fleet::{BotHandle, FleetServerMsg};
+use crate::mp::protocol::ServerMsg;
+use crate::mp::MatchRecord;
 use crate::state::SharedState;
+use crate::store::{ArenaClaim, ConnRef};
 
-/// How long the bot waits for the user's browser to connect + `arena.join` after the tunnel opens,
-/// before giving up. Generous: the user may sign the open then take a moment to land on the relay.
-/// The pool TTL is the backstop for a user who never opens at all.
-const ARENA_JOIN_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
+use crate::store::ArenaReservation;
 
-/// Per-spawn sequence for distinct on-demand bot identities — a fixed index would make every
-/// concurrent match of a game share one seat-B address. The fallback when no wallet pool is
-/// configured; with a pool, the checked-out address is used instead.
+/// Per-spawn sequence for distinct placeholder seat-B identities when no wallet pool is configured —
+/// a fixed index would make every concurrent match of a game share one seat-B address.
 static ONDEMAND_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// On-demand seat-fill: spawn a bot for `game` and reserve it, if the per-game in-flight count is
-/// below `cap`. `arena_allocate` calls this so seat-fill scales with real demand, not a pre-spawned
-/// pool. Returns `None` when `cap` concurrent matches are already in flight (the admission ceiling —
-/// wallets aren't the limiter at a 1M pool, so the in-flight count is). `cap == 0` spawns nothing
-/// (inert-by-default).
-pub async fn reserve_or_spawn(
-    state: &SharedState,
-    game: &str,
-    now_ms: u64,
-    cap: u32,
-) -> Option<crate::fleet::Reservation> {
-    // Pure on-demand: build the bot's handle and atomically reserve it under the cap (cap 0 ⇒ always
-    // None, the inert default). The bot's `ctrl` lands in the pool, so the allocate handler's
-    // `notify(Reserved/Opened)` reaches it; its lifecycle runs in a one-shot task.
-    let match_key = DurableSigner::from_secret(&random_secret());
-    let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel();
-    // Seat-B on-chain identity: a real funded address checked out of the wallet pool (PR #124) when
-    // configured, else a distinct deterministic placeholder (a fixed index would collide across
-    // concurrent matches). A checkout error is non-fatal — fall back to the placeholder.
-    let address = match state.wallet_pool.as_ref().map(|p| p.checkout_address()) {
+/// The recipe minted at `allocate` for one arena match: a globally-unique match id, seat-B identity
+/// (both keys the FE needs to build the open PTB), and the per-match co-signing secret persisted in
+/// the reservation so the join-instance can reconstruct party B. No running task, no pool slot.
+pub struct ArenaSlot {
+    pub match_id: String,
+    pub bot_address: String,
+    pub eph_pubkey: String,
+    pub eph_secret_hex: String,
+}
+
+/// Test convenience: check out a fresh address AND mint a recipe in one call. Production goes through
+/// `checkout_bot_address` + `reserve_arena_slot_on` so a whole allocate batch shares one seat-B
+/// address (Design 1); this single-address-per-slot shape is only what the tests want.
+#[cfg(test)]
+pub fn reserve_arena_slot(state: &SharedState, game: &str) -> ArenaSlot {
+    reserve_arena_slot_on(checkout_bot_address(state, game))
+}
+
+/// Check out one funded seat-B on-chain address (round-robin over the pool, or a distinct placeholder
+/// per call when no pool is configured). Split out so the batch opener can check out ONE address for a
+/// whole allocate request — Design 1 batching shares party B across a request's tunnels because
+/// `deposit_party_b` asserts `sender == party_b` and a single PTB has one sender.
+pub fn checkout_bot_address(state: &SharedState, game: &str) -> String {
+    match state.wallet_pool.as_ref().map(|p| p.checkout_address()) {
         Some(Ok(addr)) => addr,
         Some(Err(e)) => {
             tracing::warn!("wallet pool checkout failed, using placeholder: {e:#}");
@@ -81,170 +74,175 @@ pub async fn reserve_or_spawn(
             game,
             ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         ),
-    };
-    let bot = BotHandle {
+    }
+}
+
+/// Mint a match recipe on an ALREADY-CHOSEN seat-B address. Each call still gets its own match id +
+/// per-match ephemeral co-signing key (only the on-chain address is shared across a batch); the
+/// distinct ephemeral key is what keeps per-match identity — settlement authenticates by pubkey, not
+/// address, so N tunnels can share one party-B address safely.
+pub fn reserve_arena_slot_on(bot_address: String) -> ArenaSlot {
+    let secret = random_secret();
+    let match_key = DurableSigner::from_secret(&secret);
+    ArenaSlot {
+        match_id: format!("arena_{}", uuid::Uuid::new_v4().simple()),
+        bot_address,
         eph_pubkey: hex::encode(match_key.public_key()),
-        address,
-        ctrl: ctrl_tx,
+        eph_secret_hex: hex::encode(secret),
+    }
+}
+
+/// The user's `arena.join` landed here: atomically claim the reserved match, then spawn the bot on
+/// THIS instance (co-located with the user's socket) and pair them. Exactly one join ever claims a
+/// given match, so a reconnect/double-mount second join is a no-op (`unknown_arena_match`), not a
+/// second bot. Returns an error code for the WS layer to relay to the client.
+pub async fn join_and_spawn(
+    state: &SharedState,
+    match_id: &str,
+    user_conn: ConnRef,
+    wallet: &str,
+) -> Result<(), &'static str> {
+    let rec = match state.mp.claim_arena(match_id, wallet).await {
+        ArenaClaim::Claimed(rec) => rec,
+        // Not seeded here / expired, a foreign wallet, or already claimed by a prior join all present
+        // to the client as the same opaque "no such match" — the FE reconnect path is `resume`, not a
+        // second `arena.join`.
+        ArenaClaim::NotFound | ArenaClaim::ForeignWallet | ArenaClaim::AlreadyClaimed => {
+            return Err("unknown_arena_match")
+        }
     };
-    let (reservation, bot_id) = state.fleet.reserve_under_cap(game, cap, now_ms, bot)?;
-    tokio::spawn(run_on_demand(
-        state.clone(),
-        game.to_owned(),
-        ctrl_rx,
-        match_key,
-        bot_id,
-    ));
-    Some(reservation)
-}
 
-/// One on-demand bot: it's already registered + reserved, so it just awaits the user's `Opened`,
-/// plays the match, and unregisters. It does not loop — on-demand spawns one bot per seat, so the
-/// task ends with the match, freeing its in-flight slot.
-async fn run_on_demand(
-    state: SharedState,
-    game: String,
-    mut ctrl_rx: mpsc::UnboundedReceiver<FleetServerMsg>,
-    match_key: DurableSigner,
-    bot_id: u64,
-) {
-    if let Some(opened) = await_open(&mut ctrl_rx).await {
-        if let Err(e) = play_arena_match(&state, &game, &opened, match_key).await {
-            tracing::debug!(%game, match_id = %opened.match_id, "on-demand match ended: {e:#}");
-        }
+    // Per-instance backpressure: bound concurrent bot tasks on this box (total = cap × instances).
+    // We already claimed; a rare over-cap join wastes the reservation (it TTL-expires).
+    if !state.fleet.admit_arena(state.arena_fleet_count.max(1)) {
+        tracing::warn!(match_id, "arena join refused: instance at capacity");
+        return Err("arena_at_capacity");
     }
-    state.fleet.unregister(bot_id);
-}
 
-/// The arena identity handed to a reserved bot once the user opens its tunnel.
-struct OpenedMatch {
-    match_id: String,
-    opponent_wallet: String,
-    /// The on-chain tunnel the fleet pre-created + funded seat B for at allocate (ADR-0025). The
-    /// [`RelayBridgedAnchor`] resolves THIS id in `open()` (no chain call) and settles against it.
-    tunnel_id: String,
-}
+    let Some(secret) = secret_from_hex(&rec.eph_secret_hex) else {
+        state.fleet.release_arena();
+        tracing::error!(
+            match_id,
+            "arena reservation carried an unreadable eph secret"
+        );
+        return Err("unknown_arena_match");
+    };
+    let match_key = DurableSigner::from_secret(&secret);
 
-/// Test-only: register a bot directly into the pool with a fresh per-match ephemeral key, to pin the
-/// `reserve`/`notify` contract that on-demand seat-fill also relies on. Returns the pool id, the match
-/// co-signing key, and the ctrl receiver.
-#[cfg(test)]
-fn register_bot(
-    state: &SharedState,
-    game: &str,
-    address: &str,
-) -> (u64, DurableSigner, mpsc::UnboundedReceiver<FleetServerMsg>) {
-    let match_key = DurableSigner::from_secret(&random_secret());
-    let eph_pubkey = hex::encode(match_key.public_key());
-    let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel();
-    let bot_id = state.fleet.register(
-        game,
-        BotHandle {
-            eph_pubkey,
-            address: address.to_owned(),
-            ctrl: ctrl_tx,
-        },
-    );
-    (bot_id, match_key, ctrl_rx)
-}
-
-/// Await `Reserved` then `Opened` on the bot's pool ctrl channel. A re-reservation (the prior one
-/// TTL-expired back to free) just updates the opponent. `None` if the channel closes first.
-async fn await_open(ctrl_rx: &mut mpsc::UnboundedReceiver<FleetServerMsg>) -> Option<OpenedMatch> {
-    let mut opponent_wallet = String::new();
-    loop {
-        match ctrl_rx.recv().await? {
-            FleetServerMsg::Reserved {
-                opponent_wallet: w, ..
-            } => opponent_wallet = w,
-            FleetServerMsg::Opened {
-                match_id,
-                tunnel_id,
-            } => {
-                return Some(OpenedMatch {
-                    match_id,
-                    opponent_wallet,
-                    tunnel_id,
-                })
-            }
-        }
-    }
-}
-
-/// Play one reserved+opened arena match to settlement as party B (the dealer), over the relay bus.
-///
-/// Sequence: register a virtual relay connection → bind it to the match and wait until the human
-/// also joins (so routing is live before our first frame, or the hello is dropped and the handshake
-/// deadlocks) → drive the merged `PartyDriver` over a [`BusRelayTransport`], with the
-/// [`RelayBridgedAnchor`] resolving the pre-created tunnel and emitting our settle half. The human FE
-/// pairs both halves and submits the cooperative close (`POST /settle`).
-///
-/// The connection + transport + anchor are game-agnostic; only the protocol+strategy differ, so the
-/// final step dispatches on `game` ([`play_game`]). `StreamingRootRecorder` is required (not
-/// `Null`): the anchor settles v2 (`close_cooperative_with_root`), so the driver needs a transcript
-/// root the FE also signs — it computes that root incrementally (O(log N)) without retaining the
-/// entries. On any error the caller ([`run_on_demand`]) unregisters the bot, freeing its slot.
-async fn play_arena_match(
-    state: &SharedState,
-    game: &str,
-    opened: &OpenedMatch,
-    match_key: DurableSigner,
-) -> anyhow::Result<()> {
+    // The bot's virtual relay connection, registered on THIS instance next to the user's socket.
     let conn = BusRelayConnection::register(state.clone());
-    let ready = state
-        .arena
-        .bind_bot(state, &opened.match_id, conn.conn_ref())
+    let match_record = MatchRecord {
+        game: rec.game.clone(),
+        seat_a: wallet.to_owned(),
+        seat_b: rec.seat_b.clone(),
+        conn_a: user_conn.clone(),
+        conn_b: conn.conn_ref(),
+        tunnel_id: Some(rec.tunnel_id.clone()),
+        latest_checkpoint: None,
+    };
+    // Routing must be live before the bot's first frame, or the hello is dropped and the handshake
+    // deadlocks — persist the record, then announce to the user (party A) and warm its relay cache,
+    // exactly as the former rendezvous `complete` did. Both conns are local here, so this is cheap.
+    state.mp.put_match(match_id, match_record.clone()).await;
+    state
+        .bus
+        .deliver(
+            &user_conn,
+            ServerMsg::MatchFound {
+                match_id: match_id.to_owned(),
+                role: "A".into(),
+                opponent_wallet: rec.seat_b.clone(),
+                game: rec.game.clone(),
+            }
+            .to_text(),
+        )
         .await;
-    match tokio::time::timeout(ARENA_JOIN_TIMEOUT, ready).await {
-        Ok(Ok(())) => {} // user joined; the MatchRecord is live, routing works
-        Ok(Err(_)) => bail!(
-            "arena match {} vanished before the user joined",
-            opened.match_id
-        ),
-        Err(_) => {
-            state.arena.forget(&opened.match_id);
-            bail!("user did not join arena match {} in time", opened.match_id);
-        }
-    }
+    state
+        .bus
+        .populate(&user_conn, match_id, &match_record)
+        .await;
+    tracing::info!(
+        match_id,
+        game = %rec.game,
+        tunnel = %rec.tunnel_id,
+        "co-located arena match started"
+    );
 
-    tracing::info!(match_id = %opened.match_id, game = %game, "arena: user joined; bot driving co-signed play");
-    let transport = BusRelayTransport::new(conn.clone(), opened.match_id.clone());
+    // Spawn the one-shot play task. It drives to settlement, then frees its admission slot. The bot's
+    // opponent is the joiner (party A) — `rec.seat_a`, which `claim_arena` verified equals `wallet`.
+    let st = state.clone();
+    let match_id = match_id.to_owned();
+    // Stream this match's co-signed transcript to S3 during play (both `None` = no S3, dev/test).
+    let chunk_upload_tx = state.chunk_upload_tx.clone();
+    let chunk_writer = state.chunk_writer.clone();
+    tokio::spawn(async move {
+        if let Err(e) = drive_arena_bot(
+            &rec.game,
+            &match_id,
+            &rec.tunnel_id,
+            &rec.seat_a,
+            rec.created_at_ms,
+            match_key,
+            conn,
+            chunk_upload_tx,
+            chunk_writer,
+        )
+        .await
+        {
+            tracing::debug!(match_id = %match_id, game = %rec.game, "arena match ended: {e:#}");
+        }
+        st.fleet.release_arena();
+    });
+    Ok(())
+}
+
+/// Drive the co-located bot (party B) to settlement over the relay bus. The tunnel already exists
+/// (created at allocate); `RelayBridgedAnchor::open` resolves it with no chain call. There is no
+/// join wait or wake — the bot is spawned already paired with a live `MatchRecord`.
+async fn drive_arena_bot(
+    game: &str,
+    match_id: &str,
+    tunnel_id: &str,
+    opponent_wallet: &str,
+    created_at_ms: u64,
+    match_key: DurableSigner,
+    conn: std::sync::Arc<BusRelayConnection>,
+    chunk_upload_tx: Option<tokio::sync::mpsc::Sender<ChunkUpload>>,
+    chunk_writer: Option<std::sync::Arc<dyn TranscriptChunkWriter>>,
+) -> anyhow::Result<()> {
+    let transport = BusRelayTransport::new(conn.clone(), match_id.to_owned());
     let channel = MatchChannel::new(transport);
-    // The bot signs its settlement half with `timestamp = created_at` (matching the FE half, which
-    // reads the same on-chain field), so resolve it before play. Fail the match if unreadable — a bot
-    // that can't sign a combinable half would only produce a settle the FE rejects.
-    let created_at_ms = state
-        .arena_opener
-        .read_created_at_ms(&opened.tunnel_id)
-        .await?;
+    // `created_at` is captured at allocate and carried in the reservation — the bot does ZERO chain IO
+    // before its first move. A slow Sui RPC HERE previously left the bot spawned but silent (no hello,
+    // no move): the "bot never moves" bug. It is used only to sign the SETTLE timestamp; the FE reads
+    // the same on-chain field, so both halves commit to equal timestamp bytes.
+    tracing::info!(
+        match_id = %match_id,
+        game = %game,
+        created_at_ms,
+        "arena bot entering play (created_at from reservation, no chain IO)"
+    );
     let anchor = RelayBridgedAnchor::new(
-        opened.tunnel_id.clone(),
+        tunnel_id.to_owned(),
         conn,
-        opened.match_id.clone(),
+        match_id.to_owned(),
         created_at_ms,
     );
-    let moves = match play_game(
+    let moves = play_game(
         game,
         channel,
         anchor,
         match_key,
-        &opened.opponent_wallet,
-        opened.tunnel_id.clone(),
-        state.chunk_upload_tx.clone(),
-        state.chunk_writer.clone(),
+        opponent_wallet,
+        tunnel_id,
+        chunk_upload_tx,
+        chunk_writer,
     )
-    .await
-    {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(match_id = %opened.match_id, game = %game, "arena: bot play errored: {e:#}");
-            return Err(e);
-        }
-    };
+    .await?;
     tracing::info!(
-        match_id = %opened.match_id,
+        match_id = %match_id,
         game = %game,
-        tunnel = %opened.tunnel_id,
+        tunnel = %tunnel_id,
         moves,
         "co-located arena match settled",
     );
@@ -261,17 +259,16 @@ async fn play_game(
     anchor: RelayBridgedAnchor,
     match_key: DurableSigner,
     opponent_wallet: &str,
-    tunnel_id: String,
-    chunk_upload_tx: Option<mpsc::Sender<ChunkUpload>>,
-    chunk_writer: Option<Arc<dyn TranscriptChunkWriter>>,
+    tunnel_id: &str,
+    chunk_upload_tx: Option<tokio::sync::mpsc::Sender<ChunkUpload>>,
+    chunk_writer: Option<std::sync::Arc<dyn TranscriptChunkWriter>>,
 ) -> anyhow::Result<u64> {
     // Every game drives the identical party-B seam (Role::B + a fresh transcript recorder); only the
-    // protocol's `play_*` entry differs, so each game is one arm. The recorder folds the v2 root
-    // incrementally (bounded RAM) AND streams the co-signed transcript to S3 in chunks during play
-    // through the shared bounded uploader (`chunk_upload_tx`); `finish()` flushes the tail + seals
-    // the manifest via `chunk_writer`. A clone drives the game while this handle is retained to
-    // finish. Both `None` (dev/test) → root only, no S3.
-    let recorder = S3StreamingRecorder::new(tunnel_id.clone(), chunk_upload_tx, chunk_writer);
+    // protocol's `play_*` entry differs, so each game is one arm. The recorder folds the O(log N) root
+    // AND streams the co-signed transcript to S3 in chunks during play through the shared bounded
+    // uploader (`chunk_upload_tx`); `finish()` flushes the tail + seals the manifest via `chunk_writer`.
+    // A clone drives the game while this handle is retained to finish. Both `None` (dev/test) → root only.
+    let recorder = S3StreamingRecorder::new(tunnel_id, chunk_upload_tx, chunk_writer);
     macro_rules! play {
         ($play_fn:ident) => {
             $play_fn(
@@ -327,167 +324,88 @@ fn random_secret() -> [u8; 32] {
     s
 }
 
+/// Decode the 32-byte per-match co-signing secret persisted in the reservation.
+fn secret_from_hex(hex_str: &str) -> Option<[u8; 32]> {
+    hex::decode(hex_str).ok()?.try_into().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::AppState;
-    // The stand-in "human" side of the settle test drives with a buffering recorder; the bot side
-    // under test uses `StreamingRootRecorder`, and the two roots must match.
     use tunnel_harness::InMemoryTranscriptRecorder;
 
-    // Inert by default: with `cap == 0` (the `FLEET_COLOCATED_COUNT=0` default) and no warm bot,
-    // reserve_or_spawn spawns nothing — the guarantee that a deployed relay does not silently start
-    // serving bots. The on-demand equivalent of the old static-pool "count 0 registers no bots".
-    #[tokio::test]
-    async fn reserve_or_spawn_is_inert_at_cap_zero() {
+    // `reserve_arena_slot` mints a globally-unique recipe with a distinct per-match key each call —
+    // two concurrent matches must never share a match id or a co-signing secret.
+    #[test]
+    fn reserve_arena_slot_mints_a_unique_recipe() {
         let state = AppState::in_memory_for_test();
-        assert!(
-            reserve_or_spawn(&state, "blackjack", 0, 0).await.is_none(),
-            "cap 0 must spawn no bot"
-        );
-        assert!(
-            state.fleet.reserve("blackjack", 0).is_none(),
-            "and register nothing in the pool"
-        );
+        let a = reserve_arena_slot(&state, "blackjack");
+        let b = reserve_arena_slot(&state, "blackjack");
+        assert_ne!(a.match_id, b.match_id, "match ids are globally unique");
+        assert_ne!(a.eph_secret_hex, b.eph_secret_hex, "keys are per-match");
+        assert_eq!(a.eph_secret_hex.len(), 64, "32-byte secret encoded as hex");
+        assert!(!a.bot_address.is_empty() && !a.eph_pubkey.is_empty());
     }
 
-    // On-demand seat-fill: with free capacity and NO warm bot pre-registered, `reserve_or_spawn`
-    // spawns a bot, registers it, and returns a usable reservation. Seat-fill depends on the per-game
-    // cap (the concurrency ceiling), not on a pre-spawned warm pool — at a 1M-wallet pool, wallets
-    // aren't the limiter, so the in-flight count is what bounds admission.
+    // A second `arena.join` for an already-claimed match must NOT spawn a second bot — the atomic
+    // claim admits exactly one joiner. This is what makes a reconnect / StrictMode double-mount safe.
     #[tokio::test]
-    async fn reserve_or_spawn_fills_a_seat_on_demand() {
+    async fn second_join_is_rejected_not_double_spawned() {
         let state = AppState::in_memory_for_test();
-        let r = reserve_or_spawn(&state, "blackjack", 0, 2)
-            .await
-            .expect("free capacity fills a seat with no warm bot");
-        assert!(!r.address.is_empty(), "reservation carries a bot address");
-        assert!(!r.eph_pubkey.is_empty(), "and a per-match ephemeral pubkey");
-        // The spawned bot wired its ctrl channel into the pool: a Reserved notify reaches it.
-        assert!(
-            state.fleet.notify(
-                &r.match_id,
-                FleetServerMsg::Reserved {
-                    match_id: r.match_id.clone(),
-                    opponent_wallet: "0xuser".into(),
+        let slot = reserve_arena_slot(&state, "blackjack");
+        state
+            .mp
+            .put_arena_reservation(
+                &slot.match_id,
+                ArenaReservation {
+                    game: "blackjack".into(),
+                    seat_a: "0xuser".into(),
+                    seat_b: slot.bot_address.clone(),
+                    tunnel_id: "0xdead".into(),
+                    eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
-            ),
-            "the on-demand bot is reachable for Reserved/Opened",
-        );
-    }
+            )
+            .await;
 
-    // Each on-demand spawn gets a DISTINCT identity: two concurrent bots for the same game must not
-    // share a seat-B address. A fixed index would collide (the bug a per-spawn sequence fixes); the
-    // wallet pool's `get_member_key(Ordinal)` replaces this placeholder later.
-    #[tokio::test]
-    async fn reserve_or_spawn_gives_each_bot_a_distinct_identity() {
-        let state = AppState::in_memory_for_test();
-        let a = reserve_or_spawn(&state, "blackjack", 0, 2)
+        let c1 = BusRelayConnection::register(state.clone());
+        join_and_spawn(&state, &slot.match_id, c1.conn_ref(), "0xuser")
             .await
-            .expect("first");
-        let b = reserve_or_spawn(&state, "blackjack", 0, 2)
-            .await
-            .expect("second within cap");
-        assert_ne!(
-            a.address, b.address,
-            "concurrent on-demand bots must have distinct addresses"
-        );
-    }
-
-    // Admission is bounded by the per-game cap: once `cap` bots are in flight, the next call gets
-    // nothing until one finishes. This is the ceiling that replaces static pool depth — the limiter
-    // is the in-flight count, not the (1M) wallet pool.
-    #[tokio::test]
-    async fn reserve_or_spawn_is_bounded_by_the_cap() {
-        let state = AppState::in_memory_for_test();
-        assert!(
-            reserve_or_spawn(&state, "blackjack", 0, 1).await.is_some(),
-            "first reservation is within cap=1"
-        );
-        assert!(
-            reserve_or_spawn(&state, "blackjack", 0, 1).await.is_none(),
-            "second exceeds cap=1 — admission is bounded"
-        );
-    }
-
-    // The cap is per game: a second game's seat-fill is unaffected by the first game being at cap.
-    #[tokio::test]
-    async fn reserve_or_spawn_cap_is_per_game() {
-        let state = AppState::in_memory_for_test();
-        assert!(reserve_or_spawn(&state, "blackjack", 0, 1).await.is_some());
-        assert!(
-            reserve_or_spawn(&state, "blackjack", 0, 1).await.is_none(),
-            "blackjack is at cap"
-        );
-        assert!(
-            reserve_or_spawn(&state, "quantum_poker", 0, 1)
-                .await
-                .is_some(),
-            "a different game has its own cap"
-        );
-    }
-
-    // A registered co-located bot is allocatable exactly like a WS fleet bot: `reserve` returns its
-    // party-B identity (stable address + a per-match ephemeral pubkey), and a pool `notify` reaches
-    // the bot's ctrl channel. This is the contract `arena_allocate`/`arena_opened` depend on.
-    #[tokio::test]
-    async fn registered_bot_is_reservable_and_reachable() {
-        let state = AppState::in_memory_for_test();
-        let address = bot_address("blackjack", 0);
-        let (_bot_id, _key, mut ctrl_rx) = register_bot(&state, "blackjack", &address);
-
-        let r = state
-            .fleet
-            .reserve("blackjack", 0)
-            .expect("the registered bot is reservable");
-        assert_eq!(r.address, address, "reservation carries the bot's address");
-        assert!(
-            !r.eph_pubkey.is_empty(),
-            "and its per-match ephemeral pubkey"
-        );
-
-        assert!(state.fleet.notify(
-            &r.match_id,
-            FleetServerMsg::Reserved {
-                match_id: r.match_id.clone(),
-                opponent_wallet: "0xuser".into(),
-            },
-        ));
-        assert!(
-            matches!(ctrl_rx.try_recv(), Ok(FleetServerMsg::Reserved { .. })),
-            "notify reaches the co-located bot's ctrl channel"
-        );
-    }
-
-    // `await_open` is the bot's lifecycle state machine: it ignores (records) `Reserved` and
-    // returns the match identity on `Opened`. Re-reservation (a prior TTL-expired hold) must just
-    // refresh the opponent, not lose the eventual open.
-    #[tokio::test]
-    async fn await_open_returns_match_on_opened_after_rereservation() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        tx.send(FleetServerMsg::Reserved {
-            match_id: "m1".into(),
-            opponent_wallet: "0xfirst".into(),
-        })
-        .unwrap();
-        tx.send(FleetServerMsg::Reserved {
-            match_id: "m1".into(),
-            opponent_wallet: "0xsecond".into(),
-        })
-        .unwrap();
-        tx.send(FleetServerMsg::Opened {
-            match_id: "m1".into(),
-            tunnel_id: "0xtunnel".into(),
-        })
-        .unwrap();
-
-        let opened = await_open(&mut rx).await.expect("resolves on Opened");
-        assert_eq!(opened.match_id, "m1");
+            .expect("first join claims + spawns");
+        let c2 = BusRelayConnection::register(state.clone());
         assert_eq!(
-            opened.opponent_wallet, "0xsecond",
-            "latest reservation's opponent wins"
+            join_and_spawn(&state, &slot.match_id, c2.conn_ref(), "0xuser").await,
+            Err("unknown_arena_match"),
+            "a second join finds the match already claimed"
         );
-        assert_eq!(opened.tunnel_id, "0xtunnel");
+    }
+
+    // A foreign wallet cannot claim another user's reserved match.
+    #[tokio::test]
+    async fn join_rejects_foreign_wallet() {
+        let state = AppState::in_memory_for_test();
+        let slot = reserve_arena_slot(&state, "blackjack");
+        state
+            .mp
+            .put_arena_reservation(
+                &slot.match_id,
+                ArenaReservation {
+                    game: "blackjack".into(),
+                    seat_a: "0xowner".into(),
+                    seat_b: slot.bot_address.clone(),
+                    tunnel_id: "0xdead".into(),
+                    eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
+                },
+            )
+            .await;
+        let c = BusRelayConnection::register(state.clone());
+        assert_eq!(
+            join_and_spawn(&state, &slot.match_id, c.conn_ref(), "0xattacker").await,
+            Err("unknown_arena_match"),
+            "only the allocator may join"
+        );
     }
 
     // The placeholder identity must be stable per bot and distinct across bots, so two bots never
@@ -499,55 +417,43 @@ mod tests {
         assert_ne!(bot_address("blackjack", 0), bot_address("caro", 0));
     }
 
-    // The whole co-located arena seam, end to end over the REAL relay bus: the supervisor's
-    // `play_arena_match` (party B) plays a full co-signed blackjack match to settlement against a
-    // stand-in human (party A) that joins by match id. This exercises the rendezvous (bot binds and
-    // parks; the human's `arena.join` completes the MatchRecord and wakes the bot), bidirectional
-    // `relay_to_other` routing, the merged `PartyDriver` move loop, and BOTH seats' relay-bridged
-    // anchors emitting their settle half. Both sides returning a settled outcome proves the seam
-    // carries a genuine two-party match without a WebSocket — the on-chain open/funding is the only
-    // remaining dependency. A regression in the join, routing, or settle wiring deadlocks or errors
-    // here. (Settle-half PAIRING is covered by `bus_transport::full_match_completes_over_the_bus`
-    // and the byte-exact emit by `arena_anchor::settle_emits_the_co_signed_half_to_the_peer`.)
+    // The whole co-located arena seam end to end over the REAL relay bus: `arena.join` (`join_and_spawn`)
+    // claims the reservation, spawns party B on THIS instance, and pairs it with a stand-in human
+    // (party A) that joined by match id — proving the recipe alone lets any instance build the bot and
+    // play a genuine two-party match to settlement, with no rendezvous/wake and no cross-instance hop.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn play_arena_match_settles_against_a_stand_in_human() {
+    async fn join_and_spawn_settles_against_a_stand_in_human() {
         use fleet_core::play_match::{play_blackjack_v2, BLACKJACK};
+        use std::time::Duration;
 
-        // A valid-hex tunnel id (the co-signed move loop serializes it as a 32-byte address).
         const TUNNEL_ID: &str = "0xdead";
         let state = AppState::in_memory_for_test();
-        let match_id = "arena-e2e";
-        let bot_addr = bot_address("blackjack", 0);
+
+        // Allocate: mint the recipe + seed the shared reservation (what `arena_allocate` does).
+        let slot = reserve_arena_slot(&state, "blackjack");
+        let match_id = slot.match_id.clone();
         state
-            .arena
-            .seed(match_id, "blackjack", "0xuser", &bot_addr, TUNNEL_ID);
+            .mp
+            .put_arena_reservation(
+                &match_id,
+                ArenaReservation {
+                    game: "blackjack".into(),
+                    seat_a: "0xuser".into(),
+                    seat_b: slot.bot_address.clone(),
+                    tunnel_id: TUNNEL_ID.into(),
+                    eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
+                },
+            )
+            .await;
 
-        // Bot side: the real supervisor entry. It registers its bus conn, binds + parks on the
-        // rendezvous, then plays once the human joins.
-        let bot_state = state.clone();
-        let bot = tokio::spawn(async move {
-            let opened = OpenedMatch {
-                match_id: match_id.to_owned(),
-                opponent_wallet: "0xuser".to_owned(),
-                tunnel_id: TUNNEL_ID.to_owned(),
-            };
-            let bot_key = DurableSigner::from_secret(&[7u8; 32]);
-            play_arena_match(&bot_state, "blackjack", &opened, bot_key).await
-        });
-
-        // Human side: register, join by match id, then wait for MatchFound so routing is live before
-        // driving the match (the same ordering the FE follows).
+        // Human side: register the relay conn (the WS), then join — which claims + spawns the bot HERE.
         let human_conn = BusRelayConnection::register(state.clone());
-        assert!(
-            state
-                .arena
-                .bind_user(&state, match_id, human_conn.conn_ref(), "0xuser")
-                .await,
-            "the allocating user joins its arena match"
-        );
-        // Wait for `match.found` (delivered first, before the bot's hello) so routing is live before
-        // we drive — the same ordering the FE follows. It is the first frame, so we never drain past
-        // it into the bot's buffered hello.
+        join_and_spawn(&state, &match_id, human_conn.conn_ref(), "0xuser")
+            .await
+            .expect("join claims the reservation and spawns the bot");
+
+        // `match.found` arrives first (before the bot's hello), the same ordering the FE follows.
         let first = human_conn
             .recv_for_test()
             .await
@@ -557,26 +463,29 @@ mod tests {
             "first inbound frame must be the match announcement, got: {first}"
         );
 
-        let human_transport = BusRelayTransport::new(human_conn.clone(), match_id.to_owned());
+        let human_transport = BusRelayTransport::new(human_conn.clone(), match_id.clone());
         let human_channel = MatchChannel::new(human_transport);
-        // createdAt `0` matches the bot side: `play_arena_match` here resolves it via the
-        // `NoopArenaOpener` (in-memory state), which returns 0 — so both seats sign `timestamp = 0`.
         let human_anchor =
-            RelayBridgedAnchor::new(TUNNEL_ID.to_owned(), human_conn, match_id.to_owned(), 0);
+            RelayBridgedAnchor::new(TUNNEL_ID.to_owned(), human_conn, match_id.clone(), 0);
         let human = play_blackjack_v2(
             human_channel,
             human_anchor,
             DurableSigner::from_secret(&[42u8; 32]),
             Role::A,
-            &bot_addr,
+            &slot.bot_address,
             InMemoryTranscriptRecorder::new(),
         );
 
-        let (bot_res, human_res) = tokio::join!(bot, human);
-        bot_res
-            .expect("bot task did not panic")
-            .expect("bot (party B) plays to settlement over the bus");
-        let human_outcome = human_res.expect("human (party A) plays to settlement over the bus");
+        // Bound the wait so a genuine bot-side hang fails the test instead of stalling CI until the
+        // global job timeout. The bound must clear a REAL match's wall-clock on a loaded CI runner:
+        // `cargo test` runs the whole backend suite in parallel and oversubscribes the box's cores,
+        // where an equivalent stand-in match (bot-fleet's `bot_plays_a_full_match…`) legitimately
+        // takes ~90s — so the former 10s fired spuriously. 180s still catches a true deadlock (which
+        // never completes) while tolerating a slow, contended runner.
+        let human_outcome = tokio::time::timeout(Duration::from_secs(180), human)
+            .await
+            .expect("the match settles in time")
+            .expect("human (party A) plays to settlement over the bus");
         assert!(human_outcome.moves > 0, "the match actually progressed");
         assert_eq!(
             human_outcome.final_balances.sum(),
