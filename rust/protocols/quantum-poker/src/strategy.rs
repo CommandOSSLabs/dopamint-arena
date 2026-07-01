@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    balance, best_poker_hand, commit_slot_secrets, derive_quantum_card,
+    available_for, balance, best_poker_hand, commit_slot_secrets, derive_quantum_card,
     expected_quantum_poker_reveal_slots, local_secret_array, random_slot_secrets, reveal_array,
     street_bet, total_bet, PokerMove, PokerPhase, PokerState, QuantumPoker, SlotSecret,
     A_HOLE_SLOTS, B_HOLE_SLOTS,
@@ -94,7 +94,10 @@ impl MoveStrategy<QuantumPoker> for QuantumPokerStrategy {
                         PokerMove::Fold
                     });
                 }
-                let available = balance(state, seat).saturating_sub(total_bet(state, seat));
+                // Size to the effective stack the protocol validates against, not our own balance —
+                // heads-up, betting more than the opponent can match is rejected ("bet exceeds the
+                // effective stack"), which after stacks diverge would abort the match.
+                let available = available_for(state, seat);
                 if available > 0 && self.next_f64() < 0.35 {
                     let cap = available.min(200);
                     let amount = 1 + (self.next_f64() * cap as f64).floor() as u64;
