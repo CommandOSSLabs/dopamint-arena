@@ -5,7 +5,7 @@ import type { GameWindowProps } from "../types";
 import { SketchDefs } from "../sketch";
 import { CanvasView } from "./ui/CanvasView";
 import { PvpCanvasView } from "./ui/PvpCanvasView";
-import { WorkerCanvasView } from "./ui/WorkerCanvasView";
+import { SoloCanvasView } from "./ui/SoloCanvasView";
 import { engineEnabled } from "@/engine/flag";
 import { MOVES_PER_GAME, MIN_MOVES_PER_GAME } from "./useWorldCanvasOnchain";
 import "./ui/worldCanvas.sketch.css";
@@ -71,11 +71,11 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
       ) : (
         <>
           {mode === "solo" ? (
-            // SOLO runs in the worker (WorkerCanvasView) by default — both bots paint into a 20×20
-            // grid the worker self-play owns. `?engine=legacy` falls back to the full infinite-canvas
-            // CanvasView (paint-stream renderer + tools). PvP also runs through the worker hub.
+            // SOLO runs in the worker (SoloCanvasView) by default — both bots self-play over the PvP
+            // protocol, and the rich infinite-canvas WorldCanvas renders the worker's paint stream.
+            // `?engine=legacy` falls back to the main-thread CanvasView. PvP runs through the hub.
             engineEnabled() ? (
-              <WorkerCanvasView windowId={windowId} onHome={goHome} />
+              <SoloCanvasView windowId={windowId} onHome={goHome} />
             ) : (
               <CanvasView onHome={goHome} movesPerGame={movesPerGame} />
             )

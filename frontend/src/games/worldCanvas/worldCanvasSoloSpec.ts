@@ -1,121 +1,96 @@
 /**
- * World Canvas as a worker SELF-PLAY spec. Both bot seats paint on a shared canvas; the
- * session runs for a fixed number of rounds (ticks) then settles. Public-state game — no
- * commit-reveal, no moveCodec.
+ * World Canvas as a worker SELF-PLAY spec — the RICH wall, not a placeholder grid.
+ *
+ * Runs self-play over the PvP protocol ({@link WorldCanvasPvpProtocol}) so the worker emits the
+ * SAME ordered `PvpCell[]` render stream the online-PvP board already renders: global-pixel cells
+ * with a painter seat + monotonic seq. Both seats are bot-driven (the protocol's `randomMove` walks
+ * a flowing stroke per co-sign); when the player takes the wheel (Auto off) a queued seat-A run is
+ * co-signed instead of the seat-A bot's paint. Free/draw — balances never shift — so the funded
+ * bank stays tiny (1/seat) and the wall is effectively endless (settle on demand via settleNow).
+ *
+ * The rich renderer ({@link ./ui/WorldCanvas WorldCanvas}) is fed from this view by
+ * {@link ./ui/SoloCanvasView SoloCanvasView}; the old bare 20×20 grid is gone.
  */
 import { defineSoloGame } from "@/engine/specs/defineGame";
 import type {
-  SoloGameSpec,
   SoloMultiGameState,
   SoloStepOutcome,
   SoloTakeIntent,
 } from "@/engine/engineApi";
 import {
-  WorldCanvasProtocol,
-  type WorldCanvasState,
-  type WorldCanvasMove,
-} from "sui-tunnel-ts/protocol/worldCanvas";
+  WorldCanvasPvpProtocol,
+  type PvpCanvasState,
+  type PvpPaintMove,
+} from "sui-tunnel-ts/protocol/worldCanvasPvp";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 
-/** A painted cell in the 20×20 spectate grid. The protocol state keeps only a rolling DIGEST of the
- *  paint stream (no per-cell data), so the solo wrapper accumulates the cells the UI renders. */
-interface PaintedCell {
-  cell: number;
-  color: number;
-}
-
+/** Meta-state: the PvP protocol's canvas state under `inner` (so the SoloEngine can read
+ *  `inner.winner`, always null here), plus the multi-duel bookkeeping the engine expects and a
+ *  turn cursor that alternates the two bot seats for a visually balanced wall. */
 interface CanvasSoloState extends SoloMultiGameState {
   maxGames: number;
-  inner: WorldCanvasState & {
-    winner: "A" | "B" | "draw" | null;
-    turn: Party;
-    /** Display-only: painted cells, last-write-wins per cell, bounded at GRID_SIZE² by dedup. */
-    cells: PaintedCell[];
-  };
+  turn: Party;
+  inner: PvpCanvasState;
 }
 
-const GRID_SIZE = 20;
-const MAX_ROUNDS = 50;
+/** Stateless — reused for both the wrapped protocol and the bot move generator (all state rides
+ *  in the passed-in `PvpCanvasState`, so one shared instance is safe). */
+const pvpProto = new WorldCanvasPvpProtocol();
 
-/** Upsert one paint into the spectate grid (last write wins). Off-grid paints (x/y ≥ GRID_SIZE) are
- *  ignored — self-play bots paint into the 20×20 region, and that is all the view shows. */
-function paintCell(cells: PaintedCell[], move: WorldCanvasMove): PaintedCell[] {
-  if (move.x >= GRID_SIZE || move.y >= GRID_SIZE) return cells;
-  const cell = move.y * GRID_SIZE + move.x;
-  const next: PaintedCell = { cell, color: move.color };
-  return cells.some((c) => c.cell === cell)
-    ? cells.map((c) => (c.cell === cell ? next : c))
-    : [...cells, next];
-}
-
-function randomPaintMove(): WorldCanvasMove {
-  const cx = 0n;
-  const cy = 0n;
-  const x = Math.floor(Math.random() * GRID_SIZE);
-  const y = Math.floor(Math.random() * GRID_SIZE);
-  const color = Math.floor(Math.random() * 6);
-  return { cx, cy, x, y, color };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 function makeSoloProtocol(): any {
-  const inner = new WorldCanvasProtocol();
   return {
     name: "world-canvas-solo",
-    isTerminal: (s: CanvasSoloState) =>
-      s.gamesPlayed >= MAX_ROUNDS || inner.isTerminal(s.inner),
-    initialState: (ctx: any) => {
-      const base = inner.initialState(ctx);
-      return {
-        inner: { ...base, winner: null, turn: "A" as Party, cells: [] },
-        gamesPlayed: 0,
-        maxGames: 1,
-      };
-    },
-    applyMove: (s: CanvasSoloState, move: WorldCanvasMove, by: Party) => {
-      const next = inner.applyMove(s.inner, move, by);
-      const nextTurn: Party = by === "A" ? "B" : "A";
-      return {
-        inner: {
-          ...next,
-          winner: null,
-          turn: nextTurn,
-          cells: paintCell(s.inner.cells ?? [], move),
-        },
-        gamesPlayed: s.gamesPlayed + (inner.isTerminal(next) ? 1 : 0),
-        maxGames: 1,
-      };
-    },
-    encodeState: (s: CanvasSoloState) => inner.encodeState(s.inner),
-    // REQUIRED: OffchainTunnel.selfPlay reads balances on every co-sign + at settle. Omitting it
-    // throws "protocol.balances is not a function" the moment the worker self-play loop starts.
-    balances: (s: CanvasSoloState) => inner.balances(s.inner),
+    // Endless collaborative wall — close on demand (settleNow), never auto-terminal.
+    isTerminal: () => false,
+    initialState: (ctx: any): CanvasSoloState => ({
+      inner: pvpProto.initialState(ctx),
+      gamesPlayed: 0,
+      maxGames: 1,
+      turn: "A",
+    }),
+    applyMove: (
+      s: CanvasSoloState,
+      move: PvpPaintMove,
+      by: Party,
+    ): CanvasSoloState => ({
+      inner: pvpProto.applyMove(s.inner, move, by),
+      gamesPlayed: s.gamesPlayed,
+      maxGames: 1,
+      turn: by === "A" ? "B" : "A",
+    }),
+    encodeState: (s: CanvasSoloState) => pvpProto.encodeState(s.inner),
+    // OffchainTunnel.selfPlay reads balances on every co-sign + at settle.
+    balances: (s: CanvasSoloState) => pvpProto.balances(s.inner),
   };
 }
 
 export const worldCanvasSoloSpec = defineSoloGame({
   game: "world-canvas",
   stake: 1n,
-  // Free/draw (money-neutral — balances never shift), so the funded bank can be tiny: 1/seat keeps
-  // worldCanvas as cheap to open as the legacy path (~2 MTPS), not the default 100/seat.
+  // Free/draw (money-neutral), so a tiny bank keeps the open cheap (~PvP parity), not 100/seat.
   lockedPerSeat: 1n,
   makeProtocol: makeSoloProtocol,
   makeBots: () => ({}),
-  deriveView: (state: CanvasSoloState) => state.inner,
-  sessionResult: (inner: CanvasSoloState["inner"]) =>
-    inner.winner ?? ("draw" as const),
+  deriveView: (state: CanvasSoloState) => state.inner.cells,
+  sessionResult: () => "draw" as const,
   stepWith: (
     _proto: any,
     tunnel: any,
     _bots: unknown,
-    take: SoloTakeIntent<WorldCanvasMove> | null,
+    take: SoloTakeIntent<PvpPaintMove> | null,
   ): SoloStepOutcome => {
     const state = tunnel.state as CanvasSoloState;
-    if (state.inner.winner !== null || state.gamesPlayed >= MAX_ROUNDS)
-      return "session-over";
-    const by: Party = state.inner.turn ?? "A";
-    const move = take?.() ?? randomPaintMove();
-    tunnel.step(move, by);
+    const by: Party = state.turn;
+    // Take-the-wheel: in manual mode (take != null), on seat A's turn co-sign the player's queued
+    // run if present, else an idle tick (you hold seat A — it paints nothing). Pull the intent only
+    // on A's turn so it is never applied to B or silently discarded. Every other case is bot paint.
+    if (take && by === "A") {
+      const human = take();
+      tunnel.step(human ?? { cells: [] }, by);
+      return "stepped";
+    }
+    tunnel.step(pvpProto.randomMove(state.inner, by, Math.random), by);
     return "stepped";
   },
   kickoffNextGame: () => {},
