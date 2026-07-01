@@ -39,7 +39,7 @@ function AppContent({ windowId }: { windowId: string }) {
     case "/bot":
       return <PlayerBot autoStarted={autoStartedRef} windowId={windowId} />;
     case "/pvp":
-      return <PvpBlackjack />;
+      return <PvpBlackjack windowId={windowId} />;
     default:
       return <Home />;
   }

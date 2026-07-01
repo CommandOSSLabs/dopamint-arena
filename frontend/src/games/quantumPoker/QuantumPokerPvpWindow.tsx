@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
-import { HAND_CAP, usePvpQuantumPoker } from "./usePvpQuantumPoker";
+import { HAND_CAP, useRoutedPvpPoker } from "./usePvpQuantumPoker";
 import { POKER_BUYIN } from "./constants";
 import { QuantumPokerTable, PHASE_LABEL } from "./QuantumPokerTable";
 import { SketchDefs } from "../sketch";
@@ -11,9 +11,10 @@ import { PokerActionBar } from "./PokerActionBar";
 /** Heads-up Quantum Poker vs a real opponent over the relay: matchmaking + co-sign + on-chain stakes,
  *  in the shared hand-drawn skin. An in-game Auto toggle lets a persona bot make this seat's bets. */
 export function QuantumPokerPvpWindow({
+  windowId,
   onExit,
 }: GameWindowProps & { onExit?: () => void }) {
-  const g = usePvpQuantumPoker();
+  const g = useRoutedPvpPoker(windowId);
 
   // Back during a live hand bails out (auto-fold → settle this hand); leave once the close lands.
   const [leaving, setLeaving] = useState(false);

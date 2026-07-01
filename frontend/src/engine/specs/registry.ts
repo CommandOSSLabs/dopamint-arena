@@ -18,7 +18,9 @@ import "@/games/chickenCross/chickenCrossSoloSpec";
 import "@/games/worldCanvas/worldCanvasSpec";
 import "@/games/battleship/battleshipSpec";
 import "@/games/ticTacToe/tttCaroPvpSpec"; // ttt + caro PvP (defineGame side-effect)
+import "@/games/quantumPoker/quantumPokerPvpSpec";
 import "@/games/quantumPoker/quantumPokerSoloSpec";
+import "@/games/blackjack/blackjackPvpSpec";
 import "@/games/ticTacToe/tttSoloSpec";
 import "@/games/ticTacToe/caroSoloSpec";
 import "@/games/blackjack/blackjackSoloSpec";

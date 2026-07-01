@@ -60,6 +60,11 @@ import {
 } from "./pokerSelfPlay";
 import { POKER_BUYIN } from "./constants";
 import type { BotContext } from "@/agent/gameKit";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameMatch } from "@/engine/react/useGameMatch";
+import type { MatchSnapshot } from "@/engine/engineApi";
+import type { PokerPvpView } from "./quantumPokerPvpView";
 
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
@@ -1019,3 +1024,73 @@ async function settle(
     });
   }
 }
+
+// --- Worker adapter (routes PvP through the shared hub when engine=worker) --------
+
+/** Map the worker hub's PvP snapshot into the legacy `PvpQuantumPoker` shape the
+ *  `QuantumPokerPvpWindow` already renders. Selected at module load by `engineEnabled()`. */
+function useWorkerPvpPoker(windowId: string): PvpQuantumPoker {
+  const snap = useGameMatch(windowId, "quantum-poker") as MatchSnapshot<PokerPvpView>;
+  const v = snap.view;
+  const s = v?.state ?? null;
+  const self: Party | null = snap.role;
+  const phase: PvpPokerStatus = snap.status;
+
+  const myTurnToBet = v?.myTurnToBet ?? false;
+  const myHole = v?.myHole ?? null;
+  const legal: PvpPokerLegal | null = v?.legal
+    ? {
+        canCheck: v.legal.canCheck,
+        canCall: v.legal.canCall,
+        callAmount: v.legal.callAmount,
+        canBet: v.legal.canBet,
+        minBet: v.legal.minBet,
+        maxBet: v.legal.maxBet,
+      }
+    : null;
+
+  return {
+    status: phase,
+    role: snap.role,
+    selfParty: self,
+    state: s,
+    myHole,
+    myTurnToBet,
+    secondsLeft: null, // turn timer is legacy-only; auto-play handles timeouts in the worker
+    legal,
+    opponentWallet: snap.opponentWallet,
+    error: snap.error,
+    findMatch: () => engineClient.findMatch(windowId, "quantum-poker"),
+    fold: () => engineClient.submitInput(windowId, { type: "fold" }),
+    check: () => engineClient.submitInput(windowId, { type: "check" }),
+    call: () => engineClient.submitInput(windowId, { type: "call" }),
+    bet: (amount: bigint) =>
+      engineClient.submitInput(windowId, { type: "bet", amount }),
+    endRequested: v?.endRequested ?? false,
+    requestSettle: () =>
+      engineClient.submitInput(windowId, { type: "settle" }),
+    backOut: () => {
+      // In worker mode, settle request handles both graceful end and bail-out
+      engineClient.submitInput(windowId, { type: "settle" });
+    },
+    auto: snap.auto,
+    setAuto: (on: boolean) => engineClient.setAuto(windowId, on),
+    reset: () => engineClient.reset(windowId),
+  };
+}
+
+/** Legacy path wraps the bespoke hook (windowId unused). */
+function useLegacyPvpPokerAdapter(
+  _windowId: string,
+): PvpQuantumPoker {
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return usePvpQuantumPoker();
+}
+
+/** The worker path routes poker PvP through the shared hub; `?engine=legacy` keeps the
+ *  bespoke hook. Selected once at module load (rules-of-hooks: a stable hook per session). */
+export const useRoutedPvpPoker: (
+  windowId: string,
+) => PvpQuantumPoker = engineEnabled()
+  ? useWorkerPvpPoker
+  : useLegacyPvpPokerAdapter;
