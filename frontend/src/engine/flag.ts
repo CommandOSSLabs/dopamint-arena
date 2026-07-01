@@ -12,3 +12,12 @@ export function engineEnabled(): boolean {
   }
   return true;
 }
+
+/** Opt-in (`?enginepool=1`): per-window game worker + one shared SOCKET worker (ADR-0029 Phase 2),
+ *  instead of the single shared hub worker. Spreads co-sign across cores + isolates a game's fault to
+ *  its worker while keeping the one-relay-socket invariant. Off by default during rollout; only takes
+ *  effect when the worker engine is on ({@link engineEnabled}). */
+export function enginePoolEnabled(): boolean {
+  if (typeof location === "undefined") return false;
+  return new URLSearchParams(location.search).get("enginepool") === "1";
+}
