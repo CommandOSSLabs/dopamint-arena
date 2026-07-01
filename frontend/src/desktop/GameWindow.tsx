@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Maximize2, Minimize2, Minus, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { engineClient } from "@/engine/engineClient";
 import {
   Tooltip,
   TooltipContent,
@@ -76,8 +77,30 @@ export function GameWindow({
   className?: string;
   children: ReactNode;
 }) {
+  // Render virtualization (ADR-0029): report on-screen/off-screen to the engine so an off-screen
+  // window (hidden workspace `display:none`, minimized, or scrolled away — all collapse to a single
+  // IntersectionObserver signal) keeps its match running in the worker but stops painting. `domId`
+  // is the engine window id (WorkspaceFloor passes `item.id` to both `domId` and `windowId`).
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!domId || !el || typeof IntersectionObserver === "undefined") return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) engineClient.setWindowVisible(domId, e.isIntersecting);
+      },
+      { threshold: 0 },
+    );
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+      engineClient.setWindowVisible(domId, true); // unmount: don't strand the slot as hidden
+    };
+  }, [domId]);
+
   return (
     <div
+      ref={rootRef}
       data-window={domId}
       className={cn(
         "group/window flex h-full min-h-0 w-full flex-col overflow-hidden rounded-none border bg-card shadow-lg transition-shadow",

@@ -37,6 +37,10 @@ const IDLE_SNAPSHOT: MatchSnapshot = {
 interface PvpWindow {
   snap: MatchSnapshot;
   listeners: Set<() => void>;
+  /** Render-virtualization gate (ADR-0029): the match always runs in the worker, but a window that
+   *  is off-screen (hidden workspace, minimized, scrolled away) stores its latest snapshot without
+   *  notifying React — so no reconcile/paint — and is excluded from the shared render budget. */
+  visible: boolean;
 }
 
 let bridge: MainBridge | null = null;
@@ -63,7 +67,10 @@ interface SnapThrottle {
 const snapThrottle = new Map<string, SnapThrottle>();
 
 function renderIntervalMs(): number {
-  const n = pvpWindows.size;
+  // Only VISIBLE windows spend the shared render budget (ADR-0029): off-screen matches keep running
+  // in the worker but don't paint, so on-screen boards aren't throttled paying for hidden ones.
+  let n = 0;
+  for (const w of pvpWindows.values()) if (w.visible) n++;
   return Math.min(RENDER_MAX_MS, Math.max(RENDER_BASE_MS, n * RENDER_BASE_MS));
 }
 
@@ -76,6 +83,9 @@ function deliverSnapshot(
   store: (s: MatchSnapshot) => void,
 ): void {
   store(snap);
+  // Off-screen (ADR-0029): the latest snapshot is stored (getSnapshot stays fresh for the flush on
+  // re-show), but skip the React notify entirely — no reconcile, no paint — while the match runs on.
+  if (pvpWindows.get(windowId)?.visible === false) return;
   let t = snapThrottle.get(windowId);
   if (!t) {
     t = { lastNotifyMs: 0, timer: null, lastStatus: null };
@@ -163,7 +173,7 @@ function ensureHub(): Comlink.Remote<PvpHubApi> {
 function ensurePvpWindow(windowId: string): PvpWindow {
   let w = pvpWindows.get(windowId);
   if (w) return w;
-  w = { snap: IDLE_SNAPSHOT, listeners: new Set() };
+  w = { snap: IDLE_SNAPSHOT, listeners: new Set(), visible: true };
   pvpWindows.set(windowId, w);
   registerWindowDisposer(windowId, "engine", () => disposeWindow(windowId));
   return w;
@@ -204,6 +214,30 @@ export const engineClient = {
 
   getSnapshot(windowId: string): MatchSnapshot {
     return pvpWindows.get(windowId)?.snap ?? IDLE_SNAPSHOT;
+  },
+
+  /** Render-virtualization signal from the desktop (ADR-0029): report whether a window is on-screen.
+   *  Off-screen keeps the match running in the worker but stops main-thread render; becoming visible
+   *  flushes the latest stored snapshot once so the UI catches up. No-op for unknown ids (the store
+   *  slot is created by `subscribe` on mount, which runs before the IntersectionObserver's callback). */
+  setWindowVisible(windowId: string, visible: boolean): void {
+    const w = pvpWindows.get(windowId);
+    if (!w || w.visible === visible) return;
+    w.visible = visible;
+    const t = snapThrottle.get(windowId);
+    if (visible) {
+      // Reset the throttle clock so this flush is the last notify, then catch the UI up in one paint.
+      if (t) {
+        if (t.timer) clearTimeout(t.timer);
+        t.timer = null;
+        t.lastNotifyMs = performance.now();
+      }
+      for (const l of w.listeners) l();
+    } else if (t?.timer) {
+      // Cancel a pending trailing notify so a now-hidden window can't re-render off-screen.
+      clearTimeout(t.timer);
+      t.timer = null;
+    }
   },
 
   /** Live PvP window slots vs the device live-window guideline — surfaced by the perf HUD. The PvP
