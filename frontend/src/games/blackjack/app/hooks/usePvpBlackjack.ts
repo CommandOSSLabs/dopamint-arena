@@ -844,8 +844,9 @@ export function usePvpBlackjack(): PvpView {
       stoppingRef.current = false;
       setRounds([]);
       autoKickedRef.current = false;
-      autoRef.current = defaultAuto("blackjack");
-      setAutoState(autoRef.current);
+      // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
+      autoRef.current = true;
+      setAutoState(true);
       bufferedSettleRef.current = null;
       bufferedHelloRef.current = null;
       openedResolveRef.current = null;

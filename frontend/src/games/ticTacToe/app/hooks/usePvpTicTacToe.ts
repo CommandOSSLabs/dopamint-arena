@@ -858,6 +858,9 @@ export function usePvpTicTacToe(
       const selfWallet = w.address;
       setError(null);
       setPhase("connecting");
+      // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
+      autoRef.current = true;
+      setAutoState(true);
       stoppingRef.current = false;
       bufferedHelloRef.current = null;
       bufferedSettleRef.current = null;
