@@ -77,6 +77,12 @@ pub struct AppState {
     pub faucet_max_per_window: u32,
     /// Shared bearer secret gating the internal faucet; `None` disables it (fail closed).
     pub faucet_admin_token: Option<String>,
+    /// Sponsor grants allowed per sender within `sponsor_sender_window_secs`.
+    pub sponsor_sender_max_per_window: u32,
+    /// Per-sender sponsor window length in seconds.
+    pub sponsor_sender_window_secs: i64,
+    /// Global rolling-24h cap on successful sponsorship grants.
+    pub sponsor_global_daily_limit: u64,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -130,6 +136,9 @@ impl AppState {
             faucet_cooldown_secs: 1_800,
             faucet_max_per_window: 5,
             faucet_admin_token: None,
+            sponsor_sender_max_per_window: 120,
+            sponsor_sender_window_secs: 60,
+            sponsor_global_daily_limit: 100_000,
         })
     }
 }
