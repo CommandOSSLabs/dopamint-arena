@@ -31,6 +31,12 @@ pub(crate) const CLOCK_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000006";
 /// Fixed gas budget for a single cooperative close (one MoveCall, two shared objects).
 pub(crate) const GAS_BUDGET: u64 = 100_000_000;
+/// Ceiling for a batched close PTB's budget (ADR-0029): `GAS_BUDGET × K` is capped here so a
+/// large batch can't exceed the protocol per-tx gas max. 50,000 SUI = Sui testnet `max_tx_gas`.
+const MAX_BATCH_GAS_BUDGET: u64 = 50_000 * 1_000_000_000;
+/// Max binary-split depth when isolating a poison settlement in a batch (ADR-0029). Caps the
+/// extra round-trips a pathological batch can cost: ≤ 2^depth − 1 retries. 7 covers K≈128.
+const MAX_SETTLE_SPLIT_DEPTH: u32 = 7;
 /// Per-command gas budget for a sponsored open/fund PTB; the total is this × the PTB's command
 /// count, so a batched open of N tunnels (~N+1 commands) scales instead of under-funding on a flat
 /// budget. An upper bound, not a charge — the dry-run rejects any PTB whose actual gas exceeds the
@@ -101,6 +107,7 @@ pub(crate) const CHAIN_DIGEST_B58: &str = "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQ
 /// Fields for one on-chain `close_cooperative_with_root`, mapped from the SDK's
 /// SettlementWithRoot (ADR-0002). Balances/timestamp already parsed to `u64`; sigs and
 /// root already hex-decoded by the handler.
+#[derive(Clone)]
 pub struct CloseArgs {
     pub tunnel_id: String,
     pub party_a_balance: u64,
@@ -109,6 +116,42 @@ pub struct CloseArgs {
     pub sig_b: Vec<u8>,
     pub timestamp: u64,
     pub transcript_root: Vec<u8>,
+}
+
+/// Outcome of a settle attempt, split by whether the client should retry. `Transient` means
+/// the fullnode rate-limited us (after `GovernedRpc` exhausted its own retries) — the handler
+/// answers 503 + Retry-After. `Rejected` means the settlement itself is bad — the handler
+/// answers 422 and the client must not retry the same bytes.
+#[derive(Clone)]
+pub enum CloseError {
+    Transient {
+        msg: String,
+        retry_after: Option<u64>,
+    },
+    Rejected(String),
+}
+
+impl std::fmt::Display for CloseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CloseError::Transient { msg, .. } => write!(f, "{msg}"),
+            CloseError::Rejected(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+/// Classify an on-chain-path `anyhow` error into the settle taxonomy by downcasting the preserved
+/// `RpcError` source: a fullnode rate-limit (after `GovernedRpc` exhausted its retries) is
+/// `Transient`; anything else (bad sig, already-closed, balance mismatch, build error) is
+/// `Rejected`. Not string-matching — the type is carried through via `with_context`.
+fn anyhow_to_close_error(e: anyhow::Error) -> CloseError {
+    match e.downcast_ref::<crate::sui_rpc::RpcError>() {
+        Some(crate::sui_rpc::RpcError::Transient { retry_after, .. }) => CloseError::Transient {
+            msg: e.to_string(),
+            retry_after: *retry_after,
+        },
+        _ => CloseError::Rejected(e.to_string()),
+    }
 }
 
 /// A shared object's PTB reference: id + the version it was first shared at.
@@ -129,8 +172,9 @@ struct OwnedRef {
 }
 
 pub struct SuiSettler {
-    http: reqwest::Client,
-    rpc_url: String,
+    /// The single governed JSON-RPC client (throttle + retry/backoff), shared with the arena
+    /// opener so all fullnode traffic is throttled together against the one rate-limited node.
+    rpc: std::sync::Arc<crate::sui_rpc::GovernedRpc>,
     package_id: Address,
     coin_type: TypeTag,
     /// MTPS `AdminCap` object id (ADR-0023), owned by `sender`. `None` = the faucet is unconfigured
@@ -148,9 +192,6 @@ pub struct SuiSettler {
     /// would pin the same version and equivocate (one fails). One in-flight mint at a time, so the
     /// cap's owned ref re-resolved per call is always current.
     mint_lock: tokio::sync::Mutex<()>,
-    /// Test-only override: when set, `submit_close` returns this digest without RPC calls.
-    #[cfg(any(test, feature = "test-util"))]
-    fixed_close_digest: Option<String>,
 }
 
 /// A parsed tunnel lifecycle event: the type suffix drives status folding; the rest feeds the
@@ -238,7 +279,7 @@ pub(crate) fn dryrun_effects_ok(resp: &serde_json::Value) -> Result<(), String> 
 
 impl SuiSettler {
     pub fn new(
-        rpc_url: String,
+        rpc: std::sync::Arc<crate::sui_rpc::GovernedRpc>,
         package_id: &str,
         coin_type: &str,
         agent_allowance_package_id: Option<&str>,
@@ -275,8 +316,7 @@ impl SuiSettler {
             })
             .unwrap_or(0);
         Ok(Self {
-            http: reqwest::Client::new(),
-            rpc_url,
+            rpc,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
             admin_cap_id,
@@ -285,8 +325,6 @@ impl SuiSettler {
             sender,
             sponsor_nonce: AtomicU32::new(nonce_seed),
             mint_lock: tokio::sync::Mutex::new(()),
-            #[cfg(any(test, feature = "test-util"))]
-            fixed_close_digest: None,
         })
     }
 
@@ -297,8 +335,10 @@ impl SuiSettler {
         let signer = Ed25519PrivateKey::new([0u8; 32]);
         let sender = signer.public_key().derive_address();
         Self {
-            http: reqwest::Client::new(),
-            rpc_url: String::new(),
+            rpc: crate::sui_rpc::GovernedRpc::new(
+                String::new(),
+                crate::sui_rpc::RpcLimits::default(),
+            ),
             package_id: Address::ZERO,
             coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
             admin_cap_id: None,
@@ -307,49 +347,78 @@ impl SuiSettler {
             sender,
             sponsor_nonce: AtomicU32::new(0),
             mint_lock: tokio::sync::Mutex::new(()),
-            #[cfg(any(test, feature = "test-util"))]
-            fixed_close_digest: None,
         }
     }
 
-    /// Test-only settler that returns a fixed digest from `submit_close` without RPC calls.
-    /// Use this in handler-level tests that need the settle success path to run.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn fixed_digest(digest: impl Into<String>) -> Self {
-        let mut s = Self::noop();
-        s.fixed_close_digest = Some(digest.into());
-        s
+    /// Batched settle (ADR-0029): submit up to K closes as ONE PTB, isolating a poison settlement
+    /// by retry-by-split. Resolves all K shared refs in one `multiGetObjects` and reads epoch/gas
+    /// once, so a healthy batch costs ~constant RPC regardless of K. Returns one result per input
+    /// close, in order. This is the sole on-chain settle path (the worker calls it via the
+    /// `BatchSettler` trait); a single close is just a batch of one.
+    pub async fn submit_close_batch(
+        &self,
+        closes: Vec<CloseArgs>,
+    ) -> Vec<Result<String, CloseError>> {
+        if closes.is_empty() {
+            return Vec::new();
+        }
+        let ids: Vec<String> = closes.iter().map(|c| c.tunnel_id.clone()).collect();
+        let refs = match self.resolve_shared_many(&ids).await {
+            Ok(r) => r,
+            Err(e) => {
+                let ce = anyhow_to_close_error(e);
+                return closes.iter().map(|_| Err(ce.clone())).collect();
+            }
+        };
+        let ref_map: std::collections::HashMap<String, SharedRef> =
+            ids.iter().cloned().zip(refs).collect();
+        let (epoch, gas_price) = match self.epoch_and_gas_price().await {
+            Ok(v) => v,
+            Err(e) => {
+                let ce = anyhow_to_close_error(e);
+                return closes.iter().map(|_| Err(ce.clone())).collect();
+            }
+        };
+        crate::settle_batch::split_submit(closes, MAX_SETTLE_SPLIT_DEPTH, |sub| {
+            let refs: Vec<SharedRef> = sub.iter().map(|c| ref_map[&c.tunnel_id].clone()).collect();
+            self.try_submit_one_ptb(sub, refs, epoch, gas_price)
+        })
+        .await
     }
 
-    /// Build, sign, and execute `close_cooperative_with_root`; returns the tx digest.
-    /// Resolves the tunnel shared ref + reference gas price over JSON-RPC, builds offline.
-    /// Concurrent calls are safe: no shared gas coin means no equivocation risk.
-    pub async fn submit_close(&self, args: CloseArgs) -> anyhow::Result<String> {
-        #[cfg(any(test, feature = "test-util"))]
-        if let Some(digest) = self.fixed_close_digest.clone() {
-            return Ok(digest);
-        }
-        let tunnel = self.resolve_shared(&args.tunnel_id).await?;
-        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
-        let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
-        let tx = build_close_tx(
+    /// Build, dry-run, sign, and execute ONE batched-close PTB for `sub`. Each call draws a fresh
+    /// `sponsor_nonce` so a split-retry sub-tx never replays the SIP-58 withdrawal. Errors carry the
+    /// transient/rejected distinction (downcast from the governed `RpcError`).
+    async fn try_submit_one_ptb(
+        &self,
+        sub: Vec<CloseArgs>,
+        refs: Vec<SharedRef>,
+        epoch: u64,
+        gas_price: u64,
+    ) -> Result<String, CloseError> {
+        let chain = Digest::from_base58(CHAIN_DIGEST_B58)
+            .map_err(|e| CloseError::Rejected(format!("chain digest: {e}")))?;
+        let nonce = self.sponsor_nonce.fetch_add(1, Ordering::Relaxed);
+        let tx = build_close_batch_tx(
             self.package_id,
-            self.coin_type.clone(),
+            &self.coin_type,
             self.sender,
-            &args,
-            &tunnel,
+            &sub,
+            &refs,
             gas_price,
             epoch,
             chain,
-            nonce_from_tunnel(&args.tunnel_id),
-        )?;
-        // Verify-before-gas: reject a settlement that won't land before sponsoring it (ADR-0007).
-        self.dry_run(&tx).await?;
+            nonce,
+        )
+        .map_err(|e| CloseError::Rejected(format!("build batch: {e}")))?;
+        // Verify-before-gas (ADR-0007): the dry-run runs every close, re-checking both seat sigs
+        // and the balance sum, before the settler pays. A poison close aborts here → Rejected → split.
+        self.dry_run(&tx).await.map_err(anyhow_to_close_error)?;
         let sig = self
             .signer
             .sign_transaction(&tx)
-            .map_err(|e| anyhow!("sign close tx: {e}"))?;
-        self.execute(&tx, &sig).await
+            .map_err(|e| CloseError::Rejected(format!("sign batch tx: {e}")))?;
+        self.execute(&tx, &sig).await.map_err(anyhow_to_close_error)
     }
 
     /// Sponsor gas (only) for a user's open/fund transaction (ADR-0009). The `user` is the tx
@@ -515,45 +584,54 @@ impl SuiSettler {
 
     // ---- JSON-RPC reads/execute (compile-verified; e2e-deferred, see module docs) ----
 
+    /// Adapter for all on-chain paths: delegate to the governed client. `with_context`
+    /// (not `anyhow!`) keeps the `RpcError` as the chain *source*, so `submit_close_typed`
+    /// can downcast it to tell a transient 429 (→ 503) from a genuine rejection (→ 422).
     async fn rpc(
         &self,
         method: &str,
         params: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params});
-        let resp: serde_json::Value = self
-            .http
-            .post(&self.rpc_url)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        if let Some(err) = resp.get("error") {
-            return Err(anyhow!("rpc {method}: {err}"));
-        }
-        Ok(resp
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null))
+        self.rpc
+            .call(method, params)
+            .await
+            .with_context(|| format!("rpc {method}"))
     }
 
-    async fn resolve_shared(&self, object_id: &str) -> anyhow::Result<SharedRef> {
-        let r = self
-            .rpc(
-                "sui_getObject",
-                serde_json::json!([object_id, {"showOwner": true}]),
-            )
-            .await?;
-        let isv = r
-            .pointer("/data/owner/Shared/initial_shared_version")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow!("object {object_id} is not a shared tunnel: {r}"))?;
-        Ok(SharedRef {
-            id: Address::from_str(object_id).context("tunnel id")?,
-            initial_shared_version: isv,
-        })
+    /// Resolve many tunnels' shared refs in ONE round-trip per ≤50-id chunk via
+    /// `sui_multiGetObjects` (ADR-0029) — so a K-close batch costs ~K/50 reads, not K. Returns refs
+    /// in the same order as `ids`. `initial_shared_version` is immutable for a shared object, so this
+    /// is the only per-settle object read the batch path makes.
+    async fn resolve_shared_many(&self, ids: &[String]) -> anyhow::Result<Vec<SharedRef>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(50) {
+            let r = self
+                .rpc(
+                    "sui_multiGetObjects",
+                    serde_json::json!([chunk, {"showOwner": true}]),
+                )
+                .await?;
+            let arr = r
+                .as_array()
+                .ok_or_else(|| anyhow!("multiGetObjects did not return an array: {r}"))?;
+            anyhow::ensure!(
+                arr.len() == chunk.len(),
+                "multiGetObjects returned {} objects for {} ids",
+                arr.len(),
+                chunk.len()
+            );
+            for (obj, id) in arr.iter().zip(chunk) {
+                let isv = obj
+                    .pointer("/data/owner/Shared/initial_shared_version")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| anyhow!("object {id} is not a shared tunnel: {obj}"))?;
+                out.push(SharedRef {
+                    id: Address::from_str(id).context("tunnel id")?,
+                    initial_shared_version: isv,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Resolve an OWNED object's current (version, digest) for a version-pinned PTB input. Used for
@@ -738,79 +816,72 @@ pub fn spawn_event_indexer(state: crate::state::SharedState) {
     });
 }
 
-/// PURE core: build the `close_cooperative_with_root` PTB. Arg order matches the Move
-/// signature exactly: tunnel, a_balance, b_balance, sig_a, sig_b, timestamp, transcript_root,
-/// clock. The clock SharedRef is constructed internally from the well-known 0x6 address.
-///
-/// Uses SIP-58 address-balance gas: `try_build` requires ≥1 gas object, so a zero-value
-/// placeholder is added to pass that check, then cleared before returning. The caller must
-/// sign the returned tx before use — clearing before signing is required since the sig covers
-/// `gas_payment`. Unit-tested.
-/// A stable per-tunnel nonce for the `ValidDuring` expiration: the low 4 bytes of the tunnel id.
-/// Exactly one cooperative close per tunnel, so this is unique per settlement.
-fn nonce_from_tunnel(tunnel_id: &str) -> u32 {
-    let h = tunnel_id.trim_start_matches("0x");
-    let tail = &h[h.len().saturating_sub(8)..];
-    u32::from_str_radix(tail, 16).unwrap_or(0)
-}
-
-#[allow(clippy::too_many_arguments)] // mirrors the Move close-with-root entry's parameter list
-fn build_close_tx(
+/// PURE core (ADR-0029): build ONE PTB with K `close_cooperative_with_root` calls — the
+/// fleet-scale lever. Each call is independent (distinct shared tunnel + its own seat sigs as
+/// `vector<u8>` args), the settler is the sole signer + SIP-58 gas payer, and the clock is one
+/// shared input shared by all calls. Gas scales with K (capped at the protocol max). `nonce` is
+/// per-batch: each PTB (including a split-retry sub-batch) gets a distinct one so the SIP-58
+/// `ValidDuring` withdrawal can't be replayed. `tunnels[i]` must be the shared ref for `closes[i]`.
+#[allow(clippy::too_many_arguments)]
+fn build_close_batch_tx(
     package_id: Address,
-    coin_type: TypeTag,
+    coin_type: &TypeTag,
     sender: Address,
-    args: &CloseArgs,
-    tunnel: &SharedRef,
+    closes: &[CloseArgs],
+    tunnels: &[SharedRef],
     gas_price: u64,
     epoch: u64,
     chain: Digest,
     nonce: u32,
 ) -> anyhow::Result<Transaction> {
+    anyhow::ensure!(!closes.is_empty(), "empty batch");
     anyhow::ensure!(
-        args.transcript_root.len() == 32,
-        "transcript_root must be 32 bytes, got {}",
-        args.transcript_root.len()
+        closes.len() == tunnels.len(),
+        "closes/tunnels length mismatch: {} vs {}",
+        closes.len(),
+        tunnels.len()
     );
     let mut tb = TransactionBuilder::new();
-    let tunnel_arg = tb.object(ObjectInput::shared(
-        tunnel.id,
-        tunnel.initial_shared_version,
-        true,
-    ));
-    // Move params sig_a/sig_b/transcript_root are `vector<u8>`: use `pure(&Vec<u8>)`, which
-    // BCS-encodes them length-prefixed. `pure_bytes` inserts RAW bytes (no length prefix) →
-    // the node rejects them as InvalidBCSBytes. (Caught only by the localnet e2e, not the
-    // build-time `is_ok()` unit test.)
-    let a = tb.pure(&args.party_a_balance);
-    let b = tb.pure(&args.party_b_balance);
-    let sa = tb.pure(&args.sig_a);
-    let sb = tb.pure(&args.sig_b);
-    let ts = tb.pure(&args.timestamp);
-    let root = tb.pure(&args.transcript_root);
+    // One shared, read-only clock input referenced by every call in the batch.
     let clock_arg = tb.object(ObjectInput::shared(
         Address::from_str(CLOCK_ADDRESS).expect("static clock id"),
         1,
         false,
     ));
+    for (args, tunnel) in closes.iter().zip(tunnels.iter()) {
+        anyhow::ensure!(
+            args.transcript_root.len() == 32,
+            "transcript_root must be 32 bytes, got {}",
+            args.transcript_root.len()
+        );
+        let tunnel_arg = tb.object(ObjectInput::shared(
+            tunnel.id,
+            tunnel.initial_shared_version,
+            true,
+        ));
+        let a = tb.pure(&args.party_a_balance);
+        let b = tb.pure(&args.party_b_balance);
+        let sa = tb.pure(&args.sig_a);
+        let sb = tb.pure(&args.sig_b);
+        let ts = tb.pure(&args.timestamp);
+        let root = tb.pure(&args.transcript_root);
+        let func = Function::new(
+            package_id,
+            Identifier::new("tunnel").context("module ident")?,
+            Identifier::new("close_cooperative_with_root").context("fn ident")?,
+        )
+        .with_type_args(vec![coin_type.clone()]);
+        tb.move_call(func, vec![tunnel_arg, a, b, sa, sb, ts, root, clock_arg]);
+    }
 
-    let func = Function::new(
-        package_id,
-        Identifier::new("tunnel").context("module ident")?,
-        Identifier::new("close_cooperative_with_root").context("fn ident")?,
-    )
-    .with_type_args(vec![coin_type]);
-    tb.move_call(func, vec![tunnel_arg, a, b, sa, sb, ts, root, clock_arg]);
-
-    // Placeholder satisfies try_build's non-empty-gas check (builder.rs:676).
     tb.add_gas_objects([ObjectInput::owned(Address::ZERO, 1, Digest::ZERO)]);
     tb.set_sender(sender);
-    tb.set_gas_budget(GAS_BUDGET);
+    // Scale the budget with batch size, capped at the protocol's per-tx ceiling.
+    let budget = GAS_BUDGET
+        .saturating_mul(closes.len() as u64)
+        .min(MAX_BATCH_GAS_BUDGET);
+    tb.set_gas_budget(budget);
     tb.set_gas_price(gas_price.max(1));
-    // SIP-58 address-balance gas REQUIRES a `ValidDuring` expiration: with no gas-coin object
-    // versions to mutate, the epoch-bounded window + nonce is what gives the FundsWithdrawal its
-    // replay protection. Without it the node rejects the withdrawal ("Invalid withdraw
-    // reservation"). min_epoch == max_epoch == current epoch (sui-sdk-types: "must equal current
-    // epoch"); `chain` is the genesis digest (cross-chain replay guard).
     tb.set_expiration(TransactionExpiration::ValidDuring {
         min_epoch: Some(epoch),
         max_epoch: Some(epoch),
@@ -819,8 +890,9 @@ fn build_close_tx(
         chain,
         nonce,
     });
-    let mut tx = tb.try_build().map_err(|e| anyhow!("build close tx: {e}"))?;
-    // Empty objects => FundsWithdrawal from sender's address balance (SIP-58).
+    let mut tx = tb
+        .try_build()
+        .map_err(|e| anyhow!("build batch close tx: {e}"))?;
     tx.gas_payment.objects.clear();
     Ok(tx)
 }
@@ -1212,75 +1284,77 @@ mod tests {
         }
     }
 
-    fn tunnel_ref() -> SharedRef {
-        SharedRef {
-            id: Address::from_str("0x2").unwrap(),
-            initial_shared_version: 3,
-        }
+    fn close_and_ref(addr: &str) -> (CloseArgs, SharedRef) {
+        let mut c = args_with_root(32);
+        c.tunnel_id = addr.to_string();
+        (
+            c,
+            SharedRef {
+                id: Address::from_str(addr).unwrap(),
+                initial_shared_version: 3,
+            },
+        )
     }
 
-    // The PTB must build for a well-formed settlement: a 32-byte root, both sigs, the
-    // coin type arg. This pins the write-path wiring against the Move arg order.
+    // The batch PTB carries exactly one `close_cooperative_with_root` call per settlement (the
+    // fleet-scale lever: K closes in one tx) and scales the gas budget with K — pinned against the
+    // Move arg order via a successful build.
     #[test]
-    fn build_close_tx_builds_for_valid_settlement() {
-        let tx = build_close_tx(
+    fn build_close_batch_tx_one_move_call_per_close_and_scales_gas() {
+        let (ca, ra) = close_and_ref("0x11");
+        let (cb, rb) = close_and_ref("0x22");
+        let (cc, rc) = close_and_ref("0x33");
+        let tx = build_close_batch_tx(
             Address::from_str("0xabc").unwrap(),
-            "0x2::sui::SUI".parse().unwrap(),
-            Address::ZERO,
-            &args_with_root(32),
-            &tunnel_ref(),
+            &"0x2::sui::SUI".parse().unwrap(),
+            Address::from_str("0x9").unwrap(),
+            &[ca, cb, cc],
+            &[ra, rb, rc],
             1000,
             1135,
             Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
-            0,
+            7,
+        )
+        .expect("batch builds");
+        let move_calls = match &tx.kind {
+            TransactionKind::ProgrammableTransaction(ptb) => ptb
+                .commands
+                .iter()
+                .filter(|c| matches!(c, Command::MoveCall(_)))
+                .count(),
+            _ => 0,
+        };
+        assert_eq!(move_calls, 3, "one close call per settlement");
+        assert!(
+            tx.gas_payment.objects.is_empty(),
+            "SIP-58 address-balance gas"
         );
-        assert!(tx.is_ok(), "valid settlement should build: {:?}", tx.err());
+        assert_eq!(
+            tx.gas_payment.budget,
+            GAS_BUDGET * 3,
+            "gas budget scales with batch size"
+        );
     }
 
-    // The Move aborts on a non-32-byte root (EInvalidTranscriptRoot); reject it before
-    // spending gas, with a clear error rather than an opaque on-chain failure.
+    // A closes/refs length mismatch is a programmer error, caught before build, never a malformed tx.
     #[test]
-    fn build_close_tx_rejects_wrong_root_length() {
-        let err = build_close_tx(
+    fn build_close_batch_tx_rejects_len_mismatch() {
+        let (ca, ra) = close_and_ref("0x11");
+        let (_cb, rb) = close_and_ref("0x22");
+        let err = build_close_batch_tx(
             Address::ZERO,
-            "0x2::sui::SUI".parse().unwrap(),
+            &"0x2::sui::SUI".parse().unwrap(),
             Address::ZERO,
-            &args_with_root(31),
-            &tunnel_ref(),
+            &[ca],
+            &[ra, rb],
             1000,
             1135,
             Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
-            0,
+            1,
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("32 bytes"), "got: {err}");
-    }
-
-    // Address-balance gas (SIP-58): the built close tx must carry an EMPTY gas payment so
-    // the node charges gas as a FundsWithdrawal from the settler's SUI balance — no owned
-    // gas coin to lock, so concurrent closes never equivocate.
-    #[test]
-    fn build_close_tx_uses_address_balance_gas() {
-        let sender = Address::from_str("0x9").unwrap();
-        let tx = build_close_tx(
-            Address::from_str("0xabc").unwrap(),
-            "0x2::sui::SUI".parse().unwrap(),
-            sender,
-            &args_with_root(32),
-            &tunnel_ref(),
-            1000,
-            1135,
-            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
-            0,
-        )
-        .expect("builds");
-        assert!(
-            tx.gas_payment.objects.is_empty(),
-            "gas payment must be empty (address-balance)"
-        );
-        assert_eq!(tx.gas_payment.owner, sender);
-        assert_eq!(tx.gas_payment.budget, GAS_BUDGET);
+        assert!(err.contains("length mismatch"), "got: {err}");
     }
 
     fn admin_cap_ref() -> OwnedRef {
@@ -1990,12 +2064,13 @@ mod tests {
     fn ed25519_signature_serializes_to_97_byte_sui_format() {
         let b64 = base64::engine::general_purpose::STANDARD;
         let sk = load_ed25519(&b64.encode([7u8; 32])).unwrap();
-        let tx = build_close_tx(
+        let (ca, ra) = close_and_ref("0x2");
+        let tx = build_close_batch_tx(
             Address::from_str("0xabc").unwrap(),
-            "0x2::sui::SUI".parse().unwrap(),
+            &"0x2::sui::SUI".parse().unwrap(),
             Address::ZERO,
-            &args_with_root(32),
-            &tunnel_ref(),
+            &[ca],
+            &[ra],
             1000,
             1135,
             Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),

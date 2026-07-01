@@ -364,6 +364,9 @@ fn balance(state: &PokerState, by: Seat) -> u64 {
     }
 }
 
+/// Chips `by` may still put in this hand: the EFFECTIVE stack (the smaller of the two balances,
+/// since heads-up you can't wager more than the opponent can match) minus what `by` already
+/// committed. Bets/calls are validated against this, so a strategy must size to it too.
 pub(crate) fn available_for(state: &PokerState, by: Seat) -> u64 {
     let effective = state.balance_a.min(state.balance_b);
     effective.saturating_sub(total_bet(state, by))

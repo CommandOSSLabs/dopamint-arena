@@ -609,12 +609,17 @@ where
 
         let play_ns = play_started.elapsed().as_nanos();
         let final_balances = seat.balances();
-        // Chain-backed tunnels can reject close timestamps before their on-chain
-        // creation time; local anchors have no floor and keep the move-loop clock.
-        let timestamp = if moves == 0 {
-            next_timestamp()
-        } else {
-            last_timestamp.max(min_timestamp)
+        // The v2 cooperative close signs `timestamp` into the settlement, and the remote (browser)
+        // half signs `timestamp = tunnel.created_at` (it reads it on-chain). So when the anchor
+        // surfaces the on-chain createdAt we MUST sign that EXACT value, or the two co-signing halves
+        // commit to different bytes and never combine (`combineSettlementWithRoot` fails). Signing
+        // createdAt also satisfies the on-chain floor (`timestamp >= tunnel.created_at`). Anchors that
+        // don't surface it (in-memory self-play) fall back to the move-loop clock — both seats run
+        // this driver there, so they agree regardless.
+        let timestamp = match opened.created_at_ms {
+            Some(created_at) => created_at,
+            None if moves == 0 => next_timestamp(),
+            None => last_timestamp,
         };
         let settlement = Settlement {
             tunnel_id: seat.tunnel_id().to_string(),
@@ -1932,8 +1937,14 @@ mod tests {
         assert!(requests.iter().all(|r| r.final_nonce == 42));
     }
 
+    // The v2 cooperative close signs `timestamp` into the settlement, and the browser half signs
+    // `timestamp = tunnel.created_at` (it reads it on-chain). When the anchor surfaces the on-chain
+    // createdAt the driver MUST sign that EXACT value — not merely a value >= it — or the two
+    // co-signing halves commit to different bytes and `combineSettlementWithRoot` never combines.
+    // The move-loop clock (20_000) is set past createdAt (10_000) to prove we sign createdAt, not
+    // the last move's timestamp.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn settlement_timestamp_respects_opened_tunnel_creation_time() {
+    async fn settlement_timestamp_equals_opened_tunnel_creation_time() {
         let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
         let pk_a = keypair_from_secret(&secret_a).public_key();
@@ -1969,13 +1980,13 @@ mod tests {
             NullTranscriptRecorder,
         );
 
-        let (out_a, out_b) = tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1));
+        let (out_a, out_b) = tokio::join!(driver_a.run(10, || 20_000), driver_b.run(10, || 20_000));
         out_a.unwrap();
         out_b.unwrap();
 
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
-        assert!(requests.iter().all(|r| r.timestamp >= 10_000));
+        assert!(requests.iter().all(|r| r.timestamp == 10_000));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
