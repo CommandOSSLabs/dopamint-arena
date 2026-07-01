@@ -15,7 +15,7 @@ export function engineEnabled(): boolean {
   return true;
 }
 
-/** Per-window game worker + one shared SOCKET worker (ADR-0029 Phase 2) instead of the single shared
+/** Per-window game worker + one shared SOCKET worker (ADR-0030 Phase 2) instead of the single shared
  *  hub: spreads co-sign across cores + isolates a game's fault to its worker, keeping the one-relay-
  *  socket invariant. AUTO-ON for High/Max device tiers — there the `deviceTier` window cap is a memory
  *  budget that already assumes per-window isolates, and enough cores exist to actually parallelize, so

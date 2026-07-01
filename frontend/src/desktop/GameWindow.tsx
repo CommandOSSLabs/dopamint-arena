@@ -77,7 +77,7 @@ export function GameWindow({
   className?: string;
   children: ReactNode;
 }) {
-  // Render virtualization (ADR-0029): report on-screen/off-screen to the engine so an off-screen
+  // Render virtualization (ADR-0030): report on-screen/off-screen to the engine so an off-screen
   // window (hidden workspace `display:none`, minimized, or scrolled away — all collapse to a single
   // IntersectionObserver signal) keeps its match running in the worker but stops painting. `domId`
   // is the engine window id (WorkspaceFloor passes `item.id` to both `domId` and `windowId`).

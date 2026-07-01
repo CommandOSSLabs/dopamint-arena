@@ -110,7 +110,7 @@ export interface PvpChannel {
   ): void;
 }
 
-/** The relay surface a match session drives (ADR-0029). `MpClient` implements it directly for the
+/** The relay surface a match session drives (ADR-0030). `MpClient` implements it directly for the
  *  shared-hub path; the pool's `RemoteMpClient` implements the same over a MessagePort. Kept narrow
  *  (exactly what `PvpMatchSession` calls) so a session runs unchanged against either transport. */
 export interface RelayClient {

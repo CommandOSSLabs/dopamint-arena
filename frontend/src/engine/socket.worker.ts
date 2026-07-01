@@ -1,5 +1,5 @@
 /**
- * The shared SOCKET worker (ADR-0029, Phase 2). Owns the ONE relay {@link MpClient} — a single
+ * The shared SOCKET worker (ADR-0030, Phase 2). Owns the ONE relay {@link MpClient} — a single
  * WebSocket for every PvP window — while each game runs in its own game worker. `engineClient` posts
  * `{type:"config"}` once, then `{type:"attach"}` transferring one end of a `MessageChannel` per game
  * worker; each port gets a {@link SocketHost} that bridges that worker's {@link RemoteMpClient} to the

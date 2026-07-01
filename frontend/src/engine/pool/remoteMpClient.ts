@@ -1,5 +1,5 @@
 /**
- * Game-worker-side proxy of the socket worker's {@link MpClient} (ADR-0029, Phase 2). Implements
+ * Game-worker-side proxy of the socket worker's {@link MpClient} (ADR-0030, Phase 2). Implements
  * EXACTLY the surface {@link PvpMatchSession} uses — `quickMatch` / `joinMatch` / `channel` /
  * `announceTunnel` / `releaseMatch` / `resumeMatch` — by forwarding over a private `MessagePort`;
  * the socket worker holds the real socket and demuxes inbound frames back by matchId. Because the

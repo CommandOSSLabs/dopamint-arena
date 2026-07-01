@@ -1,5 +1,5 @@
 /**
- * Per-window GAME worker (ADR-0029, Phase 2). Hosts exactly ONE {@link PvpMatchSession}; `engineClient`
+ * Per-window GAME worker (ADR-0030, Phase 2). Hosts exactly ONE {@link PvpMatchSession}; `engineClient`
  * spawns one of these per PvP window so co-signing spreads across cores and a game's fault is isolated
  * to its own isolate. Its relay client is a {@link RemoteMpClient} over a `MessagePort` to the shared
  * socket worker (transferred in via `init`), so the session — which only touches the narrow

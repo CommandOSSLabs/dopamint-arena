@@ -1,4 +1,4 @@
-# 0029 — Scale live game windows: visibility-gated render + socket/game-worker split
+# 0030 — Scale live game windows: visibility-gated render + socket/game-worker split
 
 - **Status**: Proposed
 - **Date**: 2026-07-01

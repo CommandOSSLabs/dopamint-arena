@@ -40,7 +40,7 @@ const IDLE_SNAPSHOT: MatchSnapshot = {
 interface PvpWindow {
   snap: MatchSnapshot;
   listeners: Set<() => void>;
-  /** Render-virtualization gate (ADR-0029): the match always runs in the worker, but a window that
+  /** Render-virtualization gate (ADR-0030): the match always runs in the worker, but a window that
    *  is off-screen (hidden workspace, minimized, scrolled away) stores its latest snapshot without
    *  notifying React — so no reconcile/paint — and is excluded from the shared render budget. */
   visible: boolean;
@@ -70,7 +70,7 @@ interface SnapThrottle {
 const snapThrottle = new Map<string, SnapThrottle>();
 
 function renderIntervalMs(): number {
-  // Only VISIBLE windows spend the shared render budget (ADR-0029): off-screen matches keep running
+  // Only VISIBLE windows spend the shared render budget (ADR-0030): off-screen matches keep running
   // in the worker but don't paint, so on-screen boards aren't throttled paying for hidden ones.
   let n = 0;
   for (const w of pvpWindows.values()) if (w.visible) n++;
@@ -86,7 +86,7 @@ function deliverSnapshot(
   store: (s: MatchSnapshot) => void,
 ): void {
   store(snap);
-  // Off-screen (ADR-0029): the latest snapshot is stored (getSnapshot stays fresh for the flush on
+  // Off-screen (ADR-0030): the latest snapshot is stored (getSnapshot stays fresh for the flush on
   // re-show), but skip the React notify entirely — no reconcile, no paint — while the match runs on.
   if (pvpWindows.get(windowId)?.visible === false) return;
   let t = snapThrottle.get(windowId);
@@ -184,7 +184,7 @@ function ensurePvpWindow(windowId: string): PvpWindow {
   return w;
 }
 
-// --- Pool lane: one shared socket worker + one game worker per window (ADR-0029, ?enginepool) ------
+// --- Pool lane: one shared socket worker + one game worker per window (ADR-0030, ?enginepool) ------
 // Opt-in alternative to the shared hub: co-sign runs in a per-window isolate (parallel across cores,
 // fault-isolated), while ONE socket worker keeps the single-relay-socket invariant. A game worker's
 // `mp` is a RemoteMpClient proxying the narrow relay surface over a private MessagePort to the socket
@@ -328,7 +328,7 @@ export const engineClient = {
     return pvpWindows.get(windowId)?.snap ?? IDLE_SNAPSHOT;
   },
 
-  /** Render-virtualization signal from the desktop (ADR-0029): report whether a window is on-screen.
+  /** Render-virtualization signal from the desktop (ADR-0030): report whether a window is on-screen.
    *  Off-screen keeps the match running in the worker but stops main-thread render; becoming visible
    *  flushes the latest stored snapshot once so the UI catches up. No-op for unknown ids (the store
    *  slot is created by `subscribe` on mount, which runs before the IntersectionObserver's callback). */

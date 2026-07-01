@@ -1,5 +1,5 @@
 /**
- * Socket-worker-side bridge for ONE game worker's port (ADR-0029, Phase 2). Translates that game
+ * Socket-worker-side bridge for ONE game worker's port (ADR-0030, Phase 2). Translates that game
  * worker's {@link RemoteMpClient} calls onto the shared {@link MpClient} — the single relay socket —
  * and routes THIS match's inbound engine frames + peer messages back down the port. One SocketHost
  * per connected game worker; the shared `MpClient` already multiplexes many matches over one socket

@@ -1,5 +1,5 @@
 /**
- * Message protocol for the socket-worker ↔ game-worker split (ADR-0029, Phase 2). The socket worker
+ * Message protocol for the socket-worker ↔ game-worker split (ADR-0030, Phase 2). The socket worker
  * owns the single relay {@link MpClient}; each game worker drives ONE match and its `mp` is a
  * {@link RemoteMpClient} that forwards these messages over a private `MessagePort`. Engine frames
  * (co-signed bytes) and peer messages cross verbatim — structured-cloned, never re-encoded — so
