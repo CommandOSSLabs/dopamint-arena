@@ -222,7 +222,12 @@ async fn drive_arena_bot(
         created_at_ms,
         "arena bot entering play (created_at read, not blocking)"
     );
-    let anchor = RelayBridgedAnchor::new(tunnel_id.to_owned(), conn, match_id.to_owned(), created_at_ms);
+    let anchor = RelayBridgedAnchor::new(
+        tunnel_id.to_owned(),
+        conn,
+        match_id.to_owned(),
+        created_at_ms,
+    );
     let moves = play_game(game, channel, anchor, match_key, opponent_wallet).await?;
     tracing::info!(
         match_id = %match_id,
