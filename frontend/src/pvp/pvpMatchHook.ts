@@ -551,11 +551,8 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
         });
         await mp.connect(); // opening handshake carries resume{matchId}
-        // Re-send any restored in-flight move: `restoreInto` seats the pending WITHOUT sending, and
-        // against a co-located bot the resync handshake never fires (the bot has no wallet presence),
-        // so nothing else re-delivers it. Idempotent at the peer (it dedupes by nonce), and a no-op
-        // when there is no pending — so this is safe on the human-vs-human path too.
-        tunnel.resendPending();
+        // A restored in-flight move is re-delivered by attachResume's resume handler (shared by all
+        // hooks), so no explicit resendPending is needed here.
         try {
           this.maybePropose(); // kick a due move
         } catch {
