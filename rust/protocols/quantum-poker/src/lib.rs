@@ -364,6 +364,9 @@ fn balance(state: &PokerState, by: Seat) -> u64 {
     }
 }
 
+/// Chips `by` may still put in this hand: the EFFECTIVE stack (the smaller of the two balances,
+/// since heads-up you can't wager more than the opponent can match) minus what `by` already
+/// committed. Bets/calls are validated against this, so a strategy must size to it too.
 pub(crate) fn available_for(state: &PokerState, by: Seat) -> u64 {
     let effective = state.balance_a.min(state.balance_b);
     effective.saturating_sub(total_bet(state, by))
@@ -929,6 +932,10 @@ impl Protocol for QuantumPoker {
         state.phase == PokerPhase::Done
     }
 
+    fn can_gracefully_close(&self, state: &Self::State) -> bool {
+        matches!(state.phase, PokerPhase::HandOver | PokerPhase::Done)
+    }
+
     fn sample_move(
         &self,
         state: &Self::State,
@@ -1327,6 +1334,19 @@ mod tests {
         assert!(protocol
             .encode_state(&state)
             .starts_with(b"sui_tunnel::proto::quantum_poker.v2"));
+    }
+
+    #[test]
+    fn hand_over_is_graceful_close_boundary() {
+        let protocol = QuantumPoker::new(2);
+        let mut state = protocol.initial_state(&ctx());
+
+        assert!(!protocol.can_gracefully_close(&state));
+        state.phase = PokerPhase::HandOver;
+        assert!(protocol.can_gracefully_close(&state));
+        assert!(!protocol.is_terminal(&state));
+        state.phase = PokerPhase::Done;
+        assert!(protocol.can_gracefully_close(&state));
     }
 
     #[test]

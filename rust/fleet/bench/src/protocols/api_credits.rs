@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -14,7 +14,8 @@ pub(crate) async fn play(
     sui_context: Option<&SuiSponsoredBenchContext>,
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
-    let cost_per_call = 10;
+    let initial_balance = current_initial_balance();
+    let cost_per_call = 1;
     play_with_strategies(
         ApiCredits::new(cost_per_call).expect("valid api credit cost"),
         ApiCreditsStrategy::new(cost_per_call).expect("valid api credit strategy"),
@@ -25,8 +26,8 @@ pub(crate) async fn play(
         card_seed.unwrap_or(0),
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

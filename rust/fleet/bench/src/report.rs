@@ -4,7 +4,7 @@
 use crate::cli::{AnchorMode, BenchOpts, TranscriptRecorderMode};
 use crate::humanize;
 use crate::resources::ResourceSummary;
-use crate::swarm::SwarmOutcome;
+use crate::swarm::{SuiPtbFlushReasonCounts, SwarmOutcome};
 use tunnel_telemetry::{Distribution, StageId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +70,7 @@ fn run_label(anchor_mode: AnchorMode) -> &'static str {
 
 pub fn format_resources(r: &ResourceSummary) -> String {
     format!(
-        "cpu avg={:.1} cores ({:.0}%) peak={:.1} cores ({:.0}%), rss avg={}MB peak={}MB, samples={}",
+        "cpu avg={:.1} cores (host {:.0}%) peak={:.1} cores (host {:.0}%), rss avg={}MB peak={}MB, samples={}",
         r.cpu_cores_avg,
         r.cpu_pct_avg,
         r.cpu_cores_peak,
@@ -97,14 +97,14 @@ pub fn setup_overhead_pct(o: &SwarmOutcome) -> f64 {
     overhead / o.total_ns_total as f64 * 100.0
 }
 
-/// Wall move-TPS extrapolated to gameplay-only by scaling out the open/settle
-/// fraction (total / play); falls back to wall TPS when no play timing exists.
+/// Move throughput during the lifecycle's move-production window; falls back to
+/// the wall window for legacy callers that have not populated the lifecycle
+/// window yet.
 pub fn play_only_tps(o: &SwarmOutcome) -> f64 {
-    let tps = move_tps(o.moves, o.elapsed_ms);
-    if o.play_ns_total == 0 {
-        tps
+    if o.move_window_elapsed_ms == 0 {
+        move_tps(o.moves, o.elapsed_ms)
     } else {
-        tps * (o.total_ns_total as f64 / o.play_ns_total as f64)
+        move_tps(o.moves, o.move_window_elapsed_ms)
     }
 }
 
@@ -129,6 +129,60 @@ fn tps_distribution_line(label: &str, d: &Distribution) -> Option<String> {
         "  - {label}: p50={:.1} p90={:.1} avg={:.1} peak={:.1}",
         d.p50, d.p90, d.avg, d.peak,
     ))
+}
+
+fn ptb_batch_line(label: &str, count: u64, d: &Distribution) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    Some(format!(
+        "  - {label}: ptbs={} batch-size p50={:.1} p90={:.1} avg={:.1} peak={:.1}",
+        humanize::count(count),
+        d.p50,
+        d.p90,
+        d.avg,
+        d.peak,
+    ))
+}
+
+fn ptb_flush_reason_line(label: &str, reasons: SuiPtbFlushReasonCounts) -> Option<String> {
+    let mut parts = Vec::new();
+    if reasons.immediate > 0 {
+        parts.push(format!("immediate={}", humanize::count(reasons.immediate)));
+    }
+    if reasons.full > 0 {
+        parts.push(format!("full={}", humanize::count(reasons.full)));
+    }
+    if reasons.debounce > 0 {
+        parts.push(format!("debounce={}", humanize::count(reasons.debounce)));
+    }
+    if reasons.shutdown > 0 {
+        parts.push(format!("shutdown={}", humanize::count(reasons.shutdown)));
+    }
+    if reasons.retry_split > 0 {
+        parts.push(format!(
+            "retry-split={}",
+            humanize::count(reasons.retry_split)
+        ));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!("  - {label} flush-reasons {}", parts.join(" ")))
+}
+
+fn tx_digest_line(label: &str, tx_digests: &[String]) -> Option<String> {
+    if tx_digests.is_empty() {
+        return None;
+    }
+    Some(format!("  - {label} txDigests={}", tx_digests.join(", ")))
+}
+
+fn metric_legend(style: RenderStyle) -> String {
+    format!(
+        "\n{}\n  - wall move-TPS includes open, play, settle, and chain wait time\n  - play-only move-TPS uses only the active move-production window\n  - open-rate/close-rate use active open/settle windows, not full elapsed\n  - setup overhead is non-play tunnel time as a share of tunnel e2e time\n  - Sui PTB batch-size counts logical tunnel ops after seat coalescing\n",
+        style.section("Metric legend"),
+    )
 }
 
 /// Headline metrics for one protocol's bench run, collected across a
@@ -254,7 +308,7 @@ pub fn render_with_style(
 ) -> String {
     let secs = simple.elapsed_ms as f64 / 1000.0;
     let mut out = format!(
-        "{}\n{}\n\n{}\n  - moves              {}\n  - tunnels            {}\n  - wall move-TPS      {:.1}\n  - play-only move-TPS {:.1}\n\n{}\n  - opened={}  closed={}  failed={}  aborted={}  open-rate={:.1}/s  close-rate={:.1}/s\n  - moves/tunnel p50={:.1} p90={:.1} avg={:.1} peak={:.1}\n",
+        "{}\n{}\n\n{}\n  - moves              {}\n  - tunnels            {}\n  - wall move-TPS      {:.1}\n  - play-only move-TPS {:.1}\n\n{}\n  - opened={}  closed={}  failed={}  aborted={}  open-rate={:.1}/s over {}  close-rate={:.1}/s over {}\n  - moves/tunnel p50={:.1} p90={:.1} avg={:.1} peak={:.1}\n",
         style.title(format!(
             "{} fleet-bench {protocol_id}",
             run_label(opts.anchor_mode)
@@ -276,8 +330,10 @@ pub fn render_with_style(
         humanize::count(simple.tunnels_settled),
         humanize::count(simple.tunnels_failed),
         humanize::count(simple.tunnels_aborted),
-        rate_per_sec(simple.tunnels_opened, simple.elapsed_ms),
-        rate_per_sec(simple.tunnels_settled, simple.elapsed_ms),
+        rate_per_sec(simple.tunnels_opened, simple.open_active_elapsed_ms),
+        humanize::dur_ns(simple.open_active_elapsed_ms as f64 * 1_000_000.0),
+        rate_per_sec(simple.tunnels_settled, simple.settle_active_elapsed_ms),
+        humanize::dur_ns(simple.settle_active_elapsed_ms as f64 * 1_000_000.0),
         simple.moves_dist.p50,
         simple.moves_dist.p90,
         simple.moves_dist.avg,
@@ -329,6 +385,44 @@ pub fn render_with_style(
             }
         }
     }
+    if simple.sui_ptb_metrics.open_count > 0 || simple.sui_ptb_metrics.settle_count > 0 {
+        out.push_str(&format!("\n{}\n", style.section("Sui PTBs")));
+        if let Some(line) = ptb_batch_line(
+            "open",
+            simple.sui_ptb_metrics.open_count,
+            &simple.sui_ptb_metrics.open_batch_size,
+        ) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = ptb_flush_reason_line("open", simple.sui_ptb_metrics.open_flush_reasons)
+        {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = tx_digest_line("open", &simple.sui_ptb_metrics.open_tx_digests) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = ptb_batch_line(
+            "settle",
+            simple.sui_ptb_metrics.settle_count,
+            &simple.sui_ptb_metrics.settle_batch_size,
+        ) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) =
+            ptb_flush_reason_line("settle", simple.sui_ptb_metrics.settle_flush_reasons)
+        {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = tx_digest_line("settle", &simple.sui_ptb_metrics.settle_tx_digests) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
     if simple.gas_funder_mist > 0 || simple.gas_sponsor_mist > 0 {
         out.push_str(&format!(
             "\n{}\n  - gas funder={:.6} SUI sponsor={:.6} SUI\n",
@@ -377,6 +471,8 @@ pub fn render_with_style(
         res.basis,
     ));
 
+    out.push_str(&metric_legend(style));
+
     out
 }
 
@@ -393,6 +489,8 @@ mod tests {
         BenchOpts {
             workers,
             duration_secs: 15,
+            moves: None,
+            initial_balance: crate::protocols::DEFAULT_BALANCE,
             tunnel_concurrency: ConcurrencyMode::Fixed(64),
             per_move_latency: false,
             trace: false,
@@ -403,6 +501,7 @@ mod tests {
             anchor_mode: AnchorMode::Memory,
             color_mode: ColorMode::Never,
             transcript_recorder: TranscriptRecorderMode::None,
+            heartbeat: None,
             sui_anchor: None,
         }
     }
@@ -422,6 +521,9 @@ mod tests {
             tunnels_opened: tunnels,
             tunnels_claimed: tunnels,
             elapsed_ms: ms,
+            move_window_elapsed_ms: ms,
+            open_active_elapsed_ms: ms,
+            settle_active_elapsed_ms: ms,
             play_ns_total: 0,
             total_ns_total: 0,
             moves_dist: crate::stats::Distribution::default(),
@@ -434,6 +536,7 @@ mod tests {
             gas_funder_mist: 0,
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
+            sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
         }
     }
 
@@ -460,7 +563,7 @@ mod tests {
     fn format_resources_matches_loadbench_shape() {
         assert_eq!(
             format_resources(&res()),
-            "cpu avg=11.2 cores (93%) peak=12.0 cores (100%), rss avg=58MB peak=63MB, samples=30"
+            "cpu avg=11.2 cores (host 93%) peak=12.0 cores (host 100%), rss avg=58MB peak=63MB, samples=30"
         );
     }
 
@@ -496,6 +599,49 @@ mod tests {
     }
 
     #[test]
+    fn render_emits_sui_ptb_metrics() {
+        let mut o = outcome(2000, 20, 3000);
+        o.sui_ptb_metrics = crate::swarm::SuiPtbMetrics {
+            open_count: 2,
+            settle_count: 1,
+            open_batch_size: crate::stats::summarize(&[2.0, 4.0]),
+            settle_batch_size: crate::stats::summarize(&[3.0]),
+            open_flush_reasons: crate::swarm::SuiPtbFlushReasonCounts {
+                full: 1,
+                debounce: 1,
+                ..Default::default()
+            },
+            settle_flush_reasons: crate::swarm::SuiPtbFlushReasonCounts {
+                retry_split: 1,
+                ..Default::default()
+            },
+            open_tx_digests: vec!["openA".into(), "openB".into()],
+            settle_tx_digests: vec!["settleA".into()],
+        };
+
+        let s = render(
+            &opts_with_anchor(AnchorMode::SuiSponsored),
+            "blackjack.v2",
+            &o,
+            &res(),
+        );
+
+        assert!(s.contains("Sui PTBs"), "got:\n{s}");
+        assert!(s.contains("open: ptbs=2 batch-size"), "got:\n{s}");
+        assert!(
+            s.contains("open flush-reasons full=1 debounce=1"),
+            "got:\n{s}"
+        );
+        assert!(s.contains("settle: ptbs=1 batch-size"), "got:\n{s}");
+        assert!(
+            s.contains("settle flush-reasons retry-split=1"),
+            "got:\n{s}"
+        );
+        assert!(s.contains("open txDigests=openA, openB"), "got:\n{s}");
+        assert!(s.contains("settle txDigests=settleA"), "got:\n{s}");
+    }
+
+    #[test]
     fn render_golden_new_metrics() {
         use crate::stats::summarize;
         let o = SwarmOutcome {
@@ -505,6 +651,9 @@ mod tests {
             tunnels_opened: 3,
             tunnels_claimed: 3,
             elapsed_ms: 1000,
+            move_window_elapsed_ms: 1000,
+            open_active_elapsed_ms: 1000,
+            settle_active_elapsed_ms: 1000,
             // 800ms of play time, 1000ms total (20% setup overhead)
             play_ns_total: 800_000_000,
             total_ns_total: 1_000_000_000,
@@ -518,6 +667,7 @@ mod tests {
             gas_funder_mist: 0,
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
+            sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
         };
         let s = render(
             &opts(1, SignerInitMode::PerTunnel),
@@ -527,7 +677,7 @@ mod tests {
         );
         assert!(
             s.contains(
-                "  - opened=3  closed=3  failed=0  aborted=0  open-rate=3.0/s  close-rate=3.0/s"
+                "  - opened=3  closed=3  failed=0  aborted=0  open-rate=3.0/s over 1.0s  close-rate=3.0/s over 1.0s"
             ),
             "got:\n{s}"
         );
@@ -539,8 +689,7 @@ mod tests {
         );
         // (1e9 - 8e8) / 1e9 * 100 = 20.0%
         assert!(s.contains("  - setup overhead 20.0%"), "got:\n{s}");
-        // play-only TPS = 429.0 * (1e9 / 8e8) = 429.0 * 1.25 = 536.25
-        assert!(s.contains("  - play-only move-TPS 536."), "got:\n{s}");
+        assert!(s.contains("  - play-only move-TPS 429.0"), "got:\n{s}");
         assert!(
             s.contains("  - play-loop p50=267.0ms p90=267.0ms avg=266.7ms peak=267.0ms"),
             "got:\n{s}"
@@ -553,6 +702,67 @@ mod tests {
     }
 
     #[test]
+    fn render_emits_metric_legend() {
+        let s = render(
+            &opts(1, SignerInitMode::PerTunnel),
+            "blackjack.bet.v1",
+            &outcome(100, 10, 1000),
+            &res(),
+        );
+
+        assert!(s.contains("Metric legend\n"), "got:\n{s}");
+        assert!(
+            s.contains("wall move-TPS includes open, play, settle, and chain wait time"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("play-only move-TPS uses only the active move-production window"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("open-rate/close-rate use active open/settle windows"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("Sui PTB batch-size counts logical tunnel ops after seat coalescing"),
+            "got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn render_rates_use_lifecycle_active_windows() {
+        let mut o = outcome(100, 10, 10_000);
+        o.tunnels_opened = 4;
+        o.tunnels_settled = 10;
+        o.open_active_elapsed_ms = 2_000;
+        o.settle_active_elapsed_ms = 5_000;
+
+        let s = render(
+            &opts(1, SignerInitMode::PerTunnel),
+            "blackjack.bet.v1",
+            &o,
+            &res(),
+        );
+
+        assert!(
+            s.contains(
+                "  - opened=4  closed=10  failed=0  aborted=0  open-rate=2.0/s over 2.0s  close-rate=2.0/s over 5.0s"
+            ),
+            "got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn play_only_tps_uses_move_window_elapsed() {
+        let mut o = outcome(100, 1, 10_000);
+        o.move_window_elapsed_ms = 2_000;
+        o.play_ns_total = 1_000_000_000;
+        o.total_ns_total = 10_000_000_000;
+
+        assert_eq!(play_only_tps(&o), 50.0);
+    }
+
+    #[test]
     fn render_omits_anchor_rows_when_no_samples_and_humanizes_counts() {
         use crate::stats::summarize;
         let o = SwarmOutcome {
@@ -562,6 +772,9 @@ mod tests {
             tunnels_opened: 255,
             tunnels_claimed: 255,
             elapsed_ms: 8_400,
+            move_window_elapsed_ms: 8_400,
+            open_active_elapsed_ms: 8_400,
+            settle_active_elapsed_ms: 8_400,
             play_ns_total: 8_000_000_000,
             total_ns_total: 8_100_000_000,
             moves_dist: summarize(&[143.0, 143.0]),
@@ -574,6 +787,7 @@ mod tests {
             gas_funder_mist: 0,
             gas_sponsor_mist: 0,
             transcript_export_bytes: 0,
+            sui_ptb_metrics: crate::swarm::SuiPtbMetrics::default(),
         };
         let s = render(
             &opts(10, SignerInitMode::PerTunnel),

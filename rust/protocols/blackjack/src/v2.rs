@@ -554,7 +554,11 @@ pub fn initial_state(balance_a: u64, balance_b: u64) -> BlackjackV2State {
 }
 
 pub fn is_terminal(s: &BlackjackV2State) -> bool {
-    s.round >= ROUND_CAP || (s.phase == Phase::RoundOver && !can_start_round(s))
+    is_terminal_with_round_cap(s, ROUND_CAP)
+}
+
+pub fn is_terminal_with_round_cap(s: &BlackjackV2State, round_cap: u64) -> bool {
+    s.round >= round_cap || (s.phase == Phase::RoundOver && !can_start_round(s))
 }
 
 pub fn apply_move(
@@ -562,12 +566,21 @@ pub fn apply_move(
     mv: &BlackjackV2Move,
     by: Party,
 ) -> Result<BlackjackV2State, String> {
+    apply_move_with_round_cap(s, mv, by, ROUND_CAP)
+}
+
+pub fn apply_move_with_round_cap(
+    s: &BlackjackV2State,
+    mv: &BlackjackV2Move,
+    by: Party,
+    round_cap: u64,
+) -> Result<BlackjackV2State, String> {
     match s.phase {
         Phase::RoundOver => {
             let BlackjackV2Move::Bet { amount } = mv else {
                 return Err("expected 'bet' in round_over".into());
             };
-            if is_terminal(s) {
+            if is_terminal_with_round_cap(s, round_cap) {
                 return Err("game over: no more rounds can be played".into());
             }
             let next_player = player_party(s.round + 1);
@@ -684,12 +697,24 @@ fn random_secret(rng: &mut dyn FnMut() -> f64) -> BlackjackV2Secret {
 #[derive(Clone, Copy, Debug)]
 pub struct BlackjackV2Strategy {
     rng_state: u32,
+    round_cap: u64,
+    wager: u64,
 }
 
 impl BlackjackV2Strategy {
     pub fn new(seed: u64) -> Self {
+        Self::with_round_cap(seed, ROUND_CAP)
+    }
+
+    pub fn with_round_cap(seed: u64, round_cap: u64) -> Self {
+        Self::with_round_cap_and_wager(seed, round_cap, WAGER)
+    }
+
+    pub fn with_round_cap_and_wager(seed: u64, round_cap: u64, wager: u64) -> Self {
         Self {
             rng_state: seed as u32,
+            round_cap,
+            wager,
         }
     }
 
@@ -699,43 +724,21 @@ impl BlackjackV2Strategy {
         t = t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t)) ^ t;
         ((t ^ (t >> 14)) as f64) / 4_294_967_296.0
     }
-}
 
-fn draw_commit_actor(state: &BlackjackV2State) -> Option<Seat> {
-    if state.pending_commit_a.is_none() {
-        Some(Seat::A)
-    } else if state.pending_commit_b.is_none() {
-        Some(Seat::B)
-    } else {
-        None
-    }
-}
-
-fn draw_reveal_actor(state: &BlackjackV2State) -> Option<Seat> {
-    if state.pending_reveal_a.is_none() {
-        Some(Seat::A)
-    } else if state.pending_reveal_b.is_none() {
-        Some(Seat::B)
-    } else {
-        None
-    }
-}
-
-impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
-    async fn plan_move(
+    fn plan_with_round_cap(
         &mut self,
         state: &BlackjackV2State,
         seat: Seat,
-        _ctx: &MoveStrategyContext,
+        round_cap: u64,
     ) -> Option<BlackjackV2Move> {
-        if is_terminal(state) {
+        if is_terminal_with_round_cap(state, round_cap) {
             return None;
         }
         match state.phase {
             Phase::RoundOver => (seat == player_party(state.round + 1)).then(|| {
                 // Bet the default, clamped to the legal window. Not-terminal guarantees
                 // `max_bet >= MIN_BET`, so the clamp always yields a legal amount.
-                let amount = WAGER.min(max_bet(state)).max(MIN_BET);
+                let amount = self.wager.min(max_bet(state)).max(MIN_BET);
                 BlackjackV2Move::Bet { amount }
             }),
             Phase::DrawCommit => {
@@ -778,8 +781,144 @@ impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
     }
 }
 
+fn draw_commit_actor(state: &BlackjackV2State) -> Option<Seat> {
+    if state.pending_commit_a.is_none() {
+        Some(Seat::A)
+    } else if state.pending_commit_b.is_none() {
+        Some(Seat::B)
+    } else {
+        None
+    }
+}
+
+fn draw_reveal_actor(state: &BlackjackV2State) -> Option<Seat> {
+    if state.pending_reveal_a.is_none() {
+        Some(Seat::A)
+    } else if state.pending_reveal_b.is_none() {
+        Some(Seat::B)
+    } else {
+        None
+    }
+}
+
+impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
+    async fn plan_move(
+        &mut self,
+        state: &BlackjackV2State,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<BlackjackV2Move> {
+        self.plan_with_round_cap(state, seat, self.round_cap)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BlackjackV2WithRoundCapStrategy {
+    inner: BlackjackV2Strategy,
+    round_cap: u64,
+}
+
+impl BlackjackV2WithRoundCapStrategy {
+    pub fn new(seed: u64, round_cap: u64) -> Self {
+        Self::with_wager(seed, round_cap, WAGER)
+    }
+
+    pub fn with_wager(seed: u64, round_cap: u64, wager: u64) -> Self {
+        Self {
+            inner: BlackjackV2Strategy::with_round_cap_and_wager(seed, round_cap, wager),
+            round_cap,
+        }
+    }
+}
+
+impl MoveStrategy<BlackjackV2WithRoundCap> for BlackjackV2WithRoundCapStrategy {
+    async fn plan_move(
+        &mut self,
+        state: &BlackjackV2State,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<BlackjackV2Move> {
+        self.inner.plan_with_round_cap(state, seat, self.round_cap)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct BlackjackV2;
+
+#[derive(Clone, Copy)]
+pub struct BlackjackV2WithRoundCap {
+    round_cap: u64,
+}
+
+impl BlackjackV2WithRoundCap {
+    pub fn new(round_cap: u64) -> Self {
+        Self { round_cap }
+    }
+}
+
+fn sample_move_with_round_cap(
+    s: &BlackjackV2State,
+    seat: Seat,
+    rng: &mut dyn FnMut() -> f64,
+    round_cap: u64,
+) -> Option<BlackjackV2Move> {
+    if is_terminal_with_round_cap(s, round_cap) {
+        return None;
+    }
+    match s.phase {
+        Phase::RoundOver => {
+            if seat == player_party(s.round + 1) {
+                let amount = WAGER.min(max_bet(s)).max(MIN_BET);
+                Some(BlackjackV2Move::Bet { amount })
+            } else {
+                None
+            }
+        }
+        Phase::DrawCommit => {
+            let mine = if seat == Seat::A {
+                s.pending_commit_a
+            } else {
+                s.pending_commit_b
+            };
+            if mine.is_some() {
+                return None;
+            }
+            let secret = random_secret(rng);
+            Some(BlackjackV2Move::Commit {
+                commitment: compute_slot_commitment(&secret).ok()?,
+                local_secret: Some(secret),
+            })
+        }
+        Phase::DrawReveal => {
+            let mine = if seat == Seat::A {
+                s.pending_reveal_a.as_ref()
+            } else {
+                s.pending_reveal_b.as_ref()
+            };
+            if mine.is_some() {
+                return None;
+            }
+            let secret = if seat == Seat::A {
+                s.local_secret_a.clone()
+            } else {
+                s.local_secret_b.clone()
+            }?;
+            Some(BlackjackV2Move::Reveal {
+                reveal: secret.into(),
+            })
+        }
+        Phase::Player => {
+            if seat != player_party(s.round) {
+                return None;
+            }
+            Some(if blackjack_hand_value(&s.player_hand) < DEALER_STANDS_AT {
+                BlackjackV2Move::Hit
+            } else {
+                BlackjackV2Move::Stand
+            })
+        }
+    }
+}
 
 impl Protocol for BlackjackV2 {
     type State = BlackjackV2State;
@@ -817,68 +956,67 @@ impl Protocol for BlackjackV2 {
         is_terminal(s)
     }
 
+    fn can_gracefully_close(&self, s: &Self::State) -> bool {
+        s.phase == Phase::RoundOver
+    }
+
     fn sample_move(
         &self,
         s: &Self::State,
         seat: Seat,
         rng: &mut dyn FnMut() -> f64,
     ) -> Option<Self::Move> {
-        if is_terminal(s) {
-            return None;
+        sample_move_with_round_cap(s, seat, rng, ROUND_CAP)
+    }
+}
+
+impl Protocol for BlackjackV2WithRoundCap {
+    type State = BlackjackV2State;
+    type Move = BlackjackV2Move;
+
+    fn name(&self) -> &str {
+        "blackjack.v2"
+    }
+
+    fn initial_state(&self, ctx: &TunnelContext) -> Self::State {
+        initial_state(ctx.initial.a, ctx.initial.b)
+    }
+
+    fn apply_move(
+        &self,
+        s: &Self::State,
+        mv: &Self::Move,
+        by: Seat,
+    ) -> Result<Self::State, ProtocolError> {
+        apply_move_with_round_cap(s, mv, by, self.round_cap).map_err(ProtocolError)
+    }
+
+    fn encode_state(&self, s: &Self::State) -> Vec<u8> {
+        encode_state(s)
+    }
+
+    fn balances(&self, s: &Self::State) -> Balances {
+        Balances {
+            a: s.balance_a,
+            b: s.balance_b,
         }
-        match s.phase {
-            Phase::RoundOver => {
-                if seat == player_party(s.round + 1) {
-                    let amount = WAGER.min(max_bet(s)).max(MIN_BET);
-                    Some(BlackjackV2Move::Bet { amount })
-                } else {
-                    None
-                }
-            }
-            Phase::DrawCommit => {
-                let mine = if seat == Seat::A {
-                    s.pending_commit_a
-                } else {
-                    s.pending_commit_b
-                };
-                if mine.is_some() {
-                    return None;
-                }
-                let secret = random_secret(rng);
-                Some(BlackjackV2Move::Commit {
-                    commitment: compute_slot_commitment(&secret).ok()?,
-                    local_secret: Some(secret),
-                })
-            }
-            Phase::DrawReveal => {
-                let mine = if seat == Seat::A {
-                    s.pending_reveal_a.as_ref()
-                } else {
-                    s.pending_reveal_b.as_ref()
-                };
-                if mine.is_some() {
-                    return None;
-                }
-                let secret = if seat == Seat::A {
-                    s.local_secret_a.clone()
-                } else {
-                    s.local_secret_b.clone()
-                }?;
-                Some(BlackjackV2Move::Reveal {
-                    reveal: secret.into(),
-                })
-            }
-            Phase::Player => {
-                if seat != player_party(s.round) {
-                    return None;
-                }
-                Some(if blackjack_hand_value(&s.player_hand) < DEALER_STANDS_AT {
-                    BlackjackV2Move::Hit
-                } else {
-                    BlackjackV2Move::Stand
-                })
-            }
-        }
+    }
+
+    fn is_terminal(&self, s: &Self::State) -> bool {
+        is_terminal_with_round_cap(s, self.round_cap)
+    }
+
+    fn can_gracefully_close(&self, s: &Self::State) -> bool {
+        s.phase == Phase::RoundOver
+    }
+
+    fn sample_move(
+        &self,
+        s: &Self::State,
+        seat: Seat,
+        rng: &mut dyn FnMut() -> f64,
+    ) -> Option<Self::Move> {
+        sample_move_with_round_cap(s, seat, rng, self.round_cap)
     }
 }
 
@@ -1101,6 +1239,35 @@ mod strategy_tests {
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn strategy_can_use_minimum_wager_for_long_running_bench() {
+        let state = initial_state(200, 200);
+        let player = player_party(state.round + 1);
+        let mut strategy = BlackjackV2WithRoundCapStrategy::with_wager(7, ROUND_CAP, MIN_BET);
+
+        let planned = strategy
+            .plan_move(&state, player, &strategy_ctx(player))
+            .await
+            .expect("player should place the opening bet");
+
+        assert_eq!(planned, BlackjackV2Move::Bet { amount: MIN_BET });
+    }
+
+    #[test]
+    fn round_cap_wrapper_can_continue_past_default_round_cap() {
+        let protocol = BlackjackV2WithRoundCap::new(ROUND_CAP + 1);
+        let mut state = initial_state(2_000, 2_000);
+        state.round = ROUND_CAP;
+        let player = player_party(state.round + 1);
+
+        let next = protocol.apply_move(&state, &BlackjackV2Move::Bet { amount: MIN_BET }, player);
+
+        assert!(
+            next.is_ok(),
+            "bench round cap wrapper should allow legal continuation beyond default ROUND_CAP"
+        );
     }
 
     #[tokio::test]

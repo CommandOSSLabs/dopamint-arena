@@ -33,6 +33,15 @@ pub trait Protocol: Send + Sync + 'static {
     /// Whether `s` is terminal (ready to settle).
     fn is_terminal(&self, s: &Self::State) -> bool;
 
+    /// Whether `s` is a legal cooperative close boundary for a benchmark run.
+    ///
+    /// Terminal states are always closeable. Protocols with legal continuation
+    /// units can override this to expose episode, round, or latest-state
+    /// boundaries without changing their terminal invariant.
+    fn can_gracefully_close(&self, s: &Self::State) -> bool {
+        self.is_terminal(s)
+    }
+
     /// Optional: sample a legal move for `seat`, or None. Only the protocol knows its
     /// own move space, so this is what lets a generic move strategy drive any protocol.
     fn sample_move(

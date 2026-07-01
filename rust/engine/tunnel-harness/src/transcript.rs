@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::collections::HashSet;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use tunnel_core::crypto::blake2b256;
 use tunnel_core::wire::{serialize_state_update, StateUpdate};
@@ -42,6 +43,7 @@ pub struct Transcript<E> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TranscriptError {
+    MissingTunnelId,
     DuplicateNonce { nonce: u64 },
     NonMonotonicNonce { previous: u64, nonce: u64 },
 }
@@ -49,6 +51,9 @@ pub enum TranscriptError {
 impl fmt::Display for TranscriptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingTunnelId => {
+                write!(f, "transcript recorder needs a tunnel id before recording")
+            }
             Self::DuplicateNonce { nonce } => {
                 write!(f, "transcript has duplicate entries for nonce {nonce}")
             }
@@ -139,18 +144,18 @@ pub fn transcript_root(leaves: &[[u8; 32]]) -> [u8; 32] {
         }
         level = level
             .chunks_exact(2)
-            .map(|pair| {
-                let mut bytes = Vec::with_capacity(
-                    TRANSCRIPT_NODE_DOMAIN.len() + pair[0].len() + pair[1].len(),
-                );
-                bytes.extend_from_slice(TRANSCRIPT_NODE_DOMAIN);
-                bytes.extend_from_slice(&pair[0]);
-                bytes.extend_from_slice(&pair[1]);
-                blake2b256(&bytes)
-            })
+            .map(|pair| transcript_node(pair[0], pair[1]))
             .collect();
     }
     level[0]
+}
+
+fn transcript_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(TRANSCRIPT_NODE_DOMAIN.len() + left.len() + right.len());
+    bytes.extend_from_slice(TRANSCRIPT_NODE_DOMAIN);
+    bytes.extend_from_slice(&left);
+    bytes.extend_from_slice(&right);
+    blake2b256(&bytes)
 }
 
 pub fn transcript_leaf<M>(tunnel_id: &str, entry: &TranscriptEntry<M>) -> [u8; 32] {
@@ -235,6 +240,15 @@ pub trait TranscriptRecorder<M> {
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError>;
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>>;
 
+    /// Called once after open, before committed entries are recorded. Recorders
+    /// that only keep derived root state use it to hash leaves without retaining
+    /// the full entries.
+    fn set_tunnel_id(&self, _tunnel_id: &str) {}
+
+    fn canonical_root_for_tunnel(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        self.snapshot().canonical_root_for_tunnel(tunnel_id)
+    }
+
     /// Preprocess (filter + reshape) then serialize in one pure pass. `preprocess`
     /// returns `None` to drop an entry. The raw recording is never mutated.
     fn export<C, T, F>(&self, codec: &C, preprocess: F) -> Result<C::Output, C::Error>
@@ -297,6 +311,136 @@ impl<M: Clone> TranscriptRecorder<M> for InMemoryTranscriptRecorder<M> {
 
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
         Transcript::from_entries(self.entries.lock().expect("recorder mutex").clone())
+    }
+}
+
+/// Computes the canonical transcript root while discarding committed entries.
+/// This is for settlement paths that need a root but do not archive/export the
+/// transcript. Memory stays bounded by the Merkle frontier rather than move count.
+pub struct RootOnlyTranscriptRecorder<M> {
+    state: Arc<Mutex<RootOnlyState>>,
+    _move: PhantomData<fn(M)>,
+}
+
+impl<M> Clone for RootOnlyTranscriptRecorder<M> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            _move: PhantomData,
+        }
+    }
+}
+
+impl<M> Default for RootOnlyTranscriptRecorder<M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<M> RootOnlyTranscriptRecorder<M> {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RootOnlyState::default())),
+            _move: PhantomData,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RootOnlyState {
+    tunnel_id: Option<String>,
+    previous_nonce: Option<u64>,
+    leaf_count: u64,
+    frontier: Vec<Option<[u8; 32]>>,
+}
+
+impl RootOnlyState {
+    fn push_leaf(&mut self, mut carry: [u8; 32]) {
+        let mut level = 0usize;
+        let mut count = self.leaf_count;
+        while count & 1 == 1 {
+            if level >= self.frontier.len() {
+                self.frontier.push(None);
+            }
+            let left = self.frontier[level]
+                .take()
+                .expect("occupied frontier level for set count bit");
+            carry = transcript_node(left, carry);
+            count >>= 1;
+            level += 1;
+        }
+        if level >= self.frontier.len() {
+            self.frontier.resize(level + 1, None);
+        }
+        self.frontier[level] = Some(carry);
+        self.leaf_count += 1;
+    }
+
+    fn root(&self) -> [u8; 32] {
+        if self.leaf_count == 0 {
+            return ZERO_ROOT;
+        }
+        let mut blocks = self
+            .frontier
+            .iter()
+            .enumerate()
+            .filter_map(|(level, hash)| hash.map(|hash| (level, hash)));
+        let Some((mut current_level, mut current)) = blocks.next() else {
+            return ZERO_ROOT;
+        };
+        for (left_level, left) in blocks {
+            while current_level < left_level {
+                current = transcript_node(current, ZERO_ROOT);
+                current_level += 1;
+            }
+            current = transcript_node(left, current);
+            current_level = left_level + 1;
+        }
+        current
+    }
+}
+
+impl<M> TranscriptRecorder<M> for RootOnlyTranscriptRecorder<M> {
+    fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
+        let mut state = self.state.lock().expect("root-only recorder mutex");
+        let tunnel_id = state
+            .tunnel_id
+            .as_deref()
+            .ok_or(TranscriptError::MissingTunnelId)?;
+        if let Some(previous) = state.previous_nonce {
+            if entry.nonce == previous {
+                return Err(TranscriptError::DuplicateNonce { nonce: entry.nonce });
+            }
+            if entry.nonce < previous {
+                return Err(TranscriptError::NonMonotonicNonce {
+                    previous,
+                    nonce: entry.nonce,
+                });
+            }
+        }
+        let leaf = transcript_leaf(tunnel_id, &entry);
+        state.previous_nonce = Some(entry.nonce);
+        state.push_leaf(leaf);
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
+        Transcript::from_entries(Vec::new())
+    }
+
+    fn set_tunnel_id(&self, tunnel_id: &str) {
+        self.state
+            .lock()
+            .expect("root-only recorder mutex")
+            .tunnel_id = Some(tunnel_id.to_string());
+    }
+
+    fn canonical_root_for_tunnel(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        let state = self.state.lock().expect("root-only recorder mutex");
+        if state.tunnel_id.as_deref() != Some(tunnel_id) {
+            return Err(TranscriptError::MissingTunnelId);
+        }
+        Ok(state.root())
     }
 }
 
@@ -518,6 +662,42 @@ mod tests {
         assert_eq!(back.entries(), &[(1, 99), (3, 97)]);
         // raw recording is untouched
         assert_eq!(rec.snapshot().entries().len(), 3);
+    }
+
+    #[test]
+    fn root_only_recorder_matches_in_memory_root_without_retaining_entries() {
+        let tunnel_id = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let entries = vec![
+            parity_entry(1, 90, 110, 0x11, 0x22),
+            parity_entry(2, 95, 105, 0x33, 0x44),
+            parity_entry(3, 80, 120, 0x55, 0x66),
+            parity_entry(4, 70, 130, 0x77, 0x88),
+            parity_entry(5, 60, 140, 0x99, 0xaa),
+        ];
+        let full = InMemoryTranscriptRecorder::new();
+        let root_only = RootOnlyTranscriptRecorder::new();
+        root_only.set_tunnel_id(tunnel_id);
+
+        for entry in entries {
+            full.record(entry.clone()).unwrap();
+            root_only.record(entry).unwrap();
+        }
+
+        assert_eq!(
+            root_only.canonical_root_for_tunnel(tunnel_id),
+            full.canonical_root_for_tunnel(tunnel_id)
+        );
+        assert!(
+            root_only.snapshot().entries().is_empty(),
+            "root-only recorder must discard committed entries"
+        );
+    }
+
+    #[test]
+    fn root_only_recorder_requires_tunnel_id_before_recording() {
+        let rec = RootOnlyTranscriptRecorder::<u8>::new();
+
+        assert_eq!(rec.record(entry(1)), Err(TranscriptError::MissingTunnelId));
     }
 
     #[test]

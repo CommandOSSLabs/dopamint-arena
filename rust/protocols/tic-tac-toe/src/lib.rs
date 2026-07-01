@@ -385,6 +385,10 @@ impl Protocol for TicTacToeSeries {
         state.games_played + 1 >= state.max_games || !self.can_fund_next_game(&state.inner)
     }
 
+    fn can_gracefully_close(&self, state: &Self::State) -> bool {
+        self.inner.is_terminal(&state.inner)
+    }
+
     fn sample_move(
         &self,
         state: &Self::State,
@@ -517,6 +521,18 @@ mod tests {
         assert!(proto
             .encode_state(&state)
             .starts_with(b"sui_tunnel::proto::tic_tac_toe.series.v2"));
+    }
+
+    #[test]
+    fn series_can_gracefully_close_at_game_boundary_before_terminal() {
+        let proto = TicTacToeSeries::new(2, 0).unwrap();
+        let mut state = proto.initial_state(&ctx());
+
+        assert!(!proto.can_gracefully_close(&state));
+        state.inner.winner = Winner::Draw;
+
+        assert!(proto.can_gracefully_close(&state));
+        assert!(!proto.is_terminal(&state));
     }
 }
 
