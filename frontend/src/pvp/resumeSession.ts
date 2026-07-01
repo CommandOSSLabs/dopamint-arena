@@ -318,6 +318,19 @@ export function attachResume<State, Move>(
     if (rec) writeResumeRecord(rec);
   };
 
+  // Persist on propose too, preserving any game-set onProposed. `onConfirmed` fires only AFTER the
+  // pending clears, so it can NEVER capture a still-in-flight move; without this the proposer's
+  // pending is lost on reload. That matters against the co-located bot, whose resync-less resume
+  // relies on the restored pending: `resume()` re-sends it and the bot's replayed ACK then finds a
+  // matching pending instead of throwing "unexpected ACK". Debounced/coalesced with the confirm
+  // write; the pagehide flush persists it before a reload.
+  const prevProposed = tunnel.onProposed;
+  tunnel.onProposed = () => {
+    prevProposed?.();
+    const rec = buildRecord(tunnel, args.adapter, identity);
+    if (rec) writeResumeRecord(rec);
+  };
+
   // Route the peer's resync through the channel's existing onPeer; preserve any prior handler.
   const peerHandler = (m: Exclude<PeerMessage, { t: "frame" }>) => {
     if ((m as { t: string }).t === "resync")
@@ -326,7 +339,11 @@ export function attachResume<State, Move>(
   channel.addPeerListener(peerHandler);
 
   const offOk = mp.onResumeOk((e) => {
-    if (e.matchId === identity.matchId && e.peerOnline) sendResync(args);
+    // Announce our nonce on ANY resume, not only when the server reports the peer online. Against a
+    // co-located bot, presence is keyed by a seat-B address shared across a batch, so `peerOnline` is
+    // unreliable; and an unanswered resync is harmless (no peer → no reply). Sending it unconditionally
+    // lets a live bot target its replay to our nonce, and lets the resume watchdog fall back if none comes.
+    if (e.matchId === identity.matchId) sendResync(args);
   });
   const offRes = mp.onPeerResumed((e) => {
     if (e.matchId === identity.matchId) sendResync(args);
@@ -371,5 +388,6 @@ export function attachResume<State, Move>(
     cancelGrace();
     channel.removePeerListener(peerHandler);
     if (tunnel.onConfirmed) tunnel.onConfirmed = prevConfirmed;
+    if (tunnel.onProposed) tunnel.onProposed = prevProposed;
   };
 }
