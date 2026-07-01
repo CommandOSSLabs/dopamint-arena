@@ -36,6 +36,7 @@ bcs.workspace = true
 base64.workspace = true
 aws-config = "1"
 aws-sdk-s3 = "1"
+transcript-store = { path = "../transcript-store" }
 # Direct rustls dep so we can install `ring` as the process-default CryptoProvider at
 # startup (Task 7), forcing fred/reqwest/aws-sdk onto one provider. See Cargo.toml
 # TLS-provider note + ADR-0023.
@@ -54,6 +55,7 @@ wallet-pool-s3 = { path = "../../wallet-pool/s3" }
 [dev-dependencies]
 tokio-tungstenite = "0.24"
 wiremock = "0.6"
+transcript-store = { path = "../transcript-store", features = ["testing"] }
 # Constructing a ProtocolId for anchor open() requests in fleet tests.
 tunnel-core = { path = "../../rust/engine/tunnel-core" }
 testcontainers = "0.23"

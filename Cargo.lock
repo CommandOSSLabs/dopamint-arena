@@ -2775,8 +2775,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aws-config",
- "aws-sdk-s3",
  "axum 0.7.9",
  "bcs 0.2.1",
  "clap",
@@ -2799,6 +2797,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "transcript-store",
  "url",
 ]
 
@@ -8360,6 +8359,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "transcript-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-smithy-runtime",
+ "tokio",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8539,6 +8550,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "transcript-store",
  "tunnel-core",
  "tunnel-harness",
  "uuid",

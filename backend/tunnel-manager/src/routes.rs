@@ -51,7 +51,6 @@ pub(crate) mod test_support {
             enoki: None,
             walrus,
             archiver: None,
-            s3_prefix: "".into(),
             ollama,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
@@ -486,17 +485,20 @@ pub(crate) async fn settle(
             // cheap to clone (Bytes is ref-counted); Walrus below still gets `body.to_vec()`
             // exactly as before — its call site, error handling, and result are unchanged.
             if let Some(archiver) = state.archiver.clone() {
-                let key = crate::s3::archive_key(&state.s3_prefix, &tunnel_id, &digest);
-                let meta = crate::s3::ArchiveMeta {
+                let meta = transcript_store::ArchiveMeta {
                     tunnel_id: tunnel_id.clone(),
                     tx_digest: digest.clone(),
                     transcript_root: transcript_root_hex.clone(),
                     settle_version: crate::routes::SETTLE_BODY_VERSION,
                 };
                 let s3_bytes = body.clone();
+                let s3_tunnel = tunnel_id.clone();
                 let s3_digest = digest.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = archiver.archive(&key, &s3_bytes, &meta).await {
+                    if let Err(e) = archiver
+                        .archive(&s3_tunnel, &s3_digest, &s3_bytes, &meta)
+                        .await
+                    {
                         tracing::warn!(%s3_digest, error = %e, "s3 archive failed");
                     }
                 });
@@ -1469,7 +1471,7 @@ mod tests {
         use axum::Router;
         use tower::ServiceExt;
 
-        use crate::s3::FakeArchiver;
+        use transcript_store::testing::FakeArchiver;
 
         let body = sample_settle_body();
         let parsed = parse_settle_body(&body).expect("valid settle body");
@@ -1504,16 +1506,14 @@ mod tests {
 
         let archived = archiver.archived.lock().unwrap().clone();
         assert_eq!(archived.len(), 1, "expected exactly one S3 archive");
+        let (arch_tunnel, arch_digest, arch_bytes) = &archived[0];
         assert_eq!(
-            archived[0].1,
-            body.to_vec(),
+            arch_bytes,
+            &body.to_vec(),
             "archived bytes must match the settle body"
         );
-        assert!(
-            archived[0].0.starts_with("transcripts/"),
-            "key must start with transcripts/: {}",
-            archived[0].0
-        );
+        assert_eq!(arch_tunnel, &tunnel_id, "archived under the settle tunnel id");
+        assert_eq!(arch_digest, "DiG123", "archived under the close tx digest");
     }
 
     // GET /v1/chat/topic asks Ollama for a short random conversation topic.

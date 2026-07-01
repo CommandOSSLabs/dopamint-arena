@@ -33,8 +33,7 @@ async-trait.workspace = true
 fred.workspace = true
 reqwest.workspace = true
 # S3 read of the archived transcript (verify-from-S3, primary; Walrus is the fallback).
-aws-config = "1"
-aws-sdk-s3 = "1"
+transcript-store = { path = "../transcript-store" }
 # write side (indexer binary) — sui-indexer-alt-framework (Diesel). diesel pinned to the
 # framework's resolved graph (gate evidence): diesel-async 0.9 -> diesel 2.3, migrations 2.3.
 sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui.git", branch = "testnet" }
@@ -50,3 +49,4 @@ url = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+transcript-store = { path = "../transcript-store", features = ["testing"] }

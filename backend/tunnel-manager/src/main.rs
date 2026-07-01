@@ -9,7 +9,6 @@ mod fleet;
 mod mp;
 mod ollama;
 mod routes;
-mod s3;
 mod state;
 mod stats;
 mod stats_counter;
@@ -104,17 +103,18 @@ async fn main() -> anyhow::Result<()> {
 
     // S3 transcript archival (ADR-0023). Optional: absent in dev/test when
     // S3_TRANSCRIPTS_BUCKET is unset. Concurrent with Walrus; Walrus above is unchanged.
-    let archiver: Option<std::sync::Arc<dyn crate::s3::TranscriptArchiver>> =
+    let archiver: Option<std::sync::Arc<dyn transcript_store::TranscriptArchiver>> =
         match config.s3_bucket.clone() {
             Some(bucket) => {
                 let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
                     .load()
                     .await;
                 let client = aws_sdk_s3::Client::new(&aws_cfg);
+                let prefix = config.s3_prefix.clone().unwrap_or_default();
                 tracing::info!(bucket = %bucket, "s3 transcript archival enabled");
-                Some(std::sync::Arc::new(crate::s3::S3Archiver::new(
-                    client, bucket,
-                )))
+                Some(std::sync::Arc::new(
+                    transcript_store::S3TranscriptStore::new(client, bucket, prefix),
+                ))
             }
             None => {
                 tracing::info!("s3 transcript archival disabled (S3_TRANSCRIPTS_BUCKET unset)");
@@ -214,7 +214,6 @@ async fn main() -> anyhow::Result<()> {
         enoki,
         walrus,
         archiver,
-        s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),

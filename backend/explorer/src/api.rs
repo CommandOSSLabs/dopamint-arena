@@ -17,7 +17,7 @@ pub struct ApiState {
     pub http: reqwest::Client,
     /// S3 is the primary transcript source (the settle route archives the co-signed body
     /// there); `None` when unconfigured → Walrus-only. Missing objects fall back to Walrus.
-    pub s3: Option<Arc<dyn crate::s3read::TranscriptReader>>,
+    pub s3: Option<Arc<dyn transcript_store::TranscriptReader>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -225,7 +225,7 @@ mod tests {
 
     fn state_with_s3(
         rows: Vec<SettlementRow>,
-        s3: Option<Arc<dyn crate::s3read::TranscriptReader>>,
+        s3: Option<Arc<dyn transcript_store::TranscriptReader>>,
     ) -> ApiState {
         let store = InMemorySettlementStore::new();
         for r in rows {
@@ -362,9 +362,9 @@ mod tests {
     #[tokio::test]
     async fn transcript_reads_from_s3_when_present() {
         let mut objects = std::collections::HashMap::new();
-        objects.insert("0xtun/a".to_string(), b"\x02settle-body-bytes".to_vec());
-        let s3 = Arc::new(crate::s3read::FakeTranscriptReader { objects })
-            as Arc<dyn crate::s3read::TranscriptReader>;
+        objects.insert(("0xtun".to_string(), "a".to_string()), b"\x02settle-body-bytes".to_vec());
+        let s3 = Arc::new(transcript_store::testing::FakeReader { objects })
+            as Arc<dyn transcript_store::TranscriptReader>;
         let app = router(state_with_s3(vec![settled("a", 10)], Some(s3)));
         let res = app
             .oneshot(
@@ -384,9 +384,9 @@ mod tests {
     async fn transcript_falls_back_to_walrus_path_when_s3_misses() {
         // S3 configured but empty and the row has no walrus blob → the walrus branch is taken
         // and 404s on the missing blob, proving the S3-miss fallthrough (not an S3 hit).
-        let s3 = Arc::new(crate::s3read::FakeTranscriptReader {
+        let s3 = Arc::new(transcript_store::testing::FakeReader {
             objects: std::collections::HashMap::new(),
-        }) as Arc<dyn crate::s3read::TranscriptReader>;
+        }) as Arc<dyn transcript_store::TranscriptReader>;
         let app = router(state_with_s3(vec![settled("a", 10)], Some(s3)));
         let res = app
             .oneshot(

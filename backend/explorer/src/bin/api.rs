@@ -25,22 +25,18 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL")?;
     let store = Arc::new(shared::postgres::PgSettlementStore::connect(&database_url).await?);
     // S3 is the primary transcript source when configured (the settle route archives the
-    // co-signed body there); Walrus is the fallback. Region/credentials come from the
-    // environment via the AWS default provider chain.
-    let s3: Option<Arc<dyn explorer::s3read::TranscriptReader>> =
-        match std::env::var("S3_TRANSCRIPTS_BUCKET") {
-            Ok(bucket) if !bucket.is_empty() => {
-                let cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
-                    .load()
-                    .await;
-                let client = aws_sdk_s3::Client::new(&cfg);
-                let prefix = std::env::var("S3_TRANSCRIPTS_PREFIX").unwrap_or_default();
-                tracing::info!(%bucket, "explorer: transcripts read from S3 (primary)");
-                Some(Arc::new(explorer::s3read::S3TranscriptReader::new(
-                    client, bucket, prefix,
-                )))
+    // co-signed body there); Walrus is the fallback. Config + credentials via the shared
+    // store's `from_env` (AWS default provider chain).
+    let s3: Option<Arc<dyn transcript_store::TranscriptReader>> =
+        match transcript_store::S3TranscriptStore::from_env().await {
+            Ok(store) => {
+                tracing::info!("explorer: transcripts read from S3 (primary)");
+                Some(Arc::new(store))
             }
-            _ => None,
+            Err(e) => {
+                tracing::info!("explorer: S3 transcripts not configured ({e}); walrus-only");
+                None
+            }
         };
     let state = ApiState {
         store,
