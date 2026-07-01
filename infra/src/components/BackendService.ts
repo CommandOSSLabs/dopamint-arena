@@ -97,6 +97,9 @@ export function createBackendService(
           scaleOutCooldown: 60,
         },
       },
+      {
+        dependsOn: [scalableTarget],
+      },
     );
   }
 

@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
 const { decideReconcile } = await import("sui-tunnel-ts/core/reconcile");
-const { restoreInto, rebuildTunnel, resumeActiveTunnels } =
+const { restoreInto, rebuildTunnel, resumeActiveTunnels, buildRecord } =
   await import("./resumeSession");
 const {
   writeResumeRecord,
@@ -187,6 +187,98 @@ test("resumeActiveTunnels evicts expired records and rebuilds only the given gam
 
   clearResumeRecord(tidLive);
   clearResumeRecord(tidOther);
+});
+
+test("resumeActiveTunnels drops a terminal record instead of rebuilding a finished match", () => {
+  const tidTerminal = `0x${"47".repeat(32)}`;
+  writeResumeRecord(
+    recordAtNonce2(
+      tidTerminal,
+      generateKeyPair() as never,
+      generateKeyPair() as never,
+    ),
+  );
+  flushResumeWrites();
+
+  // Same fixtures, but this game reports its restored state as terminal (match over).
+  // A finished match must NOT rebuild into a live "playing" tunnel — that is what strands
+  // the settled board on refresh and blocks the arena from allocating a new game.
+  const terminalProto = { ...proto, isTerminal: () => true };
+  const mp = makeFakeMp();
+  const sessions = resumeActiveTunnels(
+    mp as never,
+    "counter",
+    { proto: terminalProto, adapter } as never,
+    { selfWallet: "0xA" },
+  );
+
+  assert.equal(
+    sessions.length,
+    0,
+    "a finished match is not rebuilt into a live tunnel",
+  );
+  assert.equal(
+    readResumeRecord(tidTerminal),
+    null,
+    "the terminal record is cleared so the arena can allocate a new game",
+  );
+  assert.deepEqual(
+    mp.active,
+    [],
+    "no tunnel is marked active for a finished match",
+  );
+});
+
+test("buildRecord stamps terminal from the tunnel protocol (proto-less readers can trust it)", () => {
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const tid = `0x${"48".repeat(32)}`;
+  const sp = OffchainTunnel.selfPlay(
+    proto as never,
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    {
+      a: 1000n,
+      b: 1000n,
+    },
+  );
+  sp.step(0, "A");
+  sp.step(0, "B");
+  const identity = {
+    matchId: "m",
+    tunnelId: tid,
+    role: "A" as const,
+    game: "counter",
+    opponentWallet: "0xB",
+    opponentPubkeyHex: "ab",
+    selfEphemeralSecretHex: "cd",
+  };
+  const snap = { latest: sp.latest, state: sp.state, pending: null };
+
+  // Same snapshot, two protocols: the record must mark terminal iff the game reports game-over.
+  const finished = buildRecord(
+    { protocol: { isTerminal: () => true }, snapshot: () => snap } as never,
+    adapter as never,
+    identity,
+  );
+  const inFlight = buildRecord(
+    { protocol: { isTerminal: () => false }, snapshot: () => snap } as never,
+    adapter as never,
+    identity,
+  );
+  assert.equal(
+    finished?.terminal,
+    true,
+    "finished match → record marked terminal",
+  );
+  assert.equal(
+    inFlight?.terminal,
+    false,
+    "in-flight match → record not terminal",
+  );
 });
 
 const proto = {

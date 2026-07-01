@@ -4,7 +4,7 @@ import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession
 
 const FLY_MS = 580;
 
-interface PaymentsShopCartFlyLayerProps {
+interface RegularPaymentsShopCartFlyLayerProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
   flies: CartFlyItem[];
   spawnFlyForProduct: (productId: string, emoji: string) => void;
@@ -65,12 +65,12 @@ function CartFlyEmoji({
   );
 }
 
-export function PaymentsShopCartFlyLayer({
+export function RegularPaymentsShopCartFlyLayer({
   session,
   flies,
   spawnFlyForProduct,
   onFlyEnd,
-}: PaymentsShopCartFlyLayerProps) {
+}: RegularPaymentsShopCartFlyLayerProps) {
   const lastFlySeqRef = useRef(0);
 
   useEffect(() => {

@@ -71,6 +71,13 @@ pub struct ArenaReservation {
     pub seat_b: String,
     pub tunnel_id: String,
     pub eph_secret_hex: String,
+    /// The tunnel's on-chain `created_at` (ms), captured at allocate from the object read that already
+    /// correlates seat B. The bot signs its settle half with `timestamp = created_at` (matching the FE,
+    /// which reads the same field), so carrying it here lets the bot do ZERO chain IO before its first
+    /// move — a stalled Sui RPC on that path is what left bots spawned-but-silent. `#[serde(default)]`
+    /// so a reservation seeded before this field existed decodes to 0 during rollout.
+    #[serde(default)]
+    pub created_at_ms: u64,
 }
 
 /// Result of an atomic `claim_arena`. Exactly one caller ever gets `Claimed` for a given match, so

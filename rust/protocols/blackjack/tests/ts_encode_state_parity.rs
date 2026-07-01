@@ -38,10 +38,16 @@ fn blackjack_v2_encode_state_matches_ts_through_full_deal() {
             Phase::Player => break,
             Phase::RoundOver => {
                 let by = player_party(s.round + 1);
-                s = p.apply_move(&s, &BlackjackV2Move::Bet { amount: 1 }, by).unwrap();
+                s = p
+                    .apply_move(&s, &BlackjackV2Move::Bet { amount: 1 }, by)
+                    .unwrap();
             }
             Phase::DrawCommit => {
-                let by = if s.pending_commit_a.is_none() { Seat::A } else { Seat::B };
+                let by = if s.pending_commit_a.is_none() {
+                    Seat::A
+                } else {
+                    Seat::B
+                };
                 let sc: u64 = if by == Seat::A { 0 } else { 1 };
                 let value = vec![(s.draw_count & 0xff) as u8, sc as u8];
                 let salt = vec![((0x40 + s.draw_count * 2 + sc) & 0xff) as u8; 16];
@@ -58,7 +64,11 @@ fn blackjack_v2_encode_state_matches_ts_through_full_deal() {
                     .unwrap();
             }
             Phase::DrawReveal => {
-                let by = if s.pending_reveal_a.is_none() { Seat::A } else { Seat::B };
+                let by = if s.pending_reveal_a.is_none() {
+                    Seat::A
+                } else {
+                    Seat::B
+                };
                 let secret = if by == Seat::A {
                     s.local_secret_a.clone()
                 } else {
@@ -66,7 +76,13 @@ fn blackjack_v2_encode_state_matches_ts_through_full_deal() {
                 }
                 .unwrap();
                 s = p
-                    .apply_move(&s, &BlackjackV2Move::Reveal { reveal: secret.into() }, by)
+                    .apply_move(
+                        &s,
+                        &BlackjackV2Move::Reveal {
+                            reveal: secret.into(),
+                        },
+                        by,
+                    )
                     .unwrap();
             }
         }
@@ -75,9 +91,18 @@ fn blackjack_v2_encode_state_matches_ts_through_full_deal() {
 
     // Byte-for-byte with the TS engine (sui-tunnel-ts/bj_probe.ts).
     assert_eq!(s.phase, Phase::Player, "deal must reach the player phase");
-    assert_eq!(hashes[0], "5f620ce788ad23ac9bac32b2217dc2630eee9a7c8bfc686b1eefc61e2a938b8e"); // initial
-    assert_eq!(hashes[1], "d61ae1673fb1f7e3b1a2b330dc60879c8d4b644722327ecae594f9005aca7f25"); // post-bet
-    assert_eq!(hashes[5], "be5a03c0e4ed2924fc04d5274e71292dfeac6d342e4906df4a0986cbbc866918"); // first card dealt (deriveRank)
+    assert_eq!(
+        hashes[0],
+        "5f620ce788ad23ac9bac32b2217dc2630eee9a7c8bfc686b1eefc61e2a938b8e"
+    ); // initial
+    assert_eq!(
+        hashes[1],
+        "d61ae1673fb1f7e3b1a2b330dc60879c8d4b644722327ecae594f9005aca7f25"
+    ); // post-bet
+    assert_eq!(
+        hashes[5],
+        "be5a03c0e4ed2924fc04d5274e71292dfeac6d342e4906df4a0986cbbc866918"
+    ); // first card dealt (deriveRank)
     assert_eq!(
         hashes.last().unwrap(),
         "3f5d589ad9679ab21eab2f21e8a26e43992ce478bf44ac0f9409a0bd59740174" // full deal → player phase

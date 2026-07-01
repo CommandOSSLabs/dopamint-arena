@@ -271,26 +271,25 @@ where
                 frame_transport.send(frame.clone()).await?;
                 let mut resends = 0u32;
                 loop {
-                    let received = match tokio::time::timeout(ack_timeout, frame_transport.recv())
-                        .await
-                    {
-                        Ok(recv_result) => recv_result?,
-                        // No ACK within the window: our MOVE or its ACK was dropped (e.g. the
-                        // browser's first frame arriving before its onFrame is wired). Re-send
-                        // the same co-signed frame; the peer re-applies/re-ACKs idempotently.
-                        Err(_elapsed) => {
-                            if resends >= max_ack_resends {
-                                return Err(HarnessError::FrameTransport(
-                                    FrameTransportError::Transport(format!(
+                    let received =
+                        match tokio::time::timeout(ack_timeout, frame_transport.recv()).await {
+                            Ok(recv_result) => recv_result?,
+                            // No ACK within the window: our MOVE or its ACK was dropped (e.g. the
+                            // browser's first frame arriving before its onFrame is wired). Re-send
+                            // the same co-signed frame; the peer re-applies/re-ACKs idempotently.
+                            Err(_elapsed) => {
+                                if resends >= max_ack_resends {
+                                    return Err(HarnessError::FrameTransport(
+                                        FrameTransportError::Transport(format!(
                                         "no ack for nonce {proposed_nonce} after {resends} resends"
                                     )),
-                                ));
+                                    ));
+                                }
+                                resends += 1;
+                                frame_transport.send(frame.clone()).await?;
+                                continue;
                             }
-                            resends += 1;
-                            frame_transport.send(frame.clone()).await?;
-                            continue;
-                        }
-                    };
+                        };
                     let Some(bytes) = received else {
                         return Err(HarnessError::FrameTransport(FrameTransportError::Closed));
                     };

@@ -49,6 +49,11 @@ export interface ResumeRecord {
   latestState: JsonValue;
   pending?: { move: JsonValue; timestamp: string };
   secret?: JsonValue;
+  /** Whether `latestState` is a game-over (terminal) state, stamped at write time where the game
+   *  protocol is available. Lets proto-less readers (the batched arena allocate) tell a finished
+   *  match from an in-flight one without a protocol: a finished match must NOT suppress a fresh
+   *  allocate on reload. Absent on records written before this field existed (treated as non-terminal). */
+  terminal?: boolean;
   updatedAt: number;
 }
 
