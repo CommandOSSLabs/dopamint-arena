@@ -19,6 +19,8 @@ import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
 import { setArenaEntry } from "@/onchain/arenaAllocationStore";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { resolveBackendUrl } from "@/backend/controlPlane";
+import { listActiveTunnels, readResumeRecord } from "@/pvp/resume";
+import { arenaIdsExcludingResuming } from "@/onchain/arenaAllocationSkip";
 import type { PartyOnchain } from "@/onchain/tunnelTx";
 
 /** localStorage key the desktop persists its window layout under (`Desktop.tsx`). */
@@ -60,7 +62,14 @@ function arenaGameIdsForOpenWindows(): string[] {
     const arenaId = arenaGameIdForModule(m.id);
     if (arenaId) ids.push(arenaId);
   }
-  return ids;
+  // Skip any game the resume flow will restore: on a reload each open window's PvP hook resumes its
+  // persisted in-flight tunnel, so re-allocating (and depositing a fresh stake into) a second tunnel
+  // for the same game would strand that stake in an abandoned match. Uses the same active-record
+  // signal each lane's resume reads, keeping allocate and resume consistent.
+  const resumingGameKeys = listActiveTunnels()
+    .map((id) => readResumeRecord(id)?.game)
+    .filter((g): g is string => !!g);
+  return arenaIdsExcludingResuming(ids, resumingGameKeys);
 }
 
 export function useArenaAutoEnter(): void {

@@ -57,7 +57,6 @@ pub(crate) mod test_support {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: std::sync::Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
-            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: 0,
             arena_fleet_games: std::collections::HashSet::new(),
             wallet_pool: None,
@@ -308,40 +307,33 @@ pub(crate) async fn arena_allocate(
     State(state): State<SharedState>,
     Json(req): Json<ArenaAllocateRequest>,
 ) -> Json<ArenaAllocateResponse> {
-    let now = now_ms();
-    state.fleet.reclaim_expired(now);
     let mut allocations = Vec::new();
     for game in &req.games {
-        // On-demand seat-fill (ADR-0027): spawn a co-located bot for this game and reserve it, up to
-        // the per-game cap. A game outside the served set gets cap 0 — the `FLEET_COLOCATED_GAMES`
-        // trusted-subset gate.
-        let cap = if state.arena_fleet_games.contains(&game.id) {
-            state.arena_fleet_count
-        } else {
-            0
-        };
-        let Some(r) = crate::fleet::colocated::reserve_or_spawn(&state, &game.id, now, cap).await
-        else {
-            tracing::debug!(game = %game.id, "arena allocate: no bot (at/over per-game cap)");
+        // Served-set gate (`FLEET_COLOCATED_GAMES`): only offer games the fleet can actually play.
+        // The concurrency cap is enforced at `arena.join`, where the bot is spawned (ADR-0005
+        // co-location) — allocate no longer spawns anything.
+        if !state.arena_fleet_games.contains(&game.id) {
             continue;
-        };
-        // ADR-0028: the fleet pre-creates the tunnel + funds seat B now, so the user joins with a
-        // deposit-only PTB. On-chain-bound and may fail per game — omit a game whose open errors
-        // (its reserved bot then TTL-reclaims, same as the no-bot case). The stake comes from the
-        // game's `GameProfile` so the on-chain deposit matches the off-chain initial balances the FE
-        // co-signs; an unknown game (no profile) is omitted — the fleet can't play it.
+        }
+        // The stake comes from the game's `GameProfile` so the on-chain deposit matches the off-chain
+        // initial balances the FE co-signs; an unknown game (no profile) is omitted.
         let Some(profile) = fleet_core::play_match::profile_for(&game.id) else {
             tracing::warn!(game = %game.id, "arena allocate: no GameProfile, omitting");
             continue;
         };
+        // Mint the match recipe (globally-unique id, seat-B identity, per-match key) WITHOUT spawning
+        // a bot — the bot is spawned at `arena.join`, co-located with the user's socket.
+        let slot = crate::fleet::colocated::reserve_arena_slot(&state, &game.id);
+        // The fleet pre-creates the tunnel + funds seat B now, so the user joins with a deposit-only
+        // PTB. On-chain-bound and may fail per game — omit a game whose open errors.
         let tunnel_id = match state
             .arena_opener
             .open_and_fund_seat_b(crate::fleet::arena_opener::ArenaOpenRequest {
                 game: &game.id,
                 user_address: &req.user_address,
                 user_eph_pubkey: &game.user_eph_pubkey,
-                bot_address: &r.address,
-                bot_eph_pubkey: &r.eph_pubkey,
+                bot_address: &slot.bot_address,
+                bot_eph_pubkey: &slot.eph_pubkey,
                 stake_each: profile.stake_each,
             })
             .await
@@ -352,28 +344,27 @@ pub(crate) async fn arena_allocate(
                 continue;
             }
         };
-        // Seed the rendezvous so the user's WS `arena.join` and the bot's `play_arena_match` can bind
-        // to THIS match + tunnel (ADR-0027/0028) — the seats are fixed now: user = A, bot = B.
-        state.arena.seed(
-            &r.match_id,
-            &game.id,
-            &req.user_address,
-            &r.address,
-            &tunnel_id,
-        );
-        state.fleet.notify(
-            &r.match_id,
-            crate::fleet::FleetServerMsg::Reserved {
-                match_id: r.match_id.clone(),
-                opponent_wallet: req.user_address.clone(),
-            },
-        );
+        // Seed the shared reservation: ANY instance's `arena.join` reads this to reconstruct party B
+        // and spawn the bot locally. The running bot is never stored — only this recipe.
+        state
+            .mp
+            .put_arena_reservation(
+                &slot.match_id,
+                crate::store::ArenaReservation {
+                    game: game.id.clone(),
+                    seat_a: req.user_address.clone(),
+                    seat_b: slot.bot_address.clone(),
+                    tunnel_id: tunnel_id.clone(),
+                    eph_secret_hex: slot.eph_secret_hex.clone(),
+                },
+            )
+            .await;
         allocations.push(ArenaAllocation {
-            game: r.game,
-            match_id: r.match_id,
+            game: game.id.clone(),
+            match_id: slot.match_id,
             tunnel_id,
-            bot_eph_pubkey: r.eph_pubkey,
-            bot_address: r.address,
+            bot_eph_pubkey: slot.eph_pubkey,
+            bot_address: slot.bot_address,
             stake_each: profile.stake_each,
         });
     }
@@ -381,43 +372,12 @@ pub(crate) async fn arena_allocate(
     Json(ArenaAllocateResponse { allocations })
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ArenaOpenedRequest {
-    allocations: Vec<ArenaOpenedEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ArenaOpenedEntry {
-    match_id: String,
-    tunnel_id: String,
-}
-
-/// The user opened the batched tunnels: tell each reserved bot its tunnel id so it deposits its
-/// seat. Unknown match ids (a bot that dropped, or an expired reservation) are skipped silently.
-pub(crate) async fn arena_opened(
-    State(state): State<SharedState>,
-    Json(req): Json<ArenaOpenedRequest>,
-) -> StatusCode {
-    for e in &req.allocations {
-        state.fleet.notify(
-            &e.match_id,
-            crate::fleet::FleetServerMsg::Opened {
-                match_id: e.match_id.clone(),
-                tunnel_id: e.tunnel_id.clone(),
-            },
-        );
-    }
+/// The user finished the batched deposit PTB. In the co-located design the bot is spawned at
+/// `arena.join` (which always follows this call in the FE flow), so there is nothing to signal here —
+/// the endpoint is retained for FE compatibility and returns 204, ignoring the body. The reservation's
+/// TTL covers the deposit-signing window between allocate and join.
+pub(crate) async fn arena_opened() -> StatusCode {
     StatusCode::NO_CONTENT
-}
-
-/// Wall-clock milliseconds since the epoch, for reservation TTLs.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Submit `close_cooperative_with_root` for a tunnel. Authorization is the co-signed settlement
@@ -1444,9 +1404,7 @@ mod tests {
 #[cfg(test)]
 mod arena_tests {
     use super::*;
-    use crate::fleet::{BotHandle, FleetServerMsg};
     use crate::state::AppState;
-    use tokio::sync::mpsc;
 
     fn game_req(id: &str) -> ArenaGameRequest {
         ArenaGameRequest {
@@ -1455,43 +1413,9 @@ mod arena_tests {
         }
     }
 
-    // After the user opens, /v1/arena/opened pushes the tunnel id to the matching bot. We reserve via
-    // the pool directly so the test holds the bot's ctrl receiver (the on-demand spawn path owns it
-    // internally), then assert the handler delivers `Opened`.
-    #[tokio::test]
-    async fn opened_pushes_tunnel_id_to_the_reserved_bot() {
-        let state = AppState::in_memory_for_test();
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let bot = BotHandle {
-            eph_pubkey: "bb".into(),
-            address: "0xbot".into(),
-            ctrl: tx,
-        };
-        let (reservation, _bot_id) = state
-            .fleet
-            .reserve_under_cap("blackjack", 1, 0, bot)
-            .expect("reserved within cap");
-        let match_id = reservation.match_id;
-
-        let status = arena_opened(
-            State(state),
-            Json(ArenaOpenedRequest {
-                allocations: vec![ArenaOpenedEntry {
-                    match_id: match_id.clone(),
-                    tunnel_id: "0xtunnel".into(),
-                }],
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NO_CONTENT);
-        assert_eq!(
-            rx.try_recv().unwrap(),
-            FleetServerMsg::Opened {
-                match_id,
-                tunnel_id: "0xtunnel".into(),
-            }
-        );
-    }
+    // Co-located design (ADR-0005 addendum): `arena_opened` is a 204 no-op — the bot is spawned at
+    // `arena.join`, not signalled here. The claim + spawn is covered by the `fleet::colocated` tests
+    // (`second_join_is_rejected_not_double_spawned`, `join_and_spawn_settles_against_a_stand_in_human`).
 
     // No bots registered → allocate returns an empty list, never an error.
     #[tokio::test]

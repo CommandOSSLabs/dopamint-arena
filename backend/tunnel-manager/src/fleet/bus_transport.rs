@@ -15,7 +15,9 @@
 //! `BotPool` `Opened` push instead), so it stays test-exercised behind an item-level dead-code allow.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 use tokio::sync::{mpsc, Mutex};
@@ -136,24 +138,83 @@ impl Drop for BusRelayConnection {
     }
 }
 
+/// How long a parked bot waits for a dropped human to resume before ending the match. Bounded
+/// (unlike the FE's 1h settlement grace) because a parked bot still holds an in-flight fleet slot
+/// against the per-game cap — a human who never returns must free it. A browser reload reconnects in
+/// seconds, so this is generous headroom, not the expected wait.
+const PEER_RESUME_GRACE: Duration = Duration::from_secs(60);
+
+/// Whether a relay payload is a game frame (`{"t":"frame",…}`) rather than a peer control message
+/// (settle half, hello, …). Only frames are safe to re-emit on resume: a MOVE/ACK is idempotent (the
+/// FE dedupes by nonce), whereas replaying a settle half could disturb the settlement handshake.
+fn is_frame_payload(payload: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|v| v.get("t").and_then(|t| t.as_str()).map(|t| t == "frame"))
+        .unwrap_or(false)
+}
+
 /// A [`RelayTransport`] over the in-process bus, scoped to one match. `send_payload` routes through
 /// the SAME [`crate::mp::ws::relay_to_other`] the human WS path uses (so move-counting + seat
-/// routing are identical); `recv_payload` yields the next inbound `Relay` payload for this match
-/// and ends the channel on peer-drop / close.
+/// routing are identical); `recv_payload` yields the next inbound `Relay` payload for this match.
+///
+/// Resume-aware (ADR-0028 lifecycle): a human's `peer.dropped` does NOT collapse the match — the bot
+/// parks (keeping itself and its per-match co-signing key alive) until they `peer.resumed` or the
+/// [`PEER_RESUME_GRACE`] elapses. On resume it re-emits its last frame so the reconnected human
+/// re-ACKs, so a reload mid-match continues instead of killing the game.
 pub struct BusRelayTransport {
     conn: Arc<BusRelayConnection>,
     match_id: String,
     /// Per-match record cache for routing, exactly as the WS connection task holds — the store is
     /// hit at most once per match for `relay_to_other`.
     cache: Mutex<HashMap<String, MatchRecord>>,
+    /// False while the human seat is dropped (parked, awaiting resume); gates the grace timeout.
+    peer_online: AtomicBool,
+    /// The last game frame we sent, re-emitted on resume so the reconnected human re-ACKs it.
+    last_frame: Mutex<Option<Vec<u8>>>,
+    /// Grace to wait for a dropped human before ending the match; injectable so tests run fast.
+    resume_grace: Duration,
 }
 
 impl BusRelayTransport {
     pub fn new(conn: Arc<BusRelayConnection>, match_id: String) -> BusRelayTransport {
+        Self::with_resume_grace(conn, match_id, PEER_RESUME_GRACE)
+    }
+
+    fn with_resume_grace(
+        conn: Arc<BusRelayConnection>,
+        match_id: String,
+        resume_grace: Duration,
+    ) -> BusRelayTransport {
         BusRelayTransport {
             conn,
             match_id,
             cache: Mutex::new(HashMap::new()),
+            peer_online: AtomicBool::new(true),
+            last_frame: Mutex::new(None),
+            resume_grace,
+        }
+    }
+
+    /// The human resumed on a (possibly new) connection. The relay rebinds their seat and evicts our
+    /// stale relay cache as SEPARATE ops, so don't depend on that ordering — drop our own routing
+    /// cache here so the resend (and every later send) re-reads the record's new `conn_a`, then
+    /// re-emit our last frame to that reconnected seat.
+    async fn on_peer_resumed(&self) {
+        let mut cache = self.cache.lock().await;
+        cache.remove(&self.match_id);
+        let last = self.last_frame.lock().await.clone();
+        if let Some(frame) = last {
+            if let Ok(payload) = String::from_utf8(frame) {
+                crate::mp::ws::relay_to_other(
+                    &self.conn.state,
+                    &mut cache,
+                    self.conn.conn_id,
+                    self.match_id.clone(),
+                    payload,
+                )
+                .await;
+            }
         }
     }
 }
@@ -163,29 +224,57 @@ impl RelayTransport for BusRelayTransport {
         let payload = String::from_utf8(payload)
             .map_err(|e| FrameTransportError::Transport(format!("payload not UTF-8: {e}")))?;
         tracing::trace!(match_id = %self.match_id, head = %&payload[..payload.len().min(70)], "bus tx (bot→peer)");
-        let mut cache = self.cache.lock().await;
-        crate::mp::ws::relay_to_other(
-            &self.conn.state,
-            &mut cache,
-            self.conn.conn_id,
-            self.match_id.clone(),
-            payload,
-        )
-        .await;
+        {
+            let mut cache = self.cache.lock().await;
+            crate::mp::ws::relay_to_other(
+                &self.conn.state,
+                &mut cache,
+                self.conn.conn_id,
+                self.match_id.clone(),
+                payload.clone(),
+            )
+            .await;
+        }
+        // Remember the last game frame so a resume can re-emit it to the reconnected human.
+        if is_frame_payload(&payload) {
+            *self.last_frame.lock().await = Some(payload.into_bytes());
+        }
         Ok(())
     }
 
     async fn recv_payload(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
         loop {
-            match self.conn.recv_server_msg().await {
+            // While the human is parked (dropped, awaiting resume) bound the wait so a human who
+            // never returns can't pin this bot's in-flight fleet slot forever; online → wait freely.
+            let msg = if self.peer_online.load(Ordering::Relaxed) {
+                self.conn.recv_server_msg().await
+            } else {
+                match tokio::time::timeout(self.resume_grace, self.conn.recv_server_msg()).await {
+                    Ok(m) => m,
+                    Err(_) => return Ok(None), // grace expired while parked → end the match
+                }
+            };
+            match msg {
                 Some(ServerMsg::Relay { match_id, payload }) if match_id == self.match_id => {
                     tracing::trace!(match_id = %self.match_id, head = %&payload[..payload.len().min(70)], "bus rx (peer→bot)");
                     return Ok(Some(payload.into_bytes()));
                 }
                 // Other-match frames shouldn't arrive (one match per virtual conn); ignore.
                 Some(ServerMsg::Relay { .. }) => continue,
-                // Opponent left or the connection ended → end the match channel.
-                Some(ServerMsg::PeerDropped { .. }) | None => return Ok(None),
+                // The human reloaded/disconnected. DON'T collapse the match — park and keep the bot
+                // (and its co-signing key) alive so the game resumes when they reconnect.
+                Some(ServerMsg::PeerDropped { .. }) => {
+                    self.peer_online.store(false, Ordering::Relaxed);
+                    continue;
+                }
+                // The human is back: re-route to their new conn and re-emit our last frame.
+                Some(ServerMsg::PeerResumed { .. }) => {
+                    self.peer_online.store(true, Ordering::Relaxed);
+                    self.on_peer_resumed().await;
+                    continue;
+                }
+                // The bus connection itself closed → end the match channel.
+                None => return Ok(None),
                 Some(_) => continue,
             }
         }
@@ -299,5 +388,138 @@ mod tests {
         assert_eq!(info.match_id, "m1");
         assert_eq!(info.role, Role::B);
         assert_eq!(info.opponent_wallet, "0xhuman");
+    }
+
+    // A human `peer.dropped` must NOT collapse the bot's match (the old `Ok(None)` bug that killed the
+    // bot on reload). The transport parks: a frame arriving after the drop is still delivered, so the
+    // game continues when the human reconnects. The regression this whole change fixes.
+    #[tokio::test]
+    async fn peer_dropped_parks_instead_of_ending_the_match() {
+        let state = AppState::in_memory_for_test();
+        let conn = BusRelayConnection::register(state.clone());
+        let match_id = "m-park";
+        let transport = BusRelayTransport::new(conn.clone(), match_id.into());
+
+        // Human drops, then (after reconnecting) sends a frame. A collapsing transport would have
+        // returned None on the drop; the parking one skips it and delivers the frame.
+        let frame_env = r#"{"t":"frame","kind":"move","data":"{}"}"#;
+        state
+            .bus
+            .deliver(
+                &conn.conn_ref(),
+                ServerMsg::PeerDropped {
+                    match_id: match_id.into(),
+                }
+                .to_text(),
+            )
+            .await;
+        state
+            .bus
+            .deliver(
+                &conn.conn_ref(),
+                ServerMsg::Relay {
+                    match_id: match_id.into(),
+                    payload: frame_env.into(),
+                }
+                .to_text(),
+            )
+            .await;
+
+        let got = transport.recv_payload().await.expect("recv ok");
+        assert_eq!(
+            got.as_deref(),
+            Some(frame_env.as_bytes()),
+            "parked past the drop and delivered the next frame instead of ending the match",
+        );
+    }
+
+    // On `peer.resumed` the bot re-emits its last frame to the reconnected human so they re-ACK it —
+    // the piece that makes a mid-move reload continue instead of stalling on a lost ACK.
+    #[tokio::test]
+    async fn peer_resumed_resends_last_frame_to_the_reconnected_human() {
+        let state = AppState::in_memory_for_test();
+        let bot = BusRelayConnection::register(state.clone());
+        let human = BusRelayConnection::register(state.clone());
+        let match_id = "m-resume";
+        state
+            .mp
+            .put_match(
+                match_id,
+                MatchRecord {
+                    game: "blackjack".into(),
+                    seat_a: "0xhuman".into(),
+                    seat_b: "0xbot".into(),
+                    conn_a: human.conn_ref(),
+                    conn_b: bot.conn_ref(),
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+        let transport = BusRelayTransport::new(bot.clone(), match_id.into());
+
+        // Bot proposes a MOVE (captured as last_frame + routed to the human).
+        let move_env = r#"{"t":"frame","kind":"move","data":"{}"}"#;
+        transport
+            .send_payload(move_env.as_bytes().to_vec())
+            .await
+            .expect("send ok");
+        let first = human.recv_for_test().await.expect("human gets the move");
+        assert!(first.contains("move"), "original move routed to the human");
+
+        // Human reloaded and resumed. Processing PeerResumed re-emits the MOVE, then recv_payload
+        // parks awaiting the human's re-ACK — so bound it with a timeout and assert the resend landed.
+        state
+            .bus
+            .deliver(
+                &bot.conn_ref(),
+                ServerMsg::PeerResumed {
+                    match_id: match_id.into(),
+                    seat: "A".into(),
+                    conn_ref: human.conn_ref(),
+                }
+                .to_text(),
+            )
+            .await;
+        let _ = tokio::time::timeout(Duration::from_millis(100), transport.recv_payload()).await;
+
+        let resent = tokio::time::timeout(Duration::from_millis(200), human.recv_for_test())
+            .await
+            .expect("resend delivered, no hang")
+            .expect("human gets the resent move");
+        assert!(
+            resent.contains("relay") && resent.contains("move"),
+            "resume re-emitted the bot's last frame to the reconnected human: {resent}",
+        );
+    }
+
+    // A human who never returns must not pin the bot's in-flight fleet slot forever: after the grace
+    // the parked match ends (freeing the slot). Uses a short injected grace so the test runs fast.
+    #[tokio::test]
+    async fn grace_expiry_ends_a_parked_match_when_the_human_never_returns() {
+        let state = AppState::in_memory_for_test();
+        let conn = BusRelayConnection::register(state.clone());
+        let match_id = "m-grace";
+        let transport = BusRelayTransport::with_resume_grace(
+            conn.clone(),
+            match_id.into(),
+            Duration::from_millis(50),
+        );
+
+        state
+            .bus
+            .deliver(
+                &conn.conn_ref(),
+                ServerMsg::PeerDropped {
+                    match_id: match_id.into(),
+                }
+                .to_text(),
+            )
+            .await;
+        let got = transport.recv_payload().await.expect("recv ok");
+        assert_eq!(
+            got, None,
+            "grace expiry ends the parked match so the fleet slot frees"
+        );
     }
 }

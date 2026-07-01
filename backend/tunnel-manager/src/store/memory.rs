@@ -199,6 +199,8 @@ pub struct InMemoryMpStore {
     queues: RwLock<HashMap<String, VecDeque<Waiting>>>,
     invites: RwLock<HashMap<String, DirectedInvite>>,
     matches: RwLock<HashMap<String, MatchRecord>>,
+    // (reservation, claimed). Single-instance, so no TTL: tests are short-lived.
+    arena: RwLock<HashMap<String, (crate::store::ArenaReservation, bool)>>,
 }
 
 #[async_trait]
@@ -317,6 +319,29 @@ impl MpStore for InMemoryMpStore {
         } else {
             None
         }
+    }
+
+    async fn put_arena_reservation(&self, match_id: &str, rec: crate::store::ArenaReservation) {
+        self.arena
+            .write()
+            .unwrap()
+            .insert(match_id.to_owned(), (rec, false));
+    }
+
+    async fn claim_arena(&self, match_id: &str, wallet: &str) -> crate::store::ArenaClaim {
+        use crate::store::ArenaClaim;
+        let mut arena = self.arena.write().unwrap();
+        let Some((rec, claimed)) = arena.get_mut(match_id) else {
+            return ArenaClaim::NotFound;
+        };
+        if rec.seat_a != wallet {
+            return ArenaClaim::ForeignWallet;
+        }
+        if *claimed {
+            return ArenaClaim::AlreadyClaimed;
+        }
+        *claimed = true;
+        ArenaClaim::Claimed(rec.clone())
     }
 }
 
