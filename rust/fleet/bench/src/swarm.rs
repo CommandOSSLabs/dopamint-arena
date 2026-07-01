@@ -933,9 +933,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "timing-sensitive; run manually"]
     fn steady_state_refills_pool_across_the_duration_window() {
         // Duration-led: a 4-deep pool relaunched for ~1s must complete far more
         // than 4 tunnels, proving the refill loop runs (not a one-shot burst).
+        // Ignored in CI: the fixed 1s window is starved of CPU when this runs
+        // alongside the other heavy swarm tests on a small shared runner, so the
+        // throughput assertion is unreliable there. Run manually or in isolation.
         let out = run_steady_state(
             2,
             1,

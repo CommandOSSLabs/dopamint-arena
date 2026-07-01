@@ -397,7 +397,13 @@ fn resolve_protocol_ids(raw: &str) -> Result<Vec<&'static str>, String> {
 
 pub fn help_text() -> String {
     let mut help = Vec::new();
+    // The after-help embeds hand-formatted example lines wider than 100 cols.
+    // clap only reflows them when its `wrap_help` feature is on, which the full
+    // workspace enables transitively (sui-indexer) while a scoped fleet-bench
+    // build does not — so unpinned width makes the help nondeterministic. Pin to
+    // 0 (source formatting, no reflow) to render the authored layout verbatim.
     Raw::command()
+        .term_width(0)
         .write_long_help(&mut help)
         .expect("help renders");
     String::from_utf8(help).expect("clap help is utf8")
