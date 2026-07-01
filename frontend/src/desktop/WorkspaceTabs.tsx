@@ -34,8 +34,10 @@ type DockSide = "bottom" | "right";
  * Desktop workspaces switch from a tab bar at the top of the arena body — chrome
  * INSIDE the `/` route, not the global header. Each tab is just the `section`
  * search param (so refresh / share keeps the workspace); the telemetry dock below
- * stays put across all three. The right side carries the floor's controls — the
- * layout-tools menu and a primary `+ Add` — so the floor itself stays clean.
+ * stays put across all four. The right side carries the floor's controls — the
+ * layout-tools menu and a primary `+ Add` — so the floor itself stays clean. On the
+ * "All" floor those controls act on every group at once (see `toolTargets` in
+ * Desktop.tsx); on a single workspace they act on just that floor.
  */
 const WORKSPACE_TABS: {
   section: MobileSection;
@@ -43,8 +45,7 @@ const WORKSPACE_TABS: {
   icon: LucideIcon;
 }[] = [
   // The aggregate "All" floor — every workspace's live windows at once — is the default
-  // landing (the bare `/` with no `section` param). It has no floor tools of its own (the
-  // right-side cluster hides below).
+  // landing (the bare `/` with no `section` param). Its floor tools act on all groups.
   { section: "all", label: "All", icon: LayoutDashboard },
   { section: "games", label: "Game", icon: Gamepad2 },
   { section: "payment", label: "Payment", icon: Wallet },
@@ -128,65 +129,61 @@ export function WorkspaceTabs({
         })}
       </nav>
 
-      {active !== "all" && (
-        <div className="flex items-center gap-2">
-          <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <PopoverTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="secondary"
-                    aria-label="Layout tools"
-                    className="size-10 border border-border"
-                  >
-                    <LayoutGrid className="size-5" />
-                  </Button>
-                </PopoverTrigger>
-              </TooltipTrigger>
-              <TooltipContent>Layout tools</TooltipContent>
-            </Tooltip>
-            <PopoverContent align="end" side="bottom" className="w-48 p-1">
-              <ToolItem
-                icon={LayoutGrid}
-                label="Auto-arrange"
-                onClick={tool(onArrange)}
-              />
-              <ToolItem icon={Plus} label="Add all" onClick={tool(onAddAll)} />
-              <ToolItem
-                icon={dockSide === "bottom" ? PanelRight : PanelBottom}
-                label={
-                  dockSide === "bottom" ? "Dock to right" : "Dock to bottom"
-                }
-                onClick={tool(onToggleDock)}
-              />
-              <ToolItem
-                icon={RotateCcw}
-                label="Reset layout"
-                onClick={tool(onResetLayout)}
-              />
-              <div className="my-1 border-t border-border" />
-              <ToolItem
-                icon={Trash2}
-                label="Remove all"
-                danger
-                onClick={tool(onRemoveAll)}
-              />
-            </PopoverContent>
-          </Popover>
+      <div className="flex items-center gap-2">
+        <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  aria-label="Layout tools"
+                  className="size-10 border border-border"
+                >
+                  <LayoutGrid className="size-5" />
+                </Button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent>Layout tools</TooltipContent>
+          </Tooltip>
+          <PopoverContent align="end" side="bottom" className="w-48 p-1">
+            <ToolItem
+              icon={LayoutGrid}
+              label="Auto-arrange"
+              onClick={tool(onArrange)}
+            />
+            <ToolItem icon={Plus} label="Add all" onClick={tool(onAddAll)} />
+            <ToolItem
+              icon={dockSide === "bottom" ? PanelRight : PanelBottom}
+              label={dockSide === "bottom" ? "Dock to right" : "Dock to bottom"}
+              onClick={tool(onToggleDock)}
+            />
+            <ToolItem
+              icon={RotateCcw}
+              label="Reset layout"
+              onClick={tool(onResetLayout)}
+            />
+            <div className="my-1 border-t border-border" />
+            <ToolItem
+              icon={Trash2}
+              label="Remove all"
+              danger
+              onClick={tool(onRemoveAll)}
+            />
+          </PopoverContent>
+        </Popover>
 
-          <Button
-            size="sm"
-            onClick={onAdd}
-            aria-label="Add an app"
-            data-testid="add-app"
-            className="h-10 gap-1.5 px-4 text-sm font-semibold"
-          >
-            <Plus className="size-5" />
-            Add
-          </Button>
-        </div>
-      )}
+        <Button
+          size="sm"
+          onClick={onAdd}
+          aria-label="Add an app"
+          data-testid="add-app"
+          className="h-10 gap-1.5 px-4 text-sm font-semibold"
+        >
+          <Plus className="size-5" />
+          Add
+        </Button>
+      </div>
     </div>
   );
 }

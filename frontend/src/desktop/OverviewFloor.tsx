@@ -23,12 +23,12 @@ export interface OverviewGroup {
 }
 
 /**
- * The "All" workspace: a normal floor that just shows every workspace at once, each under a
- * group heading (Game / Payment / Chat). Windows render full-size in a 3-per-row grid and the
- * whole floor scrolls vertically when a group has more than fits — so a single app sits in one
- * of the three columns and a busy floor wraps onto more rows. It mounts the same
- * {@link GameWindow} + {@link GameContent} a normal floor does, so games keep auto-playing
- * (and report real per-game TPS) and the take-over overlay still works.
+ * The phone "All" view: every workspace's open windows at once, each under a group heading
+ * (Game / Payment / Chat), as a vertical scroll of full-size tiles (1–2 per row on a phone).
+ * It mounts the same {@link GameWindow} + {@link GameContent} the phone floor does, so games
+ * keep auto-playing (and report real per-game TPS) and the take-over overlay still works.
+ * The desktop "All" view instead reuses the real draggable floor per group (see WorkspaceFloor
+ * in Desktop.tsx); this static-tile variant is the phone's, where floor gestures don't apply.
  *
  * Rendered exclusively (the per-workspace floor is unmounted while this is on screen), so
  * reusing the real window ids never double-mounts a session.
