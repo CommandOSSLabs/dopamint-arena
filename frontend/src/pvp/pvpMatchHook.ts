@@ -696,6 +696,9 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     const wallet = deps.account.address;
     installResumePersistence();
     evictExpiredRecords();
+    // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take
+    // over. Forced ON per entry (like battleship), regardless of the session's last toggle.
+    this.auto = true;
 
     void (async () => {
       try {
