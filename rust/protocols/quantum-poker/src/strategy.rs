@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    available_for, balance, best_poker_hand, commit_slot_secrets, derive_quantum_card,
+    available_for, best_poker_hand, commit_slot_secrets, derive_quantum_card,
     expected_quantum_poker_reveal_slots, local_secret_array, random_slot_secrets, reveal_array,
-    street_bet, total_bet, PokerMove, PokerPhase, PokerState, QuantumPoker, SlotSecret,
-    A_HOLE_SLOTS, B_HOLE_SLOTS,
+    street_bet, PokerMove, PokerPhase, PokerState, QuantumPoker, SlotSecret, A_HOLE_SLOTS,
+    B_HOLE_SLOTS,
 };
 use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
 
@@ -416,7 +416,7 @@ fn estimate_strength_profile(
     holes: &[u8],
 ) -> PersonaStrengthProfile {
     let call_amount = street_bet(state, seat.other()).saturating_sub(street_bet(state, seat));
-    let available = balance(state, seat).saturating_sub(total_bet(state, seat));
+    let available = available_for(state, seat);
     let pot = state.total_bet_a + state.total_bet_b;
     let preflop = state.board.len() < 3;
     let river = state.board.len() >= 5;

@@ -376,15 +376,17 @@ pub(crate) async fn arena_allocate(
             .collect();
         let results = state.arena_opener.open_and_fund_seat_b_many(reqs).await;
         for ((slot, game, _user_eph_pubkey, stake), result) in chunk.iter().zip(results) {
-            let tunnel_id = match result {
-                Ok(id) => id,
+            let open = match result {
+                Ok(open) => open,
                 Err(e) => {
                     tracing::warn!(game = %game, "arena open failed, omitting: {e:#}");
                     continue;
                 }
             };
             // Seed the shared reservation: ANY instance's `arena.join` reads this to reconstruct party
-            // B and spawn the bot locally. The running bot is never stored — only this recipe.
+            // B and spawn the bot locally. The running bot is never stored — only this recipe. The
+            // tunnel's `created_at` is captured HERE (from the open) so the bot never reads chain on its
+            // play path — the root-cause fix for "bot never moves."
             state
                 .mp
                 .put_arena_reservation(
@@ -393,15 +395,16 @@ pub(crate) async fn arena_allocate(
                         game: game.clone(),
                         seat_a: req.user_address.clone(),
                         seat_b: slot.bot_address.clone(),
-                        tunnel_id: tunnel_id.clone(),
+                        tunnel_id: open.tunnel_id.clone(),
                         eph_secret_hex: slot.eph_secret_hex.clone(),
+                        created_at_ms: open.created_at_ms,
                     },
                 )
                 .await;
             allocations.push(ArenaAllocation {
                 game: game.clone(),
                 match_id: slot.match_id.clone(),
-                tunnel_id,
+                tunnel_id: open.tunnel_id,
                 bot_eph_pubkey: slot.eph_pubkey.clone(),
                 bot_address: slot.bot_address.clone(),
                 stake_each: *stake,

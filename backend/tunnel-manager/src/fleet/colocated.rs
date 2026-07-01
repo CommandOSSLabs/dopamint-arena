@@ -172,11 +172,11 @@ pub async fn join_and_spawn(
     let match_id = match_id.to_owned();
     tokio::spawn(async move {
         if let Err(e) = drive_arena_bot(
-            &st,
             &rec.game,
             &match_id,
             &rec.tunnel_id,
             &rec.seat_a,
+            rec.created_at_ms,
             match_key,
             conn,
         )
@@ -193,34 +193,25 @@ pub async fn join_and_spawn(
 /// (created at allocate); `RelayBridgedAnchor::open` resolves it with no chain call. There is no
 /// join wait or wake — the bot is spawned already paired with a live `MatchRecord`.
 async fn drive_arena_bot(
-    state: &SharedState,
     game: &str,
     match_id: &str,
     tunnel_id: &str,
     opponent_wallet: &str,
+    created_at_ms: u64,
     match_key: DurableSigner,
     conn: std::sync::Arc<BusRelayConnection>,
 ) -> anyhow::Result<()> {
     let transport = BusRelayTransport::new(conn.clone(), match_id.to_owned());
     let channel = MatchChannel::new(transport);
-    // `created_at` is only used to sign the SETTLE timestamp (see RelayBridgedAnchor). It must NOT
-    // block the hello/first move: a slow Sui RPC here left the bot spawned but silent (no hello, no
-    // move) — the "bot never moves" bug. Bound it and fall back to 0 so the match plays; the FE
-    // defaults created_at to 0 the same way when its read is slow, so settle still agrees in the
-    // common case, and gameplay never waits on chain IO.
-    let created_at_ms = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        state.arena_opener.read_created_at_ms(tunnel_id),
-    )
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .unwrap_or(0);
+    // `created_at` is captured at allocate and carried in the reservation — the bot does ZERO chain IO
+    // before its first move. A slow Sui RPC HERE previously left the bot spawned but silent (no hello,
+    // no move): the "bot never moves" bug. It is used only to sign the SETTLE timestamp; the FE reads
+    // the same on-chain field, so both halves commit to equal timestamp bytes.
     tracing::info!(
         match_id = %match_id,
         game = %game,
         created_at_ms,
-        "arena bot entering play (created_at read, not blocking)"
+        "arena bot entering play (created_at from reservation, no chain IO)"
     );
     let anchor = RelayBridgedAnchor::new(
         tunnel_id.to_owned(),
@@ -345,6 +336,7 @@ mod tests {
                     seat_b: slot.bot_address.clone(),
                     tunnel_id: "0xdead".into(),
                     eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
             )
             .await;
@@ -376,6 +368,7 @@ mod tests {
                     seat_b: slot.bot_address.clone(),
                     tunnel_id: "0xdead".into(),
                     eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
             )
             .await;
@@ -421,6 +414,7 @@ mod tests {
                     seat_b: slot.bot_address.clone(),
                     tunnel_id: TUNNEL_ID.into(),
                     eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
             )
             .await;
@@ -454,8 +448,13 @@ mod tests {
             InMemoryTranscriptRecorder::new(),
         );
 
-        // Bound the wait so a bot-side regression fails fast instead of hanging CI.
-        let human_outcome = tokio::time::timeout(Duration::from_secs(10), human)
+        // Bound the wait so a genuine bot-side hang fails the test instead of stalling CI until the
+        // global job timeout. The bound must clear a REAL match's wall-clock on a loaded CI runner:
+        // `cargo test` runs the whole backend suite in parallel and oversubscribes the box's cores,
+        // where an equivalent stand-in match (bot-fleet's `bot_plays_a_full_match…`) legitimately
+        // takes ~90s — so the former 10s fired spuriously. 180s still catches a true deadlock (which
+        // never completes) while tolerating a slow, contended runner.
+        let human_outcome = tokio::time::timeout(Duration::from_secs(180), human)
             .await
             .expect("the match settles in time")
             .expect("human (party A) plays to settlement over the bus");

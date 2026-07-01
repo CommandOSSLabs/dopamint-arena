@@ -565,10 +565,10 @@ return false
 const ARENA_RES_TTL_SECS: i64 = 300;
 
 // Seed an arena reservation as a hash + TTL. KEYS[1]=arena:res:<id>
-// ARGV: 1=game 2=seat_a 3=seat_b 4=tunnel_id 5=eph_secret 6=ttl
+// ARGV: 1=game 2=seat_a 3=seat_b 4=tunnel_id 5=eph_secret 6=created_at 7=ttl
 const PUT_ARENA_RESERVATION: &str = r#"
-redis.call('HSET', KEYS[1], 'game', ARGV[1], 'seat_a', ARGV[2], 'seat_b', ARGV[3], 'tunnel_id', ARGV[4], 'eph_secret', ARGV[5], 'claimed', '0')
-redis.call('EXPIRE', KEYS[1], tonumber(ARGV[6]))
+redis.call('HSET', KEYS[1], 'game', ARGV[1], 'seat_a', ARGV[2], 'seat_b', ARGV[3], 'tunnel_id', ARGV[4], 'eph_secret', ARGV[5], 'created_at', ARGV[6], 'claimed', '0')
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[7]))
 return 1
 "#;
 
@@ -589,7 +589,8 @@ return cjson.encode({
   seat_a=sa,
   seat_b=redis.call('HGET', KEYS[1], 'seat_b'),
   tunnel_id=redis.call('HGET', KEYS[1], 'tunnel_id'),
-  eph_secret=redis.call('HGET', KEYS[1], 'eph_secret')
+  eph_secret=redis.call('HGET', KEYS[1], 'eph_secret'),
+  created_at=redis.call('HGET', KEYS[1], 'created_at')
 })
 "#;
 
@@ -866,6 +867,7 @@ impl MpStore for RedisMpStore {
                     rec.seat_b,
                     rec.tunnel_id,
                     rec.eph_secret_hex,
+                    rec.created_at_ms.to_string(),
                     ARENA_RES_TTL_SECS.to_string(),
                 ],
             )
@@ -901,6 +903,7 @@ impl MpStore for RedisMpStore {
             seat_b: Option<String>,
             tunnel_id: Option<String>,
             eph_secret: Option<String>,
+            created_at: Option<String>,
         }
         let Ok(out) = serde_json::from_str::<ClaimOut>(&json) else {
             return ArenaClaim::NotFound;
@@ -912,6 +915,12 @@ impl MpStore for RedisMpStore {
                 seat_b: out.seat_b.unwrap_or_default(),
                 tunnel_id: out.tunnel_id.unwrap_or_default(),
                 eph_secret_hex: out.eph_secret.unwrap_or_default(),
+                // Absent (pre-rollout reservation) or unparsable → 0, matching the FE's slow-read
+                // fallback; a real value makes the bot's settle timestamp byte-match the FE half.
+                created_at_ms: out
+                    .created_at
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
             }),
             "foreign" => ArenaClaim::ForeignWallet,
             "claimed_already" => ArenaClaim::AlreadyClaimed,
