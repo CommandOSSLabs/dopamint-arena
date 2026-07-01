@@ -152,7 +152,12 @@ impl SuiArenaOpener {
         settler: Arc<SuiSettler>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            http: reqwest::Client::new(),
+            // Bounded so a slow/rate-limited Sui RPC (e.g. `read_created_at_ms` before the bot's hello)
+            // fails fast and the match ends cleanly, instead of hanging the bot forever with no error.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("reqwest client builder with timeout"),
             rpc_url,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,

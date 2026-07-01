@@ -7,11 +7,13 @@ import type { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSe
 
 const AUTO_RETURN_SEC = 3;
 
-interface PaymentsThankYouProps {
+interface RegularPaymentsThankYouProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
 }
 
-export function PaymentsThankYou({ session }: PaymentsThankYouProps) {
+export function RegularPaymentsThankYou({
+  session,
+}: RegularPaymentsThankYouProps) {
   const [secondsLeft, setSecondsLeft] = useState(AUTO_RETURN_SEC);
 
   useEffect(() => {
@@ -32,7 +34,7 @@ export function PaymentsThankYou({ session }: PaymentsThankYouProps) {
 
   return (
     <div className="flex h-full min-h-0 items-center justify-center p-6">
-      <div className="wal-glow flex w-full max-w-sm flex-col items-center gap-5 rounded-[20px] border border-border bg-card/75 p-6 text-center backdrop-blur-xl">
+      <div className="wal-glow flex w-full max-w-sm flex-col items-center gap-3 rounded-[20px] border border-border bg-card/75 p-6 text-center backdrop-blur-xl">
         <div
           className="flex size-14 items-center justify-center rounded-full border border-border"
           style={{

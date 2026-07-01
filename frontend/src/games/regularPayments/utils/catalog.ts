@@ -2,8 +2,8 @@ import { mtps } from "@/onchain/mtps";
 import type { Product, ProductCategory } from "../types";
 
 /** Micro-pricing for high-volume carts (~500 co-signed ticks at full 10 MTPS budget). */
-export const PRICE_LO = mtps(1n) / 100n; // 0.01 MTPS
-export const PRICE_HI = mtps(1n) / 50n; // 0.02 MTPS
+export const PRICE_LO = mtps(1n);
+export const PRICE_HI = mtps(2n);
 
 export const CATEGORIES: { id: ProductCategory; label: string }[] = [
   { id: "fresh", label: "Fresh" },

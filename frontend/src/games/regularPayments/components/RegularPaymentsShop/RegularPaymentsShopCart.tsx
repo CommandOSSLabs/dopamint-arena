@@ -7,15 +7,15 @@ import { cn } from "@/lib/utils";
 import { formatGrammarLength, formatMtps } from "../../utils";
 import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 
-interface PaymentsShopCartProps {
+interface RegularPaymentsShopCartProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
   cartTargetRef?: RefObject<HTMLSpanElement | null>;
 }
 
-export function PaymentsShopCart({
+export function RegularPaymentsShopCart({
   session,
   cartTargetRef,
-}: PaymentsShopCartProps) {
+}: RegularPaymentsShopCartProps) {
   const progressPct = Math.min(
     100,
     (Number(session.paidSoFar) / Number(session.depositBudget)) * 100,

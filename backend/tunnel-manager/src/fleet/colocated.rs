@@ -203,15 +203,26 @@ async fn drive_arena_bot(
 ) -> anyhow::Result<()> {
     let transport = BusRelayTransport::new(conn.clone(), match_id.to_owned());
     let channel = MatchChannel::new(transport);
-    // The bot signs its settle half with `timestamp = created_at` (matching the FE half, which reads
-    // the same on-chain field). Fail the match if unreadable — a half the FE would reject.
-    let created_at_ms = state.arena_opener.read_created_at_ms(tunnel_id).await?;
-    let anchor = RelayBridgedAnchor::new(
-        tunnel_id.to_owned(),
-        conn,
-        match_id.to_owned(),
+    // `created_at` is only used to sign the SETTLE timestamp (see RelayBridgedAnchor). It must NOT
+    // block the hello/first move: a slow Sui RPC here left the bot spawned but silent (no hello, no
+    // move) — the "bot never moves" bug. Bound it and fall back to 0 so the match plays; the FE
+    // defaults created_at to 0 the same way when its read is slow, so settle still agrees in the
+    // common case, and gameplay never waits on chain IO.
+    let created_at_ms = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        state.arena_opener.read_created_at_ms(tunnel_id),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .unwrap_or(0);
+    tracing::info!(
+        match_id = %match_id,
+        game = %game,
         created_at_ms,
+        "arena bot entering play (created_at read, not blocking)"
     );
+    let anchor = RelayBridgedAnchor::new(tunnel_id.to_owned(), conn, match_id.to_owned(), created_at_ms);
     let moves = play_game(game, channel, anchor, match_key, opponent_wallet).await?;
     tracing::info!(
         match_id = %match_id,
