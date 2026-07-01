@@ -487,8 +487,6 @@ pub(crate) async fn settle(
             // settle body (byte-for-byte what the co-signed root commits to).
             if let Some(archiver) = state.archiver.clone() {
                 let meta = transcript_store::ArchiveMeta {
-                    tunnel_id: tunnel_id.clone(),
-                    tx_digest: digest.clone(),
                     transcript_root: transcript_root_hex.clone(),
                     settle_version: crate::routes::SETTLE_BODY_VERSION,
                 };

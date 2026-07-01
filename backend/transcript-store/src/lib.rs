@@ -25,19 +25,21 @@ pub fn transcript_key(prefix: &str, tunnel_id: &str, tx_digest: &str) -> String 
     }
 }
 
-/// Small ASCII object metadata (S3 caps object metadata at ~2 KB).
+/// Small ASCII object metadata (S3 caps object metadata at ~2 KB). Identity (`tunnel_id`,
+/// `tx_digest`) is NOT here — it's passed to `archive`/`read` as the single source of truth
+/// for the key, so it can't diverge from the metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveMeta {
-    pub tunnel_id: String,
-    pub tx_digest: String,
     /// `0x`-prefixed hex transcript root (the on-chain-anchored Merkle root).
     pub transcript_root: String,
     pub settle_version: u8,
 }
 
-/// Writes the archived transcript for a settlement. Keyed by identity, not S3 key — the
-/// impl owns the key layout. `Err` = exhausted inline retries (caller may enqueue for a
-/// durable retry).
+/// Writes the archived transcript for a settlement. `bytes` MUST be the **authoritative
+/// co-signed settle body** (byte-for-byte what the on-chain root commits to) — never a
+/// locally re-derived transcript — so the archived object verifies against the on-chain
+/// root. Keyed by identity, not S3 key (the impl owns the key layout). `Err` = exhausted
+/// inline retries (caller may enqueue for a durable retry).
 #[async_trait]
 pub trait TranscriptArchiver: Send + Sync {
     async fn archive(
@@ -109,8 +111,8 @@ impl TranscriptArchiver for S3TranscriptStore {
     ) -> anyhow::Result<()> {
         let key = self.key(tunnel_id, tx_digest);
         let md = [
-            ("tunnel-id", meta.tunnel_id.clone()),
-            ("tx-digest", meta.tx_digest.clone()),
+            ("tunnel-id", tunnel_id.to_string()),
+            ("tx-digest", tx_digest.to_string()),
             ("transcript-root", meta.transcript_root.clone()),
             ("settle-version", meta.settle_version.to_string()),
         ]
