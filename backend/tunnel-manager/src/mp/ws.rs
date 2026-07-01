@@ -268,9 +268,6 @@ async fn handle_message(
             if !auth::verify_ed25519(&pubkey, nonce.as_bytes(), &sig) {
                 return Err("bad_signature");
             }
-            if !auth::ed25519_pubkey_matches_wallet(&pubkey, &w) {
-                return Err("wallet_pubkey_mismatch");
-            }
             state.bus.register(conn_id, tx.clone(), ctrl_tx.clone());
             state.mp.set_presence(&w, here(state, conn_id)).await;
             *wallet = Some(w);
@@ -643,8 +640,6 @@ mod tests {
     use crate::routes::test_support::test_state;
     use crate::state::AppState;
     use crate::store::ConnRef;
-    use ed25519_dalek::{Signer, SigningKey};
-    use sui_sdk_types::{Address, Ed25519PublicKey};
 
     // Keepalive is server-driven (RFC 6455): a browser can't originate pings, so
     // without this the ALB reaps a quiet-but-live match. The immediate first
@@ -688,80 +683,6 @@ mod tests {
         let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
         state.bus.register(conn_id, tx, ctrl_tx);
         (conn_id, rx)
-    }
-
-    fn signed_connect(wallet: String, nonce: &str, seed: [u8; 32]) -> ClientMsg {
-        let sk = SigningKey::from_bytes(&seed);
-        ClientMsg::Connect {
-            wallet,
-            pubkey: hex::encode(sk.verifying_key().to_bytes()),
-            sig: hex::encode(sk.sign(nonce.as_bytes()).to_bytes()),
-            nonce: nonce.to_owned(),
-        }
-    }
-
-    #[tokio::test]
-    async fn connect_rejects_pubkey_that_does_not_derive_wallet() {
-        let state = test_state();
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
-        let mut wallet = None;
-        let mut joined = HashSet::new();
-        let mut matches = HashMap::new();
-        let mut holds = FuturesUnordered::new();
-        let nonce = "server-nonce";
-
-        let err = handle_message(
-            &state,
-            &tx,
-            &ctrl_tx,
-            Uuid::new_v4(),
-            nonce,
-            &mut wallet,
-            &mut joined,
-            &mut matches,
-            signed_connect(Address::ZERO.to_string(), nonce, [7u8; 32]),
-            &mut holds,
-        )
-        .await
-        .unwrap_err();
-
-        assert_eq!(err, "wallet_pubkey_mismatch");
-        assert!(wallet.is_none());
-    }
-
-    #[tokio::test]
-    async fn connect_accepts_pubkey_that_derives_wallet() {
-        let state = test_state();
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
-        let mut wallet = None;
-        let mut joined = HashSet::new();
-        let mut matches = HashMap::new();
-        let mut holds = FuturesUnordered::new();
-        let nonce = "server-nonce";
-        let seed = [7u8; 32];
-        let sk = SigningKey::from_bytes(&seed);
-        let derived_wallet = Ed25519PublicKey::new(sk.verifying_key().to_bytes())
-            .derive_address()
-            .to_string();
-
-        handle_message(
-            &state,
-            &tx,
-            &ctrl_tx,
-            Uuid::new_v4(),
-            nonce,
-            &mut wallet,
-            &mut joined,
-            &mut matches,
-            signed_connect(derived_wallet.clone(), nonce, seed),
-            &mut holds,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(wallet.as_deref(), Some(derived_wallet.as_str()));
     }
 
     // Seat A → B, seat B → A, stranger → neither. Covers relay_target_is_the_other_seat.
