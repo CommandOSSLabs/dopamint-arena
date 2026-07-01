@@ -223,7 +223,6 @@ async fn main() -> anyhow::Result<()> {
         chat: crate::chat_store::ChatTranscriptStore::new(),
         fleet: crate::fleet::BotPool::default(),
         arena_opener,
-        arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
         arena_fleet_count: config.colocated_fleet_count,
         arena_fleet_games: config.colocated_fleet_games.iter().cloned().collect(),
         wallet_pool,
@@ -282,11 +281,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
-        // Arena one-signature flow (ADR-0026): reserve warm bots, then map opened tunnels back to
-        // each bot so it deposits its seat. `/v1/fleet` is the bot's control socket into the pool.
+        // Arena one-signature flow (ADR-0026, ADR-0005 co-location): `allocate` seeds a shared
+        // reservation recipe; `arena.join` (over /v1/mp) claims it and spawns the co-located bot.
+        // `opened` is a compatibility 204 no-op.
         .route("/v1/arena/allocate", post(routes::arena_allocate))
         .route("/v1/arena/opened", post(routes::arena_opened))
-        .route("/v1/fleet", get(crate::fleet::ws::fleet_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
         .with_state(state);

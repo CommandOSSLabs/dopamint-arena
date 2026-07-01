@@ -45,12 +45,9 @@ pub struct AppState {
     /// allocate so the user's open is deposit-only. `SuiArenaOpener` when the wallet pool + on-chain
     /// config are set, else `Noop` (dev/test).
     pub arena_opener: std::sync::Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener>,
-    /// Binds the user's WS conn to its co-located bot's bus conn for an allocated arena match
-    /// (ADR-0027/0028), completing the `MatchRecord` so the relay can route between them.
-    pub arena: crate::fleet::arena_rendezvous::ArenaRendezvous,
-    /// Max co-located bots spawned on demand per game (config `FLEET_COLOCATED_COUNT`). The arena
-    /// admission ceiling: `reserve_or_spawn` spawns up to this many concurrent matches per game, then
-    /// returns nothing. `0` (default) serves no co-located bots.
+    /// Max co-located arena bot tasks spawned per instance (config `FLEET_COLOCATED_COUNT`). Enforced
+    /// at `arena.join` where the bot is spawned; total fan-out is this × instances. `0` (default)
+    /// serves no co-located bots (`.max(1)` at the join site keeps a single-slot dev default usable).
     pub arena_fleet_count: u32,
     /// Games the co-located fleet serves (config `FLEET_COLOCATED_GAMES`). A game not in this set has
     /// an effective cap of 0 — the trusted-subset gate (a `play_game` arm may exist before it's live).
@@ -112,7 +109,6 @@ impl AppState {
             chat: crate::chat_store::ChatTranscriptStore::new(),
             fleet: crate::fleet::BotPool::default(),
             arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
-            arena: crate::fleet::arena_rendezvous::ArenaRendezvous::default(),
             arena_fleet_count: count,
             arena_fleet_games: games.into_iter().collect(),
             wallet_pool: None,
