@@ -364,7 +364,11 @@ fn balance(state: &PokerState, by: Seat) -> u64 {
     }
 }
 
-fn available_for(state: &PokerState, by: Seat) -> u64 {
+/// The most `by` may still commit this hand: the heads-up **effective stack**
+/// (min of both balances) less what `by` has already put in. The bet/call rules
+/// gate on this, and move strategies must clamp to the same bound — betting past
+/// what the opponent can cover is rejected as "exceeds the effective stack".
+pub(crate) fn available_for(state: &PokerState, by: Seat) -> u64 {
     let effective = state.balance_a.min(state.balance_b);
     effective.saturating_sub(total_bet(state, by))
 }
