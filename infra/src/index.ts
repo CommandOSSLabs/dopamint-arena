@@ -12,6 +12,7 @@ import { createFrontend } from "./components/Frontend.js";
 import { createDatabase } from "./components/Database.js";
 import { createDatabaseProxy } from "./components/DatabaseProxy.js";
 import { createCache } from "./components/Cache.js";
+import { createTranscriptsBucket } from "./components/TranscriptsBucket.js";
 import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
@@ -150,6 +151,16 @@ new aws.secretsmanager.SecretVersion(
   },
 );
 
+const cache = createCache(`dopamint-${cfg.environment}`, {
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.cache.id,
+  nodeType: cfg.cacheNodeType,
+});
+
+const transcriptsBucket = createTranscriptsBucket(
+  `dopamint-${cfg.environment}`,
+);
+
 const iam = createIam(`dopamint-${cfg.environment}`, {
   githubOrg: "CommandOSSLabs",
   githubRepo: "dopamint-arena",
@@ -161,14 +172,9 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
     ...(enokiApiKeySecretArn ? [enokiApiKeySecretArn] : []),
     ...(walletPoolAccessSecretArn ? [walletPoolAccessSecretArn] : []),
   ],
+  taskRoleTranscriptsBucketArn: transcriptsBucket.bucketArn,
   // Task role gets s3:GetObject on the wallet-pool bucket (the running container reads the blob).
   walletPoolS3Bucket: "dev-env-dopamint-wallet-pool",
-});
-
-const cache = createCache(`dopamint-${cfg.environment}`, {
-  subnetIds: network.privateSubnetIds,
-  securityGroupId: sgs.cache.id,
-  nodeType: cfg.cacheNodeType,
 });
 
 const backend = createBackend({
@@ -181,6 +187,7 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
+  s3TranscriptsBucket: transcriptsBucket.bucketName,
   faucetAdminTokenSecretArn,
   enokiApiKeySecretArn,
   walletPoolAccessSecretArn,
@@ -274,8 +281,7 @@ export const githubEnv = githubEnvOutputs({
   ecrUrl: ecr.repositoryUrl,
   ecsCluster: ecs.clusterName,
   ecsService: backendService.serviceName,
-  migrationTaskDef: backend.migrationTaskDefinitionArn,
-  backendTaskDefArn: backend.taskDefinitionArn,
+  backendTaskDefFamily: backend.taskDefinition.family,
   githubDeployRoleArn: iam.githubDeployRoleArn,
   privateSubnetIds: network.privateSubnetIds,
   backendSecurityGroupId: sgs.backend.id,

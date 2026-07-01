@@ -9,6 +9,7 @@ mod fleet;
 mod mp;
 mod ollama;
 mod routes;
+mod s3;
 mod state;
 mod stats;
 mod stats_counter;
@@ -34,6 +35,13 @@ use crate::state::{AppState, SharedState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Pin a single rustls CryptoProvider (ring) as the process default BEFORE any TLS
+    // client (fred, reqwest, aws-sdk-s3) initializes. aws-sdk-s3 compiles aws-lc
+    // (hence cmake in the Dockerfile) but at runtime every rustls user shares this one
+    // provider, avoiding the rustls 0.23 "two default providers" panic. See Cargo.toml
+    // TLS-provider note + ADR-0023.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -93,6 +101,26 @@ async fn main() -> anyhow::Result<()> {
             .clone()
             .unwrap_or_else(|| "qwen2.5:1.5b".into()),
     )?;
+
+    // S3 transcript archival (ADR-0023). Optional: absent in dev/test when
+    // S3_TRANSCRIPTS_BUCKET is unset. Concurrent with Walrus; Walrus above is unchanged.
+    let archiver: Option<std::sync::Arc<dyn crate::s3::TranscriptArchiver>> =
+        match config.s3_bucket.clone() {
+            Some(bucket) => {
+                let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&aws_cfg);
+                tracing::info!(bucket = %bucket, "s3 transcript archival enabled");
+                Some(std::sync::Arc::new(crate::s3::S3Archiver::new(
+                    client, bucket,
+                )))
+            }
+            None => {
+                tracing::info!("s3 transcript archival disabled (S3_TRANSCRIPTS_BUCKET unset)");
+                None
+            }
+        };
 
     let instance_id = config
         .instance_id
@@ -185,6 +213,8 @@ async fn main() -> anyhow::Result<()> {
         settler,
         enoki,
         walrus,
+        archiver,
+        s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
@@ -356,5 +386,13 @@ mod flush_tests {
             state.control.snapshot().await.per_game["ttt"].total_actions,
             5
         );
+    }
+}
+
+#[cfg(test)]
+mod test_init {
+    #[ctor::ctor]
+    fn install_ring_crypto_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
     }
 }

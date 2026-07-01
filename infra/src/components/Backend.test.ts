@@ -215,4 +215,39 @@ describe("backend component", () => {
       "4096",
     );
   });
+
+  it("wires S3 transcript archival when configured", async () => {
+    const backend = createBackend(
+      makeBackendArgs({
+        s3TranscriptsBucket: "dopamint-test-transcripts",
+      }),
+    );
+
+    const defs = JSON.parse(
+      await awaitOutput(backend.taskDefinition.containerDefinitions),
+    );
+    const container = defs[0];
+    const backendEnv = container.environment;
+
+    const s3BucketEnv = backendEnv.find(
+      (e: { name: string }) => e.name === "S3_TRANSCRIPTS_BUCKET",
+    );
+    assert.ok(s3BucketEnv, "must receive S3_TRANSCRIPTS_BUCKET");
+    assert.strictEqual(
+      s3BucketEnv.value,
+      "dopamint-test-transcripts",
+      "S3_TRANSCRIPTS_BUCKET must reference the configured bucket",
+    );
+    assert.ok(
+      backendEnv.some((e: { name: string }) => e.name === "AWS_REGION"),
+      "must receive AWS_REGION for S3 SDK",
+    );
+
+    assert.ok(
+      !container.secrets?.some(
+        (s: { name: string }) => s.name === "DATABASE_URL",
+      ),
+      "backend must not receive DATABASE_URL secret",
+    );
+  });
 });
