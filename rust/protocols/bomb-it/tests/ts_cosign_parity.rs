@@ -44,8 +44,7 @@ fn rust_seat_accepts_ts_signed_first_move() {
         LocalSigner::from_secret(&b_secret),
         opponent_pk,
         TunnelContext {
-            tunnel_id: "0x0000000000000000000000000000000000000000000000000000000000000001"
-                .into(),
+            tunnel_id: "0x0000000000000000000000000000000000000000000000000000000000000001".into(),
             initial: Balances { a: 500, b: 500 },
             seat: Seat::B,
         },
@@ -55,5 +54,9 @@ fn rust_seat_accepts_ts_signed_first_move() {
         .handle_frame(TS_FRAME.as_bytes())
         .expect("bot must accept the browser's TS-signed first move (codec+state_hash+sig)");
     assert_eq!(acks.len(), 1, "bot must co-sign exactly one ACK");
-    assert_eq!(bot.nonce(), 1, "bot must advance to nonce 1 on the accepted move");
+    assert_eq!(
+        bot.nonce(),
+        1,
+        "bot must advance to nonce 1 on the accepted move"
+    );
 }
