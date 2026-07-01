@@ -43,9 +43,10 @@ pub struct GameProfile {
     pub stake_each: u64,
 }
 
-/// Blackjack profile: stake 1000 MTPS each (0 decimals → integer `1000`), matching the FE PvP
-/// hook's `DEFAULT_STAKE` so the bot's pre-created tunnel and the user's deposit agree on the
-/// initial off-chain balances (a divergent stake would break co-signing). Must be ≥ `MIN_BET` (25)
+/// Blackjack profile: stake 1000 MTPS each (0 decimals → integer `1000`). The arena FE co-signs
+/// `allocation.stakeEach` (this value, echoed by the backend) — NOT the FE `DEFAULT_STAKE` (100,
+/// which is the human-vs-human buy-in default) — so bot and browser agree on the initial off-chain
+/// balances (a divergent stake would break co-signing). Must be ≥ `MIN_BET` (25)
 /// or `is_terminal` fires at the initial state and the match settles with zero moves. Match length
 /// is bounded by the protocol's `ROUND_CAP`, not the bankroll. (No host — see [`GameProfile`].)
 pub const BLACKJACK: GameProfile = GameProfile {
