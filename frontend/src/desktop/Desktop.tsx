@@ -62,6 +62,9 @@ import { MobileAddSheet } from "./MobileAddSheet";
 import { AddAppDialog } from "./AddAppDialog";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import type { MobileSection } from "./AppShell";
+import { toast } from "sonner";
+import { engineClient } from "@/engine/engineClient";
+import { engineEnabled } from "@/engine/flag";
 
 type DockSide = "bottom" | "right";
 
@@ -561,6 +564,16 @@ export function ArenaView() {
   const openApp = (module: GameModule) => {
     setAddOpen(false);
     const workspace = module.workspace ?? "games";
+    // Warn BEFORE opening if the device is already at the self-play worker cap (design §2.1): a new
+    // solo window past the cap gets no worker (CAPPED_SNAPSHOT) and just sits idle. Only meaningful
+    // under the worker engine; PvP windows share the hub and never count against the cap.
+    if (engineEnabled()) {
+      const { live, max, atCap } = engineClient.liveWindowStats();
+      if (atCap)
+        toast.warning(`Device limit: ${max} live self-play games`, {
+          description: `${live}/${max} workers are running. A new window won't get its own worker (it'll sit idle) until you close one.`,
+        });
+    }
     const id = addWindowTo(workspace, module.id);
     goToSection(workspace);
     revealWindow(id);

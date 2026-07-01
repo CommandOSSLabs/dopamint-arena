@@ -77,6 +77,68 @@ const soloWindows = new Map<string, SoloWindow>();
 const pvpWindows = new Map<string, PvpWindow>();
 const windowLane = new Map<string, Lane>();
 
+/**
+ * Adaptive main-thread render throttle. The worker already coalesces its own snapshots, but with N
+ * live windows the main thread still gets N independent streams — and each notify triggers a board
+ * re-render. Measured: 6 self-play windows pinned the main thread to ~16fps even though the crypto
+ * runs in the workers. So we decouple "store the latest snapshot" (immediate, keeps getSnapshot
+ * fresh) from "notify React" (throttled): a window re-renders at most once per `renderIntervalMs()`,
+ * which GROWS with the live-window count so the TOTAL board-render rate stays ≈ constant no matter
+ * how many windows are open. A status change (idle→playing→settled) and the trailing edge always
+ * notify, so the UI never sticks on a stale frame.
+ */
+const RENDER_BASE_MS = 40; // single-window cadence (~25fps); ×N windows = the shared budget
+const RENDER_MAX_MS = 250; // never starve a window below ~4fps, however many are open
+interface SnapThrottle {
+  lastNotifyMs: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  lastStatus: MatchSnapshot["status"] | null;
+}
+const snapThrottle = new Map<string, SnapThrottle>();
+
+function renderIntervalMs(): number {
+  const n = soloWindows.size + pvpWindows.size;
+  return Math.min(RENDER_MAX_MS, Math.max(RENDER_BASE_MS, n * RENDER_BASE_MS));
+}
+
+/** Store `snap` on the window's slot immediately, then notify its React listeners on the throttled
+ *  cadence (leading + trailing). `store` writes the slot; `listeners` are the subscribers. */
+function deliverSnapshot(
+  windowId: string,
+  listeners: Set<() => void>,
+  snap: MatchSnapshot,
+  store: (s: MatchSnapshot) => void,
+): void {
+  store(snap);
+  let t = snapThrottle.get(windowId);
+  if (!t) {
+    t = { lastNotifyMs: 0, timer: null, lastStatus: null };
+    snapThrottle.set(windowId, t);
+  }
+  const throttle = t;
+  const fire = (): void => {
+    throttle.timer = null;
+    throttle.lastNotifyMs = performance.now();
+    for (const l of listeners) l();
+  };
+  const statusChanged = snap.status !== throttle.lastStatus;
+  throttle.lastStatus = snap.status;
+  const since = performance.now() - throttle.lastNotifyMs;
+  const interval = renderIntervalMs();
+  if (statusChanged || since >= interval) {
+    if (throttle.timer) clearTimeout(throttle.timer);
+    fire();
+  } else if (throttle.timer === null) {
+    throttle.timer = setTimeout(fire, interval - since);
+  }
+}
+
+function clearSnapThrottle(windowId: string): void {
+  const t = snapThrottle.get(windowId);
+  if (t?.timer) clearTimeout(t.timer);
+  snapThrottle.delete(windowId);
+}
+
 /** The single shared PvP hub worker + its wrapped API; null until the first PvP command spawns it. */
 let hubWorker: Worker | null = null;
 let hubApi: Comlink.Remote<PvpHubApi> | null = null;
@@ -105,8 +167,9 @@ function fire(p: Promise<unknown>): void {
 function wireSolo(windowId: string, entry: SoloWindow): void {
   if (entry.wired || !config || !bridge) return;
   const onSnapshot = (snap: MatchSnapshot): void => {
-    entry.snap = snap;
-    for (const l of entry.listeners) l();
+    deliverSnapshot(windowId, entry.listeners, snap, (s) => {
+      entry.snap = s;
+    });
   };
   fire(entry.api.init(config));
   fire(entry.api.attachBridge(Comlink.proxy(bridge)));
@@ -155,8 +218,9 @@ function wireHub(): void {
   const onSnapshot = (windowId: string, snap: MatchSnapshot): void => {
     const w = pvpWindows.get(windowId);
     if (!w) return; // window disposed between the worker's emit and this callback
-    w.snap = snap;
-    for (const l of w.listeners) l();
+    deliverSnapshot(windowId, w.listeners, snap, (s) => {
+      w.snap = s;
+    });
   };
   fire(hubApi.init(config));
   fire(hubApi.attachBridge(Comlink.proxy(bridge)));
@@ -196,6 +260,7 @@ function disposeSolo(windowId: string): void {
   if (!entry) return;
   // Drop from the store first so subscribe/getSnapshot immediately treat the window as gone.
   soloWindows.delete(windowId);
+  clearSnapThrottle(windowId);
   // Let the worker run reset() (cancel any queued open) before the abrupt terminate; reclaim the
   // proxy + isolate once it lands, with a timeout fallback for a wedged worker.
   let reclaimed = false;
@@ -213,6 +278,7 @@ function disposePvp(windowId: string): void {
   const w = pvpWindows.get(windowId);
   if (!w) return;
   pvpWindows.delete(windowId);
+  clearSnapThrottle(windowId);
   // Tear this window's match down inside the hub (cancels a queued open, releases the matchId from
   // the shared socket, and closes the socket if it was the last session). Then, if no PvP windows
   // remain, terminate the hub worker to reclaim its isolate (re-spawned on the next PvP command).
@@ -263,6 +329,15 @@ export const engineClient = {
         : IDLE_SNAPSHOT;
     }
     return pvpWindows.get(windowId)?.snap ?? IDLE_SNAPSHOT;
+  },
+
+  /** Live self-play worker isolates vs the device cap (design §2.1). `live` counts SOLO workers only
+   *  (the shared PvP hub is one extra isolate, never per-window); `atCap` means the NEXT new solo
+   *  window will be refused a worker (→ CAPPED_SNAPSHOT). Drives the add-game cap warning + perf HUD. */
+  liveWindowStats(): { live: number; max: number; atCap: boolean } {
+    const live = soloWindows.size;
+    const max = maxLiveWindows();
+    return { live, max, atCap: live >= max };
   },
 
   // PvP commands → shared hub.

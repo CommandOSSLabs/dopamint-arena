@@ -162,7 +162,7 @@ export class PvpMatchSession {
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       this.flush();
-    }, 16);
+    }, 40); // ~25fps; the main thread throttles further by live-window count (engineClient)
   }
 
   private flush(): void {
