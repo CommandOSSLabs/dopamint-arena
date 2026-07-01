@@ -128,8 +128,8 @@ export async function enterArena(
   );
   const open = opts.open ?? requestTunnelOpen;
   // Deposit seat A into every pre-opened tunnel. The batcher coalesces these into ONE PTB (one
-  // wallet popup); the resolved tunnelId should match the fleet-pre-created one, but use the
-  // deposit's resolved id as the live one (it's what on-chain sees after the split+deposit).
+  // wallet popup). Each allocation keeps its server-assigned tunnelId (authoritative) — see the
+  // deposit call below for why the batcher's returned id must not be adopted here.
   const live = await Promise.all(
     allocations.map(async (alloc) => {
       const partyA = parties.get(alloc.game)!;
@@ -145,7 +145,12 @@ export async function enterArena(
         throw new Error(
           `arena: no stake for ${alloc.game} (allocation.stakeEach + stakePerGame both unset)`,
         );
-      const tunnelId = await open({
+      // Deposit seat A into the fleet-pre-created tunnel. `alloc.tunnelId` is authoritative — the
+      // deposit goes INTO it and cannot change its id — so keep it and never adopt the batcher's
+      // returned id. The address-keyed batcher map collides when a batch shares one party-A address
+      // (all arena games use the same wallet), which would cross games onto a single tunnel and make
+      // the co-signed `tunnel_id` disagree with the bot's reservation → every move rejected.
+      await open({
         mode: "deposit",
         tunnelId: alloc.tunnelId,
         partyA,
@@ -155,7 +160,7 @@ export async function enterArena(
         coinType: opts.coinType,
         usesAddressBalance: opts.usesAddressBalance ?? true,
       });
-      return { ...alloc, tunnelId };
+      return alloc;
     }),
   );
   await reportArenaOpened(
