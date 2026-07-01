@@ -41,6 +41,11 @@ move-core-types = { git = "https://github.com/MystenLabs/sui.git", branch = "tes
 diesel = { version = "2.3", features = ["postgres"] }
 diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
 diesel_migrations = "2.3"
+# Direct rustls dep so the indexer bin can install `ring` as the process-default CryptoProvider
+# at startup. The framework's ingestion client fetches checkpoints over HTTPS; once aws-lc-rs
+# entered the graph (aws-sdk via transcript-store) rustls 0.23 could no longer auto-pick a
+# provider and panicked on the first TLS handshake. Mirrors tunnel-manager's pin.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 bcs.workspace = true
 clap = { version = "4", features = ["derive"] }
 # IndexerCluster::with_database_url takes a url::Url (transitive via the framework; declared
