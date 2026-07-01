@@ -33,6 +33,7 @@ import {
   type Role,
 } from "@/pvp/mpClient";
 import { proposePlan } from "@/pvp/proposePlan";
+import { resumeWatchdogShouldArm } from "@/pvp/resumeWatchdog";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
@@ -68,6 +69,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  clearResumeRecord,
 } from "@/pvp/resume";
 
 export type PvpStatus =
@@ -195,6 +197,12 @@ function turn(nonce: bigint): Role {
   return nonce % 2n === 0n ? "A" : "B";
 }
 
+/** How long a resume waits for the peer to advance before giving up. Only armed when we're actually
+ *  waiting on the peer (pending move / their turn); a co-located bot that's alive replies in ms, so a
+ *  quiet window this long means it's gone (exited past grace, or cross-instance where our resync can't
+ *  reach it). We then drop the record and reset to idle rather than sit frozen in "playing" forever. */
+const RESUME_WATCHDOG_MS = 10_000;
+
 /**
  * A PvP match's whole session — matchmaking socket, tunnel, bot timer — kept OUT of React so a
  * minimized or reflowed window stays CONNECTED in the background instead of dropping the opponent.
@@ -216,6 +224,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   private dt: DistributedTunnel<State, Move> | null = null;
   private detachResume: (() => void) | null = null;
   private proposeTimer: ReturnType<typeof setTimeout> | null = null;
+  private resumeWatchdog: ReturnType<typeof setTimeout> | null = null;
   private intent: Intent;
   /** Set per live match to `settle(publishOnly)`; lets `leave()` publish a half outside `onConfirmed`. */
   private settleNow: ((publishOnly: boolean) => void) | null = null;
@@ -338,6 +347,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       clearTimeout(this.proposeTimer);
       this.proposeTimer = null;
     }
+    this.clearResumeWatchdog();
     this.detachResume?.();
     this.detachResume = null;
     this.mp?.close();
@@ -376,6 +386,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       clearTimeout(this.proposeTimer);
       this.proposeTimer = null;
     }
+    this.clearResumeWatchdog();
     this.detachResume?.();
     this.detachResume = null;
     this.mp?.close();
@@ -540,17 +551,59 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
         });
         await mp.connect(); // opening handshake carries resume{matchId}
+        // Re-send any restored in-flight move: `restoreInto` seats the pending WITHOUT sending, and
+        // against a co-located bot the resync handshake never fires (the bot has no wallet presence),
+        // so nothing else re-delivers it. Idempotent at the peer (it dedupes by nonce), and a no-op
+        // when there is no pending — so this is safe on the human-vs-human path too.
+        tunnel.resendPending();
         try {
           this.maybePropose(); // kick a due move
         } catch {
           /* a move is already in flight — the resync handshake converges it */
         }
         this.sync();
+        this.armResumeWatchdog(tunnel);
       } catch (e) {
         this.fail(e);
       }
     })();
   };
+
+  /** After a resume, guard against a peer that never answers (bot exited past its grace, or a
+   *  cross-instance reconnect where our resync can't reach it). Arm ONLY when we're waiting on the
+   *  peer — a re-sent pending, or it's their turn; a clean same-turn resume already succeeded, so
+   *  arming there would tear down a healthy match. Disarm on the first confirmed frame (the peer is
+   *  alive and replying). On timeout, drop the record and reset to idle so a fresh match can allocate
+   *  — never eagerly dispute, which could attack a still-live channel; the old tunnel's stake is
+   *  reclaimed by the existing on-chain grace. */
+  private armResumeWatchdog(tunnel: DistributedTunnel<State, Move>) {
+    const snap = tunnel.snapshot();
+    const waitingOnPeer = resumeWatchdogShouldArm(
+      snap.pending !== null,
+      turn(tunnel.nonce) !== this.role,
+    );
+    if (!waitingOnPeer) return;
+    this.clearResumeWatchdog();
+    const prevConfirmed = tunnel.onConfirmed;
+    tunnel.onConfirmed = (u) => {
+      this.clearResumeWatchdog();
+      tunnel.onConfirmed = prevConfirmed;
+      prevConfirmed?.(u);
+    };
+    const tunnelId = tunnel.tunnelId;
+    this.resumeWatchdog = setTimeout(() => {
+      this.resumeWatchdog = null;
+      clearResumeRecord(tunnelId);
+      this.reset();
+    }, RESUME_WATCHDOG_MS);
+  }
+
+  private clearResumeWatchdog() {
+    if (this.resumeWatchdog !== null) {
+      clearTimeout(this.resumeWatchdog);
+      this.resumeWatchdog = null;
+    }
+  }
 
   findMatch = () => {
     const deps = this.deps;
