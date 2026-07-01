@@ -275,9 +275,17 @@ separate ADR if world-canvas provenance / fund-settlement becomes a product requ
   to Walrus; add `aws-sdk-s3` + a fake-testable `TranscriptReader` to `backend/explorer`,
   config, and IAM `s3:GetObject`. No streaming, no recorder change. (Supersedes the dropped
   chunked-streaming design — see Pillar 2.)
-- **P3 — S3-primary write + async Walrus sidecar**: make the settle-route S3 write reliable
-  (awaited); move Walrus off the hot path into an S3→Walrus replication sidecar with
-  retries; retire Walrus-on-settle.
+- **P3 — S3-primary write + async Walrus** — **DONE**: the settle route archives to S3
+  **synchronously** (primary, `routes.rs`), pushes the settled row immediately, then
+  replicates to Walrus in a **spawned** task that publishes the proof link async via
+  `explorer:proofs` (COALESCE-merged onto the row) — best-effort, since S3 holds the
+  authoritative copy. The FE settle response no longer waits on Walrus (it only reads
+  `txDigest`, verified). Follow-ups: a **durable reconciler** (rows missing `walrus_blob_id`
+  → replicate) if guaranteed Walrus replication is required; and the tunnel-manager
+  *recent-events* live feed shows the proof link only once the async Walrus completes.
+- **Reusable extraction** — **DONE**: `backend/transcript-store` (canonical key + read/write
+  traits + `S3TranscriptStore` + `from_env` + `testing` fakes), reused by tunnel-manager,
+  explorer, and available to the bot fleet. Mirrors `wallet-pool/s3`.
 
 ## 10. References (S3 streaming best-practice)
 

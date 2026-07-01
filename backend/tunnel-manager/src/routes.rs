@@ -480,10 +480,11 @@ pub(crate) async fn settle(
                 .control
                 .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
                 .await;
-            // S3 archival runs CONCURRENTLY with Walrus and is independent of it (ADR-0023).
-            // Fire-and-forget from the response; the SDK handles inline retries. `body` is
-            // cheap to clone (Bytes is ref-counted); Walrus below still gets `body.to_vec()`
-            // exactly as before — its call site, error handling, and result are unchanged.
+            // S3 is the PRIMARY transcript store and the explorer's verification source, so
+            // archive it SYNCHRONOUSLY: a settled transcript must be durably readable before we
+            // respond. A failure is logged, not fatal — the on-chain close already landed; the
+            // settlement is simply unverifiable-from-S3 until re-archived. The blob IS the
+            // settle body (byte-for-byte what the co-signed root commits to).
             if let Some(archiver) = state.archiver.clone() {
                 let meta = transcript_store::ArchiveMeta {
                     tunnel_id: tunnel_id.clone(),
@@ -491,29 +492,12 @@ pub(crate) async fn settle(
                     transcript_root: transcript_root_hex.clone(),
                     settle_version: crate::routes::SETTLE_BODY_VERSION,
                 };
-                let s3_bytes = body.clone();
-                let s3_tunnel = tunnel_id.clone();
-                let s3_digest = digest.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = archiver
-                        .archive(&s3_tunnel, &s3_digest, &s3_bytes, &meta)
-                        .await
-                    {
-                        tracing::warn!(%s3_digest, error = %e, "s3 archive failed");
-                    }
-                });
+                if let Err(e) = archiver.archive(&tunnel_id, &digest, &body, &meta).await {
+                    tracing::error!(%digest, error = %e, "s3 transcript archive failed");
+                }
             }
 
-            // Archive the body verbatim — the blob IS the settle body. The in-browser verifier
-            // (verifyTranscript) parses the same fixed-offset bytes and re-checks the
-            // co-signed root against the recomputed Merkle root and the on-chain anchor.
-            let (blob_id, proof_url) = match state.walrus.upload_transcript(body).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::error!(%digest, error = %e, "walrus archival failed");
-                    (String::new(), String::new())
-                }
-            };
+            // Record the settled row now; the proof link is filled asynchronously (below).
             state
                 .control
                 .push_recent_event(settled_event(
@@ -523,19 +507,37 @@ pub(crate) async fn settle(
                     &transcript_root_hex,
                     &digest,
                     ts,
-                    &proof_url,
+                    "",
                 ))
                 .await;
-            if !blob_id.is_empty() {
-                let proof_msg = serde_json::json!({
-                    "txDigest": digest,
-                    "walrusBlobId": blob_id,
-                    "proofUrl": proof_url,
-                })
-                .to_string();
-                state.bus.publish_raw("explorer:proofs", proof_msg).await;
-            }
-            Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
+
+            // Walrus is now a SECONDARY copy (S3 is authoritative), replicated OFF the response
+            // path so settle latency never waits on Walrus. On success it publishes the proof
+            // link to `explorer:proofs`, which the explorer COALESCE-merges onto the settled
+            // row. Best-effort — S3 already holds the authoritative bytes.
+            let walrus = state.walrus.clone();
+            let bus = state.bus.clone();
+            let w_digest = digest.clone();
+            tokio::spawn(async move {
+                match walrus.upload_transcript(body).await {
+                    Ok((blob_id, proof_url)) if !blob_id.is_empty() => {
+                        let proof_msg = serde_json::json!({
+                            "txDigest": w_digest,
+                            "walrusBlobId": blob_id,
+                            "proofUrl": proof_url,
+                        })
+                        .to_string();
+                        bus.publish_raw("explorer:proofs", proof_msg).await;
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(
+                        %w_digest, error = %e,
+                        "walrus replication failed (s3 holds the authoritative copy)"
+                    ),
+                }
+            });
+
+            Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": "", "proofUrl": "" }))
                 .into_response()
         }
         Err(e) => {
@@ -1465,8 +1467,6 @@ mod tests {
     // byte-for-byte, and the object key must live under the `transcripts/` prefix.
     #[tokio::test]
     async fn settle_archives_identical_body_to_s3() {
-        use std::time::Duration;
-
         use axum::routing::post;
         use axum::Router;
         use tower::ServiceExt;
@@ -1501,9 +1501,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // Give the fire-and-forget S3 spawn a chance to finish before inspecting the recording.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
+        // S3 is archived synchronously (primary), so the recording is present once settle returns.
         let archived = archiver.archived.lock().unwrap().clone();
         assert_eq!(archived.len(), 1, "expected exactly one S3 archive");
         let (arch_tunnel, arch_digest, arch_bytes) = &archived[0];
