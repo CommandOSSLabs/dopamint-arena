@@ -60,12 +60,20 @@ impl TelemetrySink for NullSink {
 #[derive(Clone, Debug, Default)]
 pub struct CollectingSink {
     samples: Vec<StageSample>,
+    enabled: bool,
 }
 
 impl CollectingSink {
     pub fn with_capacity(n: usize) -> Self {
         Self {
             samples: Vec::with_capacity(n),
+            enabled: true,
+        }
+    }
+    pub fn disabled() -> Self {
+        Self {
+            samples: Vec::new(),
+            enabled: false,
         }
     }
     pub fn samples(&self) -> &[StageSample] {
@@ -79,11 +87,13 @@ impl CollectingSink {
 impl TelemetrySink for CollectingSink {
     #[inline]
     fn record(&mut self, sample: StageSample) {
-        self.samples.push(sample);
+        if self.enabled {
+            self.samples.push(sample);
+        }
     }
     #[inline(always)]
     fn enabled(&self) -> bool {
-        true
+        self.enabled
     }
 }
 
@@ -120,5 +130,17 @@ mod tests {
         assert!(a.enabled());
         a.merge(b);
         assert_eq!(a.samples().len(), 2);
+    }
+
+    #[test]
+    fn disabled_collecting_sink_drops_samples() {
+        let mut s = CollectingSink::disabled();
+        assert!(!s.enabled());
+        s.record(StageSample {
+            stage: StageId::FrameSend,
+            dur_ns: 100,
+            cost: StageCost::default(),
+        });
+        assert!(s.samples().is_empty());
     }
 }

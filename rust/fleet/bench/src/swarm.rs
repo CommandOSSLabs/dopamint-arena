@@ -670,38 +670,46 @@ mod tests {
 
     #[test]
     fn varied_mode_settles_when_move_control_stops() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(2)
-            .build()
-            .expect("test runtime");
-        let samples = runtime.block_on(async {
-            let mut samples = Vec::new();
-            for tunnel_index in 0..8 {
-                let run_control = DriverRunControl::with_move_limit(20 + tunnel_index);
-                samples.push(
-                    run_one_tunnel(
-                        tunnel_index,
-                        ScenarioMode::Varied,
-                        FrameCodecKind::Bcs,
-                        AnchorMode::Memory,
-                        None,
-                        BLACKJACK_BET_V1,
-                        crate::protocols::DEFAULT_BALANCE,
-                        crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL,
-                        TunnelTelemetry {
-                            collect: false,
-                            record_transcript: false,
-                        },
-                        random_seat_kit(),
-                        Some(run_control),
-                        None,
-                    )
-                    .await,
-                );
-            }
-            samples
-        });
+        let samples = std::thread::Builder::new()
+            .name("fleet-varied-mode-test".into())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .worker_threads(2)
+                    .build()
+                    .expect("test runtime");
+                runtime.block_on(async {
+                    let mut samples = Vec::new();
+                    for tunnel_index in 0..8 {
+                        let run_control = DriverRunControl::with_move_limit(20 + tunnel_index);
+                        samples.push(
+                            run_one_tunnel(
+                                tunnel_index,
+                                ScenarioMode::Varied,
+                                FrameCodecKind::Bcs,
+                                AnchorMode::Memory,
+                                None,
+                                BLACKJACK_BET_V1,
+                                crate::protocols::DEFAULT_BALANCE,
+                                crate::protocols::DEFAULT_MAX_MOVES_PER_TUNNEL,
+                                TunnelTelemetry {
+                                    collect: false,
+                                    record_transcript: false,
+                                },
+                                random_seat_kit(),
+                                Some(run_control),
+                                None,
+                            )
+                            .await,
+                        );
+                    }
+                    samples
+                })
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("varied mode test thread");
         let moves_dist = summarize(
             &samples
                 .iter()

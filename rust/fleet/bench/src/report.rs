@@ -152,6 +152,13 @@ fn tx_digest_line(label: &str, tx_digests: &[String]) -> Option<String> {
     Some(format!("  - {label} txDigests={}", tx_digests.join(", ")))
 }
 
+fn metric_legend(style: RenderStyle) -> String {
+    format!(
+        "\n{}\n  - wall move-TPS includes open, play, settle, and chain wait time\n  - play-only move-TPS uses only the active move-production window\n  - open-rate/close-rate use active open/settle windows, not full elapsed\n  - setup overhead is non-play tunnel time as a share of tunnel e2e time\n  - Sui PTB batch-size counts logical tunnel ops after seat coalescing\n",
+        style.section("Metric legend"),
+    )
+}
+
 /// Headline metrics for one protocol's bench run, collected across a
 /// multi-protocol invocation to build the comparison summary.
 #[derive(Clone, Debug)]
@@ -425,6 +432,8 @@ pub fn render_with_style(
         res.basis,
     ));
 
+    out.push_str(&metric_legend(style));
+
     out
 }
 
@@ -633,6 +642,34 @@ mod tests {
             "got:\n{s}"
         );
         assert!(s.contains("codec=json.distributed.v1"), "got:\n{s}");
+    }
+
+    #[test]
+    fn render_emits_metric_legend() {
+        let s = render(
+            &opts(1, SignerInitMode::PerTunnel),
+            "blackjack.bet.v1",
+            &outcome(100, 10, 1000),
+            &res(),
+        );
+
+        assert!(s.contains("Metric legend\n"), "got:\n{s}");
+        assert!(
+            s.contains("wall move-TPS includes open, play, settle, and chain wait time"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("play-only move-TPS uses only the active move-production window"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("open-rate/close-rate use active open/settle windows"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("Sui PTB batch-size counts logical tunnel ops after seat coalescing"),
+            "got:\n{s}"
+        );
     }
 
     #[test]

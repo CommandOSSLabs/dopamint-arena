@@ -152,13 +152,16 @@ impl TranscriptSize for Vec<u8> {
 pub struct InstrumentedRecorder<R, S> {
     inner: R,
     sink: Mutex<S>,
+    collect: bool,
 }
 
 impl<R, S: TelemetrySink + Send> InstrumentedRecorder<R, S> {
     pub fn new(inner: R, sink: S) -> Self {
+        let collect = sink.enabled();
         Self {
             inner,
             sink: Mutex::new(sink),
+            collect,
         }
     }
 
@@ -179,12 +182,12 @@ impl<R, S: TelemetrySink + Send> InstrumentedRecorder<R, S> {
         F: FnMut(&TranscriptEntry<M>) -> Option<T>,
         T: Serialize,
     {
-        let started = Instant::now();
+        let started = self.collect.then(Instant::now);
         let out = self.inner.export(codec, preprocess)?;
         let len = out.byte_len();
-        let dur_ns = started.elapsed().as_nanos() as u64;
-        let mut sink = self.sink.lock().expect("sink mutex poisoned");
-        if sink.enabled() {
+        if let Some(started) = started {
+            let dur_ns = started.elapsed().as_nanos() as u64;
+            let mut sink = self.sink.lock().expect("sink mutex poisoned");
             sink.record(StageSample {
                 stage: StageId::RecorderExport,
                 dur_ns,
@@ -207,11 +210,11 @@ impl<M, R: TranscriptRecorder<M> + Send + Sync, S: TelemetrySink + Send> Transcr
     }
 
     fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
-        let started = Instant::now();
+        let started = self.collect.then(Instant::now);
         let result = self.inner.record(entry);
-        let dur_ns = started.elapsed().as_nanos() as u64;
-        let mut sink = self.sink.lock().expect("sink mutex poisoned");
-        if sink.enabled() {
+        if let Some(started) = started {
+            let dur_ns = started.elapsed().as_nanos() as u64;
+            let mut sink = self.sink.lock().expect("sink mutex poisoned");
             sink.record(StageSample {
                 stage: StageId::RecorderRecord,
                 dur_ns,
@@ -277,6 +280,7 @@ pub struct InstrumentedTransport<T, S> {
     inner: T,
     sink: Arc<Mutex<S>>,
     bytes_sent: Arc<AtomicU64>,
+    collect: bool,
 }
 
 impl<T: Clone, S> Clone for InstrumentedTransport<T, S> {
@@ -285,16 +289,19 @@ impl<T: Clone, S> Clone for InstrumentedTransport<T, S> {
             inner: self.inner.clone(),
             sink: Arc::clone(&self.sink),
             bytes_sent: Arc::clone(&self.bytes_sent),
+            collect: self.collect,
         }
     }
 }
 
 impl<T, S: TelemetrySink + Send> InstrumentedTransport<T, S> {
     pub fn new(inner: T, sink: S) -> Self {
+        let collect = sink.enabled();
         Self {
             inner,
             sink: Arc::new(Mutex::new(sink)),
             bytes_sent: Arc::new(AtomicU64::new(0)),
+            collect,
         }
     }
 
@@ -321,17 +328,15 @@ impl<T, S: TelemetrySink + Send> InstrumentedTransport<T, S> {
     fn emit(&self, stage: StageId, started: Instant, bytes: u64) {
         let dur_ns = started.elapsed().as_nanos() as u64;
         let mut sink = self.sink.lock().expect("sink mutex poisoned");
-        if sink.enabled() {
-            sink.record(StageSample {
-                stage,
-                dur_ns,
-                cost: StageCost {
-                    gas_mist: 0,
-                    paid_by: None,
-                    bytes,
-                },
-            });
-        }
+        sink.record(StageSample {
+            stage,
+            dur_ns,
+            cost: StageCost {
+                gas_mist: 0,
+                paid_by: None,
+                bytes,
+            },
+        });
     }
 }
 
@@ -340,9 +345,11 @@ impl<T: FrameTransport, S: TelemetrySink + Send + 'static> FrameTransport
 {
     async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
         let len = bytes.len() as u64;
-        let started = Instant::now();
+        let started = self.collect.then(Instant::now);
         let result = self.inner.send(bytes).await;
-        self.emit(StageId::FrameSend, started, len);
+        if let Some(started) = started {
+            self.emit(StageId::FrameSend, started, len);
+        }
         if result.is_ok() {
             self.bytes_sent.fetch_add(len, Ordering::Relaxed);
         }
@@ -350,15 +357,17 @@ impl<T: FrameTransport, S: TelemetrySink + Send + 'static> FrameTransport
     }
 
     async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
-        let started = Instant::now();
+        let started = self.collect.then(Instant::now);
         let result = self.inner.recv().await;
-        let len = result
-            .as_ref()
-            .ok()
-            .and_then(|o| o.as_ref())
-            .map(|b| b.len() as u64)
-            .unwrap_or(0);
-        self.emit(StageId::FrameRecv, started, len);
+        if let Some(started) = started {
+            let len = result
+                .as_ref()
+                .ok()
+                .and_then(|o| o.as_ref())
+                .map(|b| b.len() as u64)
+                .unwrap_or(0);
+            self.emit(StageId::FrameRecv, started, len);
+        }
         result
     }
 }

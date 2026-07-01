@@ -314,6 +314,7 @@ type SettleResult = Result<SettledTunnel, TunnelAnchorError>;
 #[derive(Clone)]
 struct BenchSubmitter {
     inner: Arc<Mutex<BenchSubmitterState>>,
+    settle_ready: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Default)]
@@ -334,12 +335,15 @@ struct BenchSubmitterSettleState {
     request_b: Option<TunnelSettleRequest>,
     result: Option<SettleResult>,
     waiters: Vec<oneshot::Sender<SettleResult>>,
+    #[cfg(test)]
+    ready_waiters: usize,
 }
 
 impl BenchSubmitter {
     fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(BenchSubmitterState::default())),
+            settle_ready: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -395,6 +399,9 @@ impl BenchSubmitter {
                 Seat::A => state.settle.request_a = Some(request),
                 Seat::B => state.settle.request_b = Some(request),
             }
+            if state.settle.request_a.is_some() && state.settle.request_b.is_some() {
+                self.settle_ready.notify_waiters();
+            }
             let (sender, receiver) = oneshot::channel();
             state.settle.waiters.push(sender);
             receiver
@@ -411,6 +418,7 @@ impl BenchSubmitter {
 
     async fn submit_settle_when_ready(&self, inner: &BenchAnchorInner) {
         loop {
+            let notified = self.settle_ready.notified();
             let maybe_requests = {
                 let state = self.inner.lock().expect("bench submitter mutex poisoned");
                 match (&state.settle.request_a, &state.settle.request_b) {
@@ -419,7 +427,9 @@ impl BenchSubmitter {
                 }
             };
             let Some((request_a, request_b)) = maybe_requests else {
-                tokio::task::yield_now().await;
+                self.increment_settle_ready_waiters_for_test();
+                notified.await;
+                self.decrement_settle_ready_waiters_for_test();
                 continue;
             };
 
@@ -443,6 +453,33 @@ impl BenchSubmitter {
         for waiter in waiters {
             let _ = waiter.send(clone_settle_result(result));
         }
+    }
+
+    #[cfg(test)]
+    fn increment_settle_ready_waiters_for_test(&self) {
+        let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+        state.settle.ready_waiters += 1;
+    }
+
+    #[cfg(not(test))]
+    fn increment_settle_ready_waiters_for_test(&self) {}
+
+    #[cfg(test)]
+    fn decrement_settle_ready_waiters_for_test(&self) {
+        let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
+        state.settle.ready_waiters = state.settle.ready_waiters.saturating_sub(1);
+    }
+
+    #[cfg(not(test))]
+    fn decrement_settle_ready_waiters_for_test(&self) {}
+
+    #[cfg(test)]
+    fn settle_ready_waiter_count_for_test(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("bench submitter mutex poisoned")
+            .settle
+            .ready_waiters
     }
 }
 
@@ -627,6 +664,14 @@ fn record_min_sample(dst: &mut CollectingSink, src: &CollectingSink, stage: Stag
     }
 }
 
+fn detail_sink(collect: bool, capacity: usize) -> CollectingSink {
+    if collect {
+        CollectingSink::with_capacity(capacity)
+    } else {
+        CollectingSink::disabled()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn play_protocol_tunnel_with_strategies<P, C, StrategyA, StrategyB>(
     protocol: P,
@@ -658,8 +703,8 @@ where
 
     // Build the frame transport pair and wrap each end for telemetry.
     let (ch_a_raw, ch_b_raw) = InMemoryFrameTransport::pair();
-    let ch_a = InstrumentedTransport::new(ch_a_raw, CollectingSink::with_capacity(capacity));
-    let ch_b = InstrumentedTransport::new(ch_b_raw, CollectingSink::with_capacity(capacity));
+    let ch_a = InstrumentedTransport::new(ch_a_raw, detail_sink(telemetry.collect, capacity));
+    let ch_b = InstrumentedTransport::new(ch_b_raw, detail_sink(telemetry.collect, capacity));
     // Grab handles before moving wrappers into drivers (no T: Clone needed).
     let (bytes_a_ctr, sink_ch_a) = ch_a.handle();
     let (bytes_b_ctr, sink_ch_b) = ch_b.handle();
@@ -683,11 +728,11 @@ where
             submitter.clone(),
             Seat::A,
         ),
-        CollectingSink::with_capacity(capacity),
+        CollectingSink::with_capacity(2),
     );
     let anchor_b = InstrumentedAnchor::new(
         BenchAnchor::new(inner_anchor, stage_windows.clone(), submitter, Seat::B),
-        CollectingSink::with_capacity(capacity),
+        CollectingSink::with_capacity(2),
     );
     // Keep handles outside the drivers to read counters after join.
     let anchor_a_handle = anchor_a.clone();
@@ -698,11 +743,11 @@ where
     // latter makes the engine reject settle and the join below panic.
     let rec_a = InstrumentedRecorder::new(
         bench_recorder_for::<P::Move>(settlement_mode, telemetry.record_transcript),
-        CollectingSink::with_capacity(capacity),
+        detail_sink(telemetry.collect, capacity),
     );
     let rec_b = InstrumentedRecorder::new(
         bench_recorder_for::<P::Move>(settlement_mode, telemetry.record_transcript),
-        CollectingSink::with_capacity(capacity),
+        detail_sink(telemetry.collect, capacity),
     );
 
     let driver_a = PartyDriver::with_codec(
@@ -801,7 +846,7 @@ where
     }
 
     // Merge all sinks into one CollectingSink.
-    let mut sink = CollectingSink::with_capacity(capacity * 5);
+    let mut sink = CollectingSink::with_capacity((capacity * 5).max(2));
     // Drain anchor sinks (requires no other clones of the handles remaining).
     // Both seats pass through bench anchors, so collapse each stage's two
     // samples to the minimum — see `record_min_sample`.
@@ -1200,6 +1245,73 @@ mod tests {
         assert_eq!(settled_b.final_balances, Balances { a: 1, b: 1 });
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bench_submitter_waits_on_settle_ready_notification() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
+        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+        let protocol =
+            tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1").expect("protocol id");
+        inner
+            .open(TunnelOpenRequest {
+                protocol,
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                initial: Balances { a: 1, b: 1 },
+            })
+            .await
+            .expect("open");
+        let settlement = tunnel_core::wire::Settlement {
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+        };
+        let msg = tunnel_core::wire::serialize_settlement(&settlement);
+        let request_a = TunnelSettleRequest {
+            by: Seat::A,
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+            signature: signer_a.sign(&msg),
+            transcript_root: None,
+            transcript_entries: Vec::new(),
+        };
+        let request_b = TunnelSettleRequest {
+            by: Seat::B,
+            signature: signer_b.sign(&msg),
+            ..clone_settle_request(&request_a)
+        };
+
+        let a = {
+            let submitter = submitter.clone();
+            let inner = inner.clone();
+            tokio::spawn(async move { submitter.settle_as_seat(Seat::A, &inner, request_a).await })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            !a.is_finished(),
+            "seat A must wait for seat B's signed half"
+        );
+        assert_eq!(
+            submitter.settle_ready_waiter_count_for_test(),
+            1,
+            "seat A should park on one settle-ready notification, not spin"
+        );
+
+        let settled_b = submitter
+            .settle_as_seat(Seat::B, &inner, request_b)
+            .await
+            .expect("seat B settle");
+        let settled_a = a.await.expect("seat A join").expect("seat A settle");
+
+        assert_eq!(settled_a.digest, settled_b.digest);
+    }
+
     /// End-to-end: `record_transcript: true` on the (rootless) memory anchor wires
     /// the in-memory recorder, records every move, and still settles cleanly —
     /// the `--transcript-recorder memory` path on the memory anchor.
@@ -1352,6 +1464,49 @@ mod tests {
         assert!(has_open, "sink must contain Open sample");
         assert!(has_settle, "sink must contain Settle sample");
         assert!(has_frame_send, "sink must contain FrameSend sample");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn telemetry_off_does_not_collect_per_move_samples() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let kit = SeatKit::new(&sa, &sb);
+        let outcome = play_protocol_tunnel_with_strategies::<
+            SeededBlackjack,
+            JsonFrameCodec,
+            BlackjackStrategy,
+            BlackjackStrategy,
+        >(
+            SeededBlackjack {
+                card_seed: None,
+                round_cap: tunnel_blackjack::ROUND_CAP,
+            },
+            BlackjackStrategy,
+            BlackjackStrategy,
+            &kit,
+            "0x1",
+            200,
+            200,
+            1000,
+            AnchorMode::Memory,
+            None,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+            },
+            None,
+            None,
+        )
+        .await;
+
+        assert!(outcome.bytes > 0, "byte counters remain available");
+        assert!(
+            outcome.sink.samples().iter().all(|sample| !matches!(
+                sample.stage,
+                StageId::FrameSend | StageId::FrameRecv | StageId::RecorderRecord
+            )),
+            "per-move telemetry samples should not be collected when disabled"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
