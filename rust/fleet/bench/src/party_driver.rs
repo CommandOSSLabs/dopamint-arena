@@ -164,6 +164,8 @@ struct StageWindowState {
     open: StageWindow,
     settle: StageWindow,
     first_play_start: Option<Duration>,
+    /// Latest settle start across tunnels — marks when move production ended.
+    last_move_end: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -184,12 +186,19 @@ impl StageWindowRecorder {
         let start = start.saturating_duration_since(self.origin);
         let end = end.saturating_duration_since(self.origin);
         let mut state = self.state.lock().expect("stage window mutex poisoned");
-        let window = match stage {
-            StageId::Open => &mut state.open,
-            StageId::Settle => &mut state.settle,
-            _ => return,
-        };
-        merge_interval(&mut window.intervals, start, end.max(start));
+        match stage {
+            StageId::Open => merge_interval(&mut state.open.intervals, start, end.max(start)),
+            StageId::Settle => {
+                merge_interval(&mut state.settle.intervals, start, end.max(start));
+                // A tunnel enters settle the instant its move loop ends, so the
+                // latest settle start across tunnels is when move production
+                // finished — including drain-phase tunnels that keep moving past
+                // the stop signal. Anchors down the pipe to the play-only window.
+                let latest = state.last_move_end.map_or(start, |prev| prev.max(start));
+                state.last_move_end = Some(latest);
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn active_elapsed_ms(&self, stage: StageId) -> u128 {
@@ -226,6 +235,16 @@ impl StageWindowRecorder {
         state
             .first_play_start
             .and_then(|start| self.origin.checked_add(start))
+    }
+
+    /// Absolute instant move production ended, derived from the latest settle
+    /// start (a tunnel settles the moment its move loop ends). `None` until at
+    /// least one tunnel has settled.
+    pub(crate) fn move_production_end(&self) -> Option<Instant> {
+        let state = self.state.lock().expect("stage window mutex poisoned");
+        state
+            .last_move_end
+            .and_then(|end| self.origin.checked_add(end))
     }
 
     pub(crate) async fn wait_for_first_play_start(&self) -> Instant {
@@ -1453,6 +1472,26 @@ mod tests {
         );
 
         assert_eq!(recorder.active_elapsed_ms(StageId::Open), 150);
+    }
+
+    #[test]
+    fn stage_window_recorder_move_end_tracks_latest_settle_start() {
+        let recorder = StageWindowRecorder::new();
+        let base = recorder.origin;
+        let ms = Duration::from_millis;
+        // No tunnel has settled yet, so move production has no known end.
+        assert!(recorder.move_production_end().is_none());
+        // A tunnel settles early; a later drain tunnel settles even later. The end
+        // is the LATEST settle start (last tunnel to stop moving), not a settle end.
+        recorder.record(StageId::Settle, base + ms(30), base + ms(35));
+        recorder.record(StageId::Settle, base + ms(120), base + ms(140));
+        assert_eq!(recorder.move_production_end(), Some(base + ms(120)));
+        // An earlier settle recorded afterwards must not drag the end backward.
+        recorder.record(StageId::Settle, base + ms(50), base + ms(60));
+        assert_eq!(recorder.move_production_end(), Some(base + ms(120)));
+        // Open stages never define move-production end.
+        recorder.record(StageId::Open, base + ms(500), base + ms(600));
+        assert_eq!(recorder.move_production_end(), Some(base + ms(120)));
     }
 
     #[test]

@@ -655,6 +655,20 @@ pub fn run_lifecycle_pipeline(
     // shutdown grace below — otherwise a slow telemetry backend's drain would
     // dilate `elapsed_ms` and deflate wall move-TPS.
     let elapsed_ms = started.elapsed().as_millis();
+    // Play-only TPS divides total moves — including moves committed while the pool
+    // drains after the stop signal — by this window. End it at the last tunnel's
+    // move-loop end (its settle start), not the stop instant, so the denominator
+    // covers the whole span those moves were produced in. Falls back to the
+    // stop-observed span when nothing settled.
+    let move_window_elapsed_ms = match (
+        stage_windows.first_play_started(),
+        stage_windows.move_production_end(),
+    ) {
+        (Some(start), Some(end)) if end > start => {
+            end.duration_since(start).as_millis().min(elapsed_ms)
+        }
+        _ => move_window_elapsed_ms,
+    };
     // Give detached telemetry (fire-and-forget heartbeat POSTs) a bounded window
     // to finish; an implicit runtime drop would cancel them mid-request.
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_GRACE);
