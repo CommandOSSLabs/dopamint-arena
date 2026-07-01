@@ -3,11 +3,13 @@ import { CATEGORIES, productsForCategory } from "../../utils/catalog";
 import { formatMtps } from "../../utils";
 import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 
-interface PaymentsShopBodyProps {
+interface RegularPaymentsShopBodyProps {
   session: ReturnType<typeof useRegularPaymentsSession>;
 }
 
-export function PaymentsShopBody({ session }: PaymentsShopBodyProps) {
+export function RegularPaymentsShopBody({
+  session,
+}: RegularPaymentsShopBodyProps) {
   return (
     <div
       className={cn(

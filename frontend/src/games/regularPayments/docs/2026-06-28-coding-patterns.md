@@ -2,7 +2,7 @@
 
 > **Status:** Active  
 > **Date:** 2026-06-28  
-> **Last updated:** 2026-06-30  
+> **Last updated:** 2026-07-01
 > **Scope:** Coding standards for the `regularPayments` package (and general frontend apps).
 
 These rules govern all Regular Payments implementation to maintain a clean architecture and a consistent aesthetic.
@@ -18,12 +18,12 @@ Pass state objects or context bags directly into components rather than spreadin
 
 **Good:**
 ```tsx
-<PaymentsShop session={session} />
+<RegularPaymentsShop session={session} />
 ```
 
 **Bad:**
 ```tsx
-<PaymentsShop
+<RegularPaymentsShop
   category={session.category}
   onCategory={session.setCategory}
   cart={session.cart}
@@ -53,17 +53,17 @@ frontend/src/games/regularPayments/
 │   ├── useRegularPaymentsSession.ts
 │   └── useCartFly.ts
 └── components/
-    ├── PaymentsWindow/
-    │   └── index.tsx        # screen router; text-foreground shell
-    ├── PaymentsLobby/
+    ├── RegularPaymentsWindow/
+    │   └── index.tsx   # screen router; text-foreground shell
+    ├── RegularPaymentsLobby/
     │   └── index.tsx
-    ├── PaymentsShop/
-    │   ├── index.tsx        # composes header + body + cart + fly layer
-    │   ├── PaymentsShopHeader.tsx
-    │   ├── PaymentsShopBody.tsx
-    │   ├── PaymentsShopCart.tsx
-    │   └── PaymentsShopCartFlyLayer.tsx
-    └── PaymentsThankYou/
+    ├── RegularPaymentsShop/
+    │   ├── index.tsx     # composes header + body + cart + fly layer
+    │   ├── RegularPaymentsShopHeader.tsx
+    │   ├── RegularPaymentsShopBody.tsx
+    │   ├── RegularPaymentsShopCart.tsx
+    │   └── RegularPaymentsShopCartFlyLayer.tsx
+    └── RegularPaymentsThankYou/
         └── index.tsx
 ```
 
@@ -101,12 +101,12 @@ Accent colors inline only when a semantic token is not enough — e.g. success i
 Regular Payments runs inside a resizable arena window — prefer **container-query units** (`cqmin`)
 for type and padding so the UI scales with the window, not the viewport.
 
-**Window shell** (`PaymentsWindow`): flex column, `text-foreground`, no extra theme wrapper.
+**Window shell** (`RegularPaymentsWindow`): flex column, `text-foreground`, no extra theme wrapper.
 
 **Hero / receipt cards** (lobby, thank-you): glassy panel —
 `rounded-[20px] border border-border bg-card/75 backdrop-blur-xl`, optional `wal-glow`.
 
-**Product grid** (`PaymentsShopBody`): `rounded-xl border border-border bg-card` tiles;
+**Product grid** (`RegularPaymentsShopBody`): `rounded-xl border border-border bg-card` tiles;
 `hover:bg-secondary/80`; disabled via `opacity-45 pointer-events-none`.
 
 **Shop chrome** (header, cart): `border-border` dividers, `bg-card/80` on the cart footer.

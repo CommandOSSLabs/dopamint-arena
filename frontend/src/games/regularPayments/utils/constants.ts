@@ -1,7 +1,7 @@
 import { mtps } from "@/onchain/mtps";
 
 /** Shopper (party A) budget locked at Go shop. */
-export const DEPOSIT_BUDGET = mtps(10n);
+export const DEPOSIT_BUDGET = mtps(1000n);
 
 /** Store POS (party B) activation dust — same wallet funds both seats at open. */
 export const DEPOSIT_B_DUST = 1n;
@@ -18,4 +18,8 @@ export const STREAM_DURATION_MS = 5_000;
 export const AUTO_ADD_INTERVAL_MS = 5;
 
 /** Auto-trip cart targets (random pick per round). */
-export const AUTO_TARGET_CHOICES = [mtps(8n), mtps(9n), mtps(10n)] as const;
+export const AUTO_TARGET_CHOICES = [
+  mtps(800n),
+  mtps(900n),
+  mtps(1000n),
+] as const;
