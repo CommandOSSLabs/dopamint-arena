@@ -16,6 +16,8 @@ testing = []
 
 [dependencies]
 async-trait = { workspace = true }
+# Bounded-concurrency, in-order chunk fetch on reassembly (`buffered`).
+futures = "0.3"
 # Library best practice: expose a concrete `Error` (thiserror) rather than `anyhow`, so
 # consuming apps can match on failure modes.
 thiserror = { workspace = true }

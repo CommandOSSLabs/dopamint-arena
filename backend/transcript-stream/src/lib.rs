@@ -18,6 +18,7 @@
 //! `transcript_store::testing::FakeChunkStore`.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -38,6 +39,15 @@ const UPLOAD_BUDGET_CHUNKS: usize = 512;
 /// Max concurrent S3 `put_chunk`s draining the queue.
 const UPLOAD_WORKERS: usize = 32;
 
+/// Flush a partial (sub-[`CHUNK_TARGET`]) chunk once its oldest buffered entry is this old, so a
+/// slow or never-terminal match's tail reaches S3 without waiting for 1 MB or `finish()`. This caps
+/// how much of a live match's tail a SIGTERM roll can lose to roughly one interval of moves.
+const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long [`TranscriptUploader::shutdown`] waits for the queue to drain to S3 before giving up, so
+/// a wedged S3 can't hold a process roll open past the orchestrator's stop timeout.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// One chunk handed to the [`TranscriptUploader`].
 pub struct ChunkUpload {
     pub tunnel_id: String,
@@ -51,43 +61,94 @@ pub struct ChunkUpload {
 /// (backpressure) rather than pile chunks in RAM or drop them.
 pub struct TranscriptUploader {
     tx: mpsc::Sender<ChunkUpload>,
+    /// Fires the shutdown drain: the worker loop stops awaiting new chunks, flushes what's already
+    /// queued, then waits for in-flight puts. Separate from sender-drop because live matches still
+    /// hold senders at roll, so we can't end the loop by dropping every sender.
+    drain: tokio::sync::oneshot::Sender<()>,
+    handle: tokio::task::JoinHandle<()>,
 }
 
 impl TranscriptUploader {
     /// Spawn the drain task over `writer`. Each recorder clones [`sender`](Self::sender) to stream.
     pub fn spawn(writer: Arc<dyn TranscriptChunkWriter>) -> Self {
         let (tx, mut rx) = mpsc::channel::<ChunkUpload>(UPLOAD_BUDGET_CHUNKS);
-        tokio::spawn(async move {
+        let (drain_tx, mut drain_rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
             let concurrency = Arc::new(tokio::sync::Semaphore::new(UPLOAD_WORKERS));
-            while let Some(upload) = rx.recv().await {
-                // Acquire a worker slot first, so `recv` stops pulling when all workers are busy —
-                // the channel then fills and producers feel backpressure.
-                let permit = concurrency
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("upload semaphore open");
-                let writer = writer.clone();
-                tokio::spawn(async move {
-                    let ChunkUpload {
-                        tunnel_id,
-                        seq,
-                        bytes,
-                    } = upload;
-                    if let Err(e) = writer.put_chunk(&tunnel_id, seq, bytes).await {
-                        tracing::warn!(tunnel = %tunnel_id, seq, error = %e, "transcript chunk upload failed");
-                    }
-                    drop(permit);
-                });
+            loop {
+                // Drain wins over pulling more work (`biased`) so shutdown never blocks on an idle
+                // `recv`. A closed channel (all senders dropped) also ends the loop.
+                let upload = tokio::select! {
+                    biased;
+                    _ = &mut drain_rx => break,
+                    maybe = rx.recv() => match maybe {
+                        Some(u) => u,
+                        None => break,
+                    },
+                };
+                dispatch_put(&concurrency, &writer, upload).await;
             }
+            // Shutdown drain: flush every chunk already queued, then block until all in-flight puts
+            // return their worker permit. That barrier is what makes `shutdown` durable.
+            while let Ok(upload) = rx.try_recv() {
+                dispatch_put(&concurrency, &writer, upload).await;
+            }
+            let _ = concurrency.acquire_many(UPLOAD_WORKERS as u32).await;
         });
-        Self { tx }
+        Self {
+            tx,
+            drain: drain_tx,
+            handle,
+        }
     }
 
     /// A sender each recorder clones to stream its chunks through the shared budget.
     pub fn sender(&self) -> mpsc::Sender<ChunkUpload> {
         self.tx.clone()
     }
+
+    /// On a clean process roll (SIGTERM), flush the queued chunks of matches that already settled —
+    /// their early 1 MB chunks live in this queue, and losing them would leave a settled transcript
+    /// unreadable. Bounded by [`DRAIN_TIMEOUT`] so a wedged S3 can't hold the roll open. Matches
+    /// still playing at roll are best-effort (their tails are the deferred in-flight case).
+    pub async fn shutdown(self) {
+        let _ = self.drain.send(());
+        if tokio::time::timeout(DRAIN_TIMEOUT, self.handle)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "transcript uploader drain timed out; some queued chunks may be unflushed"
+            );
+        }
+    }
+}
+
+/// Acquire a worker slot (producers feel backpressure once all are busy), then upload one chunk on a
+/// spawned task that releases the slot on completion — even on panic, so the shutdown barrier
+/// (`acquire_many`) can never deadlock on a leaked permit.
+async fn dispatch_put(
+    concurrency: &Arc<tokio::sync::Semaphore>,
+    writer: &Arc<dyn TranscriptChunkWriter>,
+    upload: ChunkUpload,
+) {
+    let permit = concurrency
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("upload semaphore open");
+    let writer = writer.clone();
+    tokio::spawn(async move {
+        let ChunkUpload {
+            tunnel_id,
+            seq,
+            bytes,
+        } = upload;
+        if let Err(e) = writer.put_chunk(&tunnel_id, seq, bytes).await {
+            tracing::warn!(tunnel = %tunnel_id, seq, error = %e, "transcript chunk upload failed");
+        }
+        drop(permit);
+    });
 }
 
 #[derive(Default)]
@@ -97,6 +158,9 @@ struct ChunkBuf {
     seq: u32,
     /// Cumulative bytes across all flushed chunks — sealed into the manifest's `total_bytes`.
     total_bytes: u64,
+    /// When the oldest entry of the current unflushed buffer was appended — drives the time-based
+    /// flush ([`FLUSH_INTERVAL`]). `None` whenever the buffer is empty.
+    buffering_since: Option<Instant>,
 }
 
 /// Root recorder + streaming S3 uploader. Cheaply cloneable (Arc-shared state): one clone drives
@@ -164,6 +228,7 @@ impl<M> S3StreamingRecorder<M> {
                 let seq = b.seq;
                 b.seq += 1;
                 b.total_bytes += b.bytes.len() as u64;
+                b.buffering_since = None;
                 Some((seq, std::mem::take(&mut b.bytes)))
             }
         };
@@ -219,12 +284,23 @@ impl<M> TranscriptRecorder<M> for S3StreamingRecorder<M> {
                 },
                 &mut b.bytes,
             );
+            if b.buffering_since.is_none() {
+                b.buffering_since = Some(Instant::now());
+            }
             // Flush mid-play only when a bounded uploader exists to receive it; without one
-            // (dev/test) the buffer holds until finish().
-            if self.tx.is_some() && b.bytes.len() >= CHUNK_TARGET {
+            // (dev/test) the buffer holds until finish(). Flush on size OR age: the timer bounds a
+            // slow / never-terminal match's un-uploaded tail so it can't sit in RAM until a finish()
+            // it may never reach.
+            let full = b.bytes.len() >= CHUNK_TARGET;
+            let stale = b
+                .buffering_since
+                .map(|t| t.elapsed() >= FLUSH_INTERVAL)
+                .unwrap_or(false);
+            if self.tx.is_some() && (full || stale) {
                 let seq = b.seq;
                 b.seq += 1;
                 b.total_bytes += b.bytes.len() as u64;
+                b.buffering_since = None;
                 Some((seq, std::mem::take(&mut b.bytes)))
             } else {
                 None
@@ -337,6 +413,57 @@ mod tests {
         recorder.record(entry(1)).expect("record");
         recorder.finish().await; // no-op
         assert!(recorder.canonical_root_for_tunnel(TID).is_ok());
+    }
+
+    // A slow match (buffer never reaches CHUNK_TARGET) still flushes its tail once the buffer ages
+    // past FLUSH_INTERVAL — otherwise those entries would sit un-uploaded until a finish() that a
+    // never-terminal match never reaches.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aged_buffer_flushes_below_the_size_target() {
+        let (tx, mut rx) = mpsc::channel::<ChunkUpload>(8);
+        let recorder = S3StreamingRecorder::<u8>::new(TID, Some(tx), None);
+
+        recorder.record(entry(1)).expect("record");
+        assert!(
+            rx.try_recv().is_err(),
+            "a fresh sub-1 MB buffer must not flush on size alone"
+        );
+
+        // Backdate the buffer's age past the interval; the next record trips the time-based flush.
+        recorder.buf.lock().unwrap().buffering_since =
+            Some(Instant::now() - FLUSH_INTERVAL - Duration::from_millis(1));
+        recorder.record(entry(2)).expect("record");
+
+        let up = rx
+            .try_recv()
+            .expect("an aged buffer flushes on the next record");
+        assert_eq!(up.seq, 0, "the time-based flush emits the first chunk");
+    }
+
+    // shutdown() must flush chunks still sitting in the queue before it returns — a settled match
+    // rolled mid-upload would otherwise be left with missing chunks and fail reassembly.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_drains_queued_chunks() {
+        use transcript_store::testing::FakeChunkStore;
+
+        let fake = Arc::new(FakeChunkStore::default());
+        let uploader = TranscriptUploader::spawn(fake.clone() as Arc<dyn TranscriptChunkWriter>);
+        let tx = uploader.sender();
+        for seq in 0..5u32 {
+            tx.send(ChunkUpload {
+                tunnel_id: TID.to_string(),
+                seq,
+                bytes: vec![seq as u8; 16],
+            })
+            .await
+            .expect("queue chunk");
+        }
+        uploader.shutdown().await;
+        assert_eq!(
+            fake.chunks.lock().unwrap().len(),
+            5,
+            "shutdown drains every queued chunk before returning"
+        );
     }
 
     // The bounded uploader drains every queued chunk to the store.

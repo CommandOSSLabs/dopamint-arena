@@ -17,6 +17,8 @@ path = "src/bin/api.rs"
 [dependencies]
 # read side (api binary) — reads via shared::SettlementStore (sqlx) + axum + fred SSE
 shared = { path = "../shared" }
+# reassembles server-owned transcript chunks from S3 for the /transcript read path
+transcript-store = { path = "../transcript-store" }
 tokio.workspace = true
 tokio-stream.workspace = true
 axum.workspace = true
@@ -47,3 +49,5 @@ url = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# in-memory FakeChunkStore for the /transcript chunk-read path test
+transcript-store = { path = "../transcript-store", features = ["testing"] }

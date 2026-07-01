@@ -4,6 +4,7 @@ import { fromHex, toHex } from "../core/bytes";
 import {
   encodeSettleBody,
   decodeSettleBody,
+  decodeSettleEntries,
   SETTLE_BODY_VERSION,
 } from "./settleBinary";
 
@@ -25,6 +26,20 @@ const INPUT = {
     { message: rep(0x66, 120), sigA: rep(0x77, 64), sigB: rep(0x88, 64) },
   ],
 };
+
+test("decodeSettleEntries parses the header-less entry run (chunk reassembly)", () => {
+  // The streamed chunks are exactly the settle body's entry region — the body minus its 229B header.
+  const entriesOnly = encodeSettleBody(INPUT).slice(229);
+  const entries = decodeSettleEntries(entriesOnly);
+  assert.equal(entries.length, INPUT.entries.length);
+  assert.deepEqual(entries[0].message, INPUT.entries[0].message);
+  assert.deepEqual(entries[1].sigB, INPUT.entries[1].sigB);
+});
+
+test("decodeSettleEntries rejects bytes that don't align to whole entries", () => {
+  const truncated = encodeSettleBody(INPUT).slice(229).slice(0, -1);
+  assert.throws(() => decodeSettleEntries(truncated));
+});
 
 test("encode→decode round-trips every field", () => {
   const decoded = decodeSettleBody(encodeSettleBody(INPUT));

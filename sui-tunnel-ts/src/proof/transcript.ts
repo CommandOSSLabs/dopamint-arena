@@ -17,7 +17,7 @@ import { CoSignedUpdate } from "../core/tunnel";
 import { serializeStateUpdate, parseStateUpdate } from "../core/wire";
 import { blake2b256, verify, SignatureScheme } from "../core/crypto";
 import { concatBytes, toHex } from "../core/bytes";
-import { decodeSettleBody } from "./settleBinary";
+import { decodeSettleBody, decodeSettleEntries, SettleEntry } from "./settleBinary";
 
 const LEAF = new TextEncoder().encode("sui_tunnel::transcript::leaf");
 const NODE = new TextEncoder().encode("sui_tunnel::transcript::node");
@@ -85,25 +85,27 @@ function normRoot(hex: string): string {
   return h.toLowerCase();
 }
 
+export interface VerifyParams {
+  partyA: { publicKey: Uint8Array; scheme: number };
+  partyB: { publicKey: Uint8Array; scheme: number };
+  onchainRoot: string;
+  lockedTotal?: bigint;
+}
+
 /**
- * Independently re-verify a settled transcript against its on-chain anchor.
- * Proves mutual authorization + integrity — dual signatures, strictly increasing
- * nonces, Merkle root == anchored root, and balance conservation (a+b constant,
- * == lockedTotal if given). It does NOT prove game fairness: each step's app state
- * is hashed into stateHash and never revealed. ed25519 only (matches
- * verifyCoSignedUpdate); throws on any other scheme.
+ * The four-check verification core, shared by both transcript sources. Proves mutual authorization
+ * + integrity — dual signatures, strictly increasing nonces, Merkle root == anchored root, balance
+ * conservation (a+b constant, == lockedTotal if given). Does NOT prove game fairness (per-step app
+ * state is only hashed, never revealed). ed25519 only; throws on any other scheme.
  *
- * Input is the binary settle body (`decodeSettleBody`) — the same bytes the FE
- * builds, the backend submits, and the explorer archives to Walrus verbatim.
+ * `bodyHeaderRoot` is supplied ONLY for a whole settle body: the recomputed root must then agree
+ * with both the body's own header root AND the on-chain anchor. For entries-only chunks there is no
+ * header, so the anchor (from the on-chain settlement row) is the sole root of trust.
  */
-export function verifyTranscript(
-  blob: Uint8Array,
-  params: {
-    partyA: { publicKey: Uint8Array; scheme: number };
-    partyB: { publicKey: Uint8Array; scheme: number };
-    onchainRoot: string;
-    lockedTotal?: bigint;
-  }
+function verifyEntries(
+  entries: SettleEntry[],
+  params: VerifyParams,
+  bodyHeaderRoot?: string
 ): TranscriptVerification {
   if (
     params.partyA.scheme !== SignatureScheme.ED25519 ||
@@ -111,12 +113,6 @@ export function verifyTranscript(
   ) {
     throw new Error("verifyTranscript currently supports ed25519 only");
   }
-
-  const decoded = decodeSettleBody(blob);
-  const norm = {
-    root: toHex(decoded.transcriptRoot),
-    entries: decoded.entries,
-  };
 
   const failures: string[] = [];
   const steps: TranscriptVerification["steps"] = [];
@@ -127,10 +123,7 @@ export function verifyTranscript(
   let prevNonce: bigint | null = null;
   let total: bigint | null = params.lockedTotal ?? null;
 
-  for (const e of norm.entries) {
-    const message = e.message;
-    const sigA = e.sigA;
-    const sigB = e.sigB;
+  for (const { message, sigA, sigB } of entries) {
     const su = parseStateUpdate(message);
 
     const sigAValid = verify(sigA, message, params.partyA.publicKey);
@@ -156,8 +149,8 @@ export function verifyTranscript(
 
   const recomputed = toHex(transcriptRoot(leaves));
   const rootMatches =
-    recomputed === normRoot(norm.root) &&
-    recomputed === normRoot(params.onchainRoot);
+    recomputed === normRoot(params.onchainRoot) &&
+    (bodyHeaderRoot === undefined || recomputed === normRoot(bodyHeaderRoot));
 
   if (!rootMatches)
     failures.push("merkle root does not match the on-chain anchor");
@@ -171,10 +164,35 @@ export function verifyTranscript(
     allSigsValid,
     nonceMonotonic,
     balancesConserved,
-    stepCount: norm.entries.length,
+    stepCount: entries.length,
     steps,
     failures,
   };
+}
+
+/**
+ * Verify a whole settle body (229-byte header + entries) — the legacy one-object archive the
+ * explorer proxies from Walrus. The recomputed root is cross-checked against BOTH the body's header
+ * root and the on-chain anchor.
+ */
+export function verifyTranscript(
+  blob: Uint8Array,
+  params: VerifyParams
+): TranscriptVerification {
+  const decoded = decodeSettleBody(blob);
+  return verifyEntries(decoded.entries, params, toHex(decoded.transcriptRoot));
+}
+
+/**
+ * Verify header-less reassembled chunks (entries only) — the bot-owned transcript served by the
+ * explorer's chunk path. There is no body header, so root and balances come from the on-chain
+ * settlement row via `params.onchainRoot` / `params.lockedTotal`.
+ */
+export function verifyTranscriptEntries(
+  entriesBlob: Uint8Array,
+  params: VerifyParams
+): TranscriptVerification {
+  return verifyEntries(decodeSettleEntries(entriesBlob), params);
 }
 
 /** Accumulates a tunnel's co-signed updates and produces the anchorable root + record. */

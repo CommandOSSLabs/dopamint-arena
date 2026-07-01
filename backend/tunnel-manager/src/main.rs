@@ -148,9 +148,13 @@ async fn main() -> anyhow::Result<()> {
             }
             None => None,
         };
-    let chunk_upload_tx = chunk_writer
+    // Keep the uploader (not just its sender) so a clean SIGTERM roll can drain its queue before
+    // exit: a settled match's early 1 MB chunks pass through here, and dropping them would leave
+    // that transcript short. Drained after `serve` returns (below).
+    let uploader = chunk_writer
         .clone()
-        .map(|w| transcript_stream::TranscriptUploader::spawn(w).sender());
+        .map(transcript_stream::TranscriptUploader::spawn);
+    let chunk_upload_tx = uploader.as_ref().map(|u| u.sender());
 
     let instance_id = config
         .instance_id
@@ -385,6 +389,11 @@ async fn main() -> anyhow::Result<()> {
     // Graceful shutdown completed: push the last sub-second of counted moves so a clean
     // rollout doesn't drop them (the 1 Hz flusher is gone with the runtime by now).
     flush_actions(&flush_state).await;
+    // Then flush any transcript chunks still queued for S3, so a match that settled just before the
+    // roll isn't left with missing chunks. Still-playing matches' tails are best-effort here.
+    if let Some(uploader) = uploader {
+        uploader.shutdown().await;
+    }
     Ok(())
 }
 

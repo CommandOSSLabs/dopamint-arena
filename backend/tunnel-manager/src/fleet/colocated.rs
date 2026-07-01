@@ -273,7 +273,11 @@ async fn play_game(
     macro_rules! play {
         ($play_fn:ident) => {{
             let recorder = S3StreamingRecorder::new(tunnel_id, chunk_upload_tx, chunk_writer);
-            let outcome = $play_fn(
+            // Seal on EVERY terminal exit, including abandon: a disconnect makes `$play_fn` return
+            // Err, so finishing before `?` is what flushes the tail chunk + seals the manifest for an
+            // errored/abandoned match. (A hung or panicking match still won't reach here; the SIGTERM
+            // uploader drain and the co-signed checkpoint bound that residual — see A.2 in the design.)
+            let result = $play_fn(
                 channel,
                 anchor,
                 match_key,
@@ -281,9 +285,9 @@ async fn play_game(
                 opponent_wallet,
                 recorder.clone(),
             )
-            .await?;
+            .await;
             recorder.finish().await;
-            outcome
+            result?
         }};
     }
     let outcome = match game {
