@@ -100,12 +100,6 @@ _why_ survives after the people involved have moved on.
   pre-creates + funds seat B at allocate; the user joins with a deposit-only PTB
   (Active on one signature). Supersedes the open mechanics of 0026; makes
   `allocate` on-chain-bound, so it **must** be authenticated + rate-limited.
-- [0029](0029-async-queued-batched-settlement.md) — `/settle` becomes
-  asynchronous: validate → durable Redis stream → 202; a worker pool coalesces up
-  to K `close_cooperative_with_root` calls into one PTB (retry-by-split), behind a
-  governed AIMD+backoff RPC layer; confirmation via the `explorer:proofs` event.
-  Stays on the public fullnode, living under its ceiling by raising S. Scales the
-  0020 provenance layer; batches settles the way 0019 batches opens.
 
 ### Backend-local decisions
 
@@ -116,6 +110,8 @@ numbering (no gaps reused). Currently:
 
 - 0020 — Two bot fleets over one sans-IO core (user-serving + local bench).
 - 0027 — Serving-fleet topology: WS-client for the demo → co-located at scale.
+- 0029 — Async queued settlement: `/settle` enqueues → 202; a worker pool
+  coalesces closes into batched PTBs behind a governed AIMD+backoff RPC layer.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was
