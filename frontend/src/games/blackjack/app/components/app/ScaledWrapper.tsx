@@ -45,7 +45,7 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
       if (w === 0 || h === 0) return;
 
       const isPortrait = w < h;
-      
+
       // Determine base scale from width to ensure the content fits horizontally
       // and let the height grow/shrink to perfectly match the parent's aspect ratio.
       const dWidth = isPortrait ? 500 : 1024;

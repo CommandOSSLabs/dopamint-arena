@@ -279,14 +279,15 @@ export default function PvpBlackjack() {
               {toasts.map((t) => (
                 <div
                   key={t.id}
-                  className={`px-3 py-1 rounded-md shadow-md text-xs font-bold fade-in-up border-2 ${t.type === "win"
+                  className={`px-3 py-1 rounded-md shadow-md text-xs font-bold fade-in-up border-2 ${
+                    t.type === "win"
                       ? "bg-[#eaf8ee] text-emerald-850 border-emerald-600"
                       : t.type === "lose"
                         ? "bg-[#ffe9e9] text-red-850 border-red-600"
                         : t.type === "push"
                           ? "bg-[#ffe9bd] text-amber-850 border-amber-600"
                           : "bg-[#fffefb] text-zinc-700 border-zinc-600"
-                    }`}
+                  }`}
                 >
                   {t.msg}
                 </div>
@@ -316,12 +317,13 @@ export default function PvpBlackjack() {
                   {g.isDealer ? latestRound.playerSum : latestRound.dealerSum}
                 </span>
                 <span
-                  className={`font-extrabold text-base md:text-lg ${latestMine === "win"
+                  className={`font-extrabold text-base md:text-lg ${
+                    latestMine === "win"
                       ? "text-emerald-600"
                       : latestMine === "lose"
                         ? "text-red-600"
                         : "text-amber-600"
-                    }`}
+                  }`}
                 >
                   {latestMine.toUpperCase()}
                 </span>
