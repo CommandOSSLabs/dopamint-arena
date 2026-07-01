@@ -290,11 +290,12 @@ async fn handle_authed(
     holds: &mut FuturesUnordered<HoldTimer>,
 ) -> Result<(), &'static str> {
     match msg {
-        ClientMsg::QueueJoin { game } => {
+        ClientMsg::QueueJoin { game, is_bot } => {
             joined.insert(game.clone());
             let me = Waiting {
                 wallet: wallet.to_owned(),
                 conn: here(state, conn_id),
+                is_bot,
             };
             match state
                 .mp
@@ -513,6 +514,14 @@ async fn handle_authed(
             state.bus.evict(&opp_conn, &match_id).await;
             Ok(())
         }
+        ClientMsg::ArenaJoin { match_id } => {
+            // Claim the pre-allocated arena match and spawn its bot HERE — co-located with this WS,
+            // so the match relays in-process (ADR-0005). This delivers `MatchFound` to us (party A)
+            // and starts the bot. An unknown/expired id, a foreign wallet, or a second (already
+            // claimed) join all surface as `unknown_arena_match`.
+            crate::fleet::colocated::join_and_spawn(state, &match_id, here(state, conn_id), wallet)
+                .await
+        }
         ClientMsg::Connect { .. } => Err("already_connected"),
     }
 }
@@ -570,7 +579,11 @@ async fn notify_peers_dropped(
 /// store at most once per match, then route every subsequent frame from the in-task copy.
 /// Removes both per-move Redis GETs (counting + forwarding). conn_a/conn_b are fixed at
 /// match creation, so the cached copy is valid for the life of the connection.
-async fn relay_to_other(
+///
+/// `pub(crate)` so the co-located fleet's `BusRelayTransport` (ADR-0027) routes a bot's outbound
+/// frames through this SAME path — keeping move-counting and seat routing in exact parity with the
+/// human WS path instead of duplicating either.
+pub(crate) async fn relay_to_other(
     state: &SharedState,
     cache: &mut std::collections::HashMap<String, MatchRecord>,
     from: ConnId,
@@ -753,10 +766,12 @@ mod tests {
         let opponent = Waiting {
             wallet: "0xearly".into(),
             conn: conn_opp.clone(),
+            is_bot: false,
         };
         let joiner = Waiting {
             wallet: "0xlate".into(),
             conn: conn_me.clone(),
+            is_bot: false,
         };
 
         let (_, rec) = create_and_announce_match(&state, "chess", opponent, joiner).await;
@@ -1160,10 +1175,12 @@ mod tests {
         let a = Waiting {
             wallet: "0xa".into(),
             conn: ca,
+            is_bot: false,
         };
         let b = Waiting {
             wallet: "0xb".into(),
             conn: cb,
+            is_bot: false,
         };
         let (_mid, rec) = create_and_announce_match(&state, "ttt", a, b).await;
         assert_eq!(rec.seat_a, "0xa");
@@ -1250,9 +1267,11 @@ mod tests {
             control: Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: mp.clone(),
             bus: bus.clone(),
-            settler: crate::sui::SuiSettler::noop(),
+            settler: std::sync::Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
+            archiver: None,
+            s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
@@ -1263,6 +1282,11 @@ mod tests {
             pair_hold_ms: 10_000, // long hold — neither expires via the join path
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
+            arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena_fleet_count: 0,
+            arena_fleet_games: std::collections::HashSet::new(),
+            wallet_pool: None,
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,
@@ -1279,6 +1303,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa_ref.clone(),
+            is_bot: false,
         };
 
         // Park wa first (queue empty → parks, no immediate pair).
@@ -1294,6 +1319,7 @@ mod tests {
                 instance_id: "other-instance".to_owned(),
                 conn_id: conn_wb_ref.conn_id,
             },
+            is_bot: false,
         };
         let parked_b = state.mp.join_or_pair(&game, wb_other_inst, 10_000).await;
         assert!(parked_b.is_none(), "wb must also park (different instance)");
@@ -1330,6 +1356,7 @@ mod tests {
         let opp_remapped = Waiting {
             wallet: opp.wallet.clone(),
             conn: conn_wb_ref.clone(),
+            is_bot: false,
         };
         create_and_announce_match(&state, &fired_game, fired_me, opp_remapped).await;
 
@@ -1406,9 +1433,11 @@ mod tests {
             control: Arc::new(InMemoryControlStore::default()),
             mp,
             bus,
-            settler: crate::sui::SuiSettler::noop(),
+            settler: std::sync::Arc::new(crate::sui::SuiSettler::noop()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
+            archiver: None,
+            s3_prefix: "".into(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
@@ -1419,6 +1448,11 @@ mod tests {
             pair_hold_ms,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
+            arena_opener: Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena_fleet_count: 0,
+            arena_fleet_games: std::collections::HashSet::new(),
+            wallet_pool: None,
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,
@@ -1469,6 +1503,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa,
+            is_bot: false,
         };
         assert!(
             state_a
@@ -1482,6 +1517,7 @@ mod tests {
         let wb = Waiting {
             wallet: "0xwb".into(),
             conn: conn_wb,
+            is_bot: false,
         };
         assert!(
             state_b.mp.join_or_pair(&game, wb, 10_000).await.is_none(),
@@ -1537,6 +1573,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa,
+            is_bot: false,
         };
         assert!(
             state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
@@ -1549,6 +1586,7 @@ mod tests {
         let wb = Waiting {
             wallet: "0xwb".into(),
             conn: conn_wb,
+            is_bot: false,
         };
         let opp = state
             .mp
@@ -1591,6 +1629,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa,
+            is_bot: false,
         };
         assert!(
             state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
@@ -1617,6 +1656,7 @@ mod tests {
         let wc = Waiting {
             wallet: "0xwc".into(),
             conn: conn_wc,
+            is_bot: false,
         };
         assert!(
             state.mp.join_or_pair(&game, wc, 50).await.is_none(),

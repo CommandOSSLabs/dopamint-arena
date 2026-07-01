@@ -404,6 +404,8 @@ impl RedisMpStore {
 const JOIN_OR_PAIR: &str = r#"
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local me = cjson.decode(ARGV[1])
+local me_bot = me.is_bot
 local items = redis.call('LRANGE', KEYS[1], 0, -1)
 local colocated = nil
 local expired = nil
@@ -412,7 +414,8 @@ for _, v in ipairs(items) do
   if ok then
     if w.wallet == ARGV[2] then
       redis.call('LREM', KEYS[1], 1, v)
-    else
+    -- A bot is NEVER paired with another bot; skip a candidate when both are bots.
+    elseif not (me_bot and w.is_bot) then
       if colocated == nil and w.conn and w.conn.instance_id == ARGV[3] then
         colocated = v
       end
@@ -427,7 +430,6 @@ if chosen then
   redis.call('LREM', KEYS[1], 1, chosen)
   return chosen
 end
-local me = cjson.decode(ARGV[1])
 me.deadline = now + tonumber(ARGV[4])
 redis.call('RPUSH', KEYS[1], cjson.encode(me))
 return false
@@ -440,25 +442,27 @@ return false
 const FALLBACK_PAIR: &str = r#"
 local items = redis.call('LRANGE', KEYS[1], 0, -1)
 local self_present = false
-local opp = nil
+local self_bot = false
+-- Pass 1: detect self, capture its is_bot, and drain self entries.
 for _, v in ipairs(items) do
   local ok, w = pcall(cjson.decode, v)
-  if ok then
-    if w.wallet == ARGV[1] then
-      self_present = true
-    elseif opp == nil then
-      opp = v
-    end
+  if ok and w.wallet == ARGV[1] then
+    self_present = true
+    self_bot = w.is_bot
+    redis.call('LREM', KEYS[1], 1, v)
   end
 end
 if not self_present then return false end
-if opp == nil then return false end
+-- Pass 2: pick + remove the oldest different-wallet opponent. A bot is NEVER paired with
+-- another bot, so skip a candidate when both are bots.
 for _, v in ipairs(items) do
   local ok, w = pcall(cjson.decode, v)
-  if ok and w.wallet == ARGV[1] then redis.call('LREM', KEYS[1], 1, v) end
+  if ok and w.wallet ~= ARGV[1] and not (self_bot and w.is_bot) then
+    redis.call('LREM', KEYS[1], 1, v)
+    return v
+  end
 end
-redis.call('LREM', KEYS[1], 1, opp)
-return opp
+return false
 "#;
 
 // Presence compare-and-delete on a single key holding the full ConnRef JSON: delete only if
@@ -554,6 +558,39 @@ if sb == ARGV[1] then
   return 'b'
 end
 return false
+"#;
+
+/// Arena reservation TTL (seconds): covers the user's deposit-signing window between `allocate` and
+/// `arena.join`. A user who never joins simply expires — no bot was ever spawned to reclaim.
+const ARENA_RES_TTL_SECS: i64 = 300;
+
+// Seed an arena reservation as a hash + TTL. KEYS[1]=arena:res:<id>
+// ARGV: 1=game 2=seat_a 3=seat_b 4=tunnel_id 5=eph_secret 6=ttl
+const PUT_ARENA_RESERVATION: &str = r#"
+redis.call('HSET', KEYS[1], 'game', ARGV[1], 'seat_a', ARGV[2], 'seat_b', ARGV[3], 'tunnel_id', ARGV[4], 'eph_secret', ARGV[5], 'claimed', '0')
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[6]))
+return 1
+"#;
+
+// Atomic claim-once for play. Verifies the joining wallet is the allocator (seat_a) and that no
+// prior join claimed it, then flips 'claimed' and returns the recipe. One eval → exactly one
+// caller ever gets status 'claimed', so exactly one bot spawns under a double-join.
+// KEYS[1]=arena:res:<id>  ARGV[1]=wallet  ARGV[2]=ttl. Returns cjson {status, ...recipe}.
+const CLAIM_ARENA: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then return cjson.encode({status='notfound'}) end
+local sa = redis.call('HGET', KEYS[1], 'seat_a')
+if sa ~= ARGV[1] then return cjson.encode({status='foreign'}) end
+if redis.call('HGET', KEYS[1], 'claimed') == '1' then return cjson.encode({status='claimed_already'}) end
+redis.call('HSET', KEYS[1], 'claimed', '1')
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+return cjson.encode({
+  status='claimed',
+  game=redis.call('HGET', KEYS[1], 'game'),
+  seat_a=sa,
+  seat_b=redis.call('HGET', KEYS[1], 'seat_b'),
+  tunnel_id=redis.call('HGET', KEYS[1], 'tunnel_id'),
+  eph_secret=redis.call('HGET', KEYS[1], 'eph_secret')
+})
 "#;
 
 #[async_trait]
@@ -814,6 +851,71 @@ impl MpStore for RedisMpStore {
                 tracing::warn!(error = %e, "redis rebind_match_conn eval failed");
                 None
             }
+        }
+    }
+
+    async fn put_arena_reservation(&self, match_id: &str, rec: crate::store::ArenaReservation) {
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                PUT_ARENA_RESERVATION,
+                vec![format!("arena:res:{match_id}")],
+                vec![
+                    rec.game,
+                    rec.seat_a,
+                    rec.seat_b,
+                    rec.tunnel_id,
+                    rec.eph_secret_hex,
+                    ARENA_RES_TTL_SECS.to_string(),
+                ],
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis put_arena_reservation failed");
+        }
+    }
+
+    async fn claim_arena(&self, match_id: &str, wallet: &str) -> crate::store::ArenaClaim {
+        use crate::store::{ArenaClaim, ArenaReservation};
+        let res: Result<Option<String>, _> = self
+            .pool
+            .eval(
+                CLAIM_ARENA,
+                vec![format!("arena:res:{match_id}")],
+                vec![wallet.to_owned(), ARENA_RES_TTL_SECS.to_string()],
+            )
+            .await;
+        let json = match res {
+            Ok(Some(j)) => j,
+            Ok(None) => return ArenaClaim::NotFound,
+            Err(e) => {
+                tracing::warn!(error = %e, "redis claim_arena eval failed");
+                return ArenaClaim::NotFound;
+            }
+        };
+        #[derive(serde::Deserialize)]
+        struct ClaimOut {
+            status: String,
+            game: Option<String>,
+            seat_a: Option<String>,
+            seat_b: Option<String>,
+            tunnel_id: Option<String>,
+            eph_secret: Option<String>,
+        }
+        let Ok(out) = serde_json::from_str::<ClaimOut>(&json) else {
+            return ArenaClaim::NotFound;
+        };
+        match out.status.as_str() {
+            "claimed" => ArenaClaim::Claimed(ArenaReservation {
+                game: out.game.unwrap_or_default(),
+                seat_a: out.seat_a.unwrap_or_default(),
+                seat_b: out.seat_b.unwrap_or_default(),
+                tunnel_id: out.tunnel_id.unwrap_or_default(),
+                eph_secret_hex: out.eph_secret.unwrap_or_default(),
+            }),
+            "foreign" => ArenaClaim::ForeignWallet,
+            "claimed_already" => ArenaClaim::AlreadyClaimed,
+            _ => ArenaClaim::NotFound,
         }
     }
 }
@@ -1324,6 +1426,7 @@ mod tests {
                     crate::mp::Waiting {
                         wallet: format!("0x{i}"),
                         conn: cr,
+                        is_bot: false,
                     },
                     0,
                 )
@@ -1359,6 +1462,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         // A(ia) and B(ib) both park (no local partner, neither expired).
         assert!(s.join_or_pair(&game, w("wa", "ia"), hold).await.is_none());
@@ -1377,6 +1481,42 @@ mod tests {
         assert_eq!(opp2.wallet, "wa", "front waiter still pairs same-instance");
     }
 
+    // The fleet invariant on the deployed (Lua) path: two bots never pair; a human pairs a bot.
+    #[tokio::test]
+    async fn join_or_pair_never_pairs_two_bots() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let hold = 10_000;
+        let seat = |wallet: &str, is_bot: bool| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: "ia".to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+            is_bot,
+        };
+        // Two bots both park — the Lua skips a bot-vs-bot candidate.
+        assert!(
+            s.join_or_pair(&game, seat("bot1", true), hold)
+                .await
+                .is_none(),
+            "first bot parks"
+        );
+        assert!(
+            s.join_or_pair(&game, seat("bot2", true), hold)
+                .await
+                .is_none(),
+            "a second bot must NOT pair the waiting bot"
+        );
+        // A human pairs a waiting (same-instance) bot.
+        let opp = s
+            .join_or_pair(&game, seat("human", false), hold)
+            .await
+            .expect("a human pairs a waiting bot");
+        assert!(opp.is_bot, "the human's opponent is a bot");
+    }
+
     // With a short hold, a parked cross-instance waiter becomes selectable once its deadline
     // passes — the join path's expired branch pairs it.
     #[tokio::test]
@@ -1390,6 +1530,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 30).await.is_none());
         // Before expiry, a cross-instance joiner does NOT take wa — it parks instead.
@@ -1419,6 +1560,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
         assert!(s.join_or_pair(&game, w("wb", "ib"), 10_000).await.is_none());
@@ -1440,6 +1582,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
         assert!(
@@ -1646,6 +1789,7 @@ mod tests {
                 crate::mp::Waiting {
                     wallet: wallet.clone(),
                     conn: cr1,
+                    is_bot: false,
                 },
                 0,
             )
@@ -1663,6 +1807,7 @@ mod tests {
                 crate::mp::Waiting {
                     wallet: wallet.clone(),
                     conn: cr2,
+                    is_bot: false,
                 },
                 0,
             )

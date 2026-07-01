@@ -12,19 +12,11 @@
  * removal. If you ever add `"sideEffects"`, list the spec modules (or this file) as having effects.
  */
 import "@/games/bombIt/bombItSpec";
-import "@/games/bombIt/bombItSoloSpec";
 import "@/games/chickenCross/chickenCrossSpec";
-import "@/games/chickenCross/chickenCrossSoloSpec";
 import "@/games/worldCanvas/worldCanvasSpec";
 import "@/games/battleship/battleshipSpec";
 import "@/games/ticTacToe/tttCaroPvpSpec"; // ttt + caro PvP (defineGame side-effect)
 import "@/games/quantumPoker/quantumPokerPvpSpec";
-import "@/games/quantumPoker/quantumPokerSoloSpec";
 import "@/games/blackjack/blackjackPvpSpec";
-import "@/games/ticTacToe/tttSoloSpec";
-import "@/games/ticTacToe/caroSoloSpec";
-import "@/games/blackjack/blackjackSoloSpec";
-import "@/games/battleship/battleshipSoloSpec";
-import "@/games/worldCanvas/worldCanvasSoloSpec";
 
-export { getSpec, getSoloSpec } from "./defineGame";
+export { getSpec } from "./defineGame";

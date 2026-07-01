@@ -1,0 +1,28 @@
+[package]
+name = "bot-fleet"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A standalone fleet of server-side bots that play real human users over the relay, built ON
+# the tunnel-harness engine: it drives `tunnel_harness::PartyRuntime` (sans-IO core, whose
+# default `JsonFrameCodec` is byte-identical to the TS `distributedFrame.ts`) via
+# `tunnel_harness::PartyDriver`, and implements the `tunnel_harness::FrameTransport` seam over
+# the live relay WebSocket. See docs/superpowers/specs/2026-06-26-bot-pool-design.md.
+[dependencies]
+fleet-core = { path = "../../fleet/core" }
+tunnel-core = { path = "../../engine/tunnel-core" }
+tunnel-harness = { path = "../../engine/tunnel-harness" }
+tunnel-blackjack = { path = "../../protocols/blackjack" }
+tokio = { workspace = true }
+# WSS client to the deployed relay (relay-dev.millionstps.io /v1/mp). native-tls keeps the
+# client off rustls so it cannot collide with the workspace's single ring CryptoProvider; the
+# Fargate image must ship libssl (or switch this to rustls-ring for parity at deploy time).
+tokio-tungstenite = { version = "0.24", features = ["connect", "native-tls"] }
+futures-util = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }
+tracing = { workspace = true }
+getrandom = { workspace = true }

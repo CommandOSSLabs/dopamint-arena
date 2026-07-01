@@ -1,36 +1,62 @@
 import { useCallback } from "react";
 
+import { get as getGameModule } from "@/games/registry";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useSampledRate } from "@/telemetry/useSampledRate";
 import { fmtTps } from "@/lib/formatTps";
 import { cn } from "@/lib/utils";
 
 /**
- * Per-WINDOW throughput chip for the window header. The number is REAL, never mocked: the local rate
- * of co-signed state updates THIS window's worker is producing, sampled from the per-window counter
- * its scoped report fills (keyed by `windowId`, so two windows of the same game each show their own
- * rate — and {@link useTelemetry}'s `getGamesTotal` still sums them for the aggregate). Both self-play
- * and PvP feed it now (the worker carries its `moves` count in the snapshot).
+ * The backend keys `perGame` by the `game` string the match registers under, which is NOT always
+ * the FE registry id. Two sources of drift, resolved in `backendGameKey`:
+ *   1. Arena one-sig games count under their underscore `arenaGameId` (e.g. `quantum_poker`) —
+ *      that is the key `routes.rs` seeds into the MatchRecord the relay counts against.
+ *   2. Legacy matchmaking games have no `arenaGameId`; tic-tac-toe counts under `tictactoe`.
+ * Without bridging both, the chip looks up the hyphen registry id, misses, and shows nothing.
+ */
+const BACKEND_GAME_KEY: Record<string, string> = { "tic-tac-toe": "tictactoe" };
+
+function backendGameKey(gameId: string): string {
+  // arenaGameId may be an array when one module hosts multiple protocols (tic-tac-toe + caro); the
+  // chip can't tell which variant the window shows, so it keys off the first (the module's primary).
+  const arena = getGameModule(gameId)?.arenaGameId;
+  const arenaId = Array.isArray(arena) ? arena[0] : arena;
+  return arenaId ?? BACKEND_GAME_KEY[gameId] ?? gameId;
+}
+
+/**
+ * Per-game throughput chip for the window header. The number is REAL, never mocked:
+ *   - while the backend stats feed is live, the backend's authoritative per-game rate
+ *     (`StatsSnapshot.perGame[gameKey].tps`, ADR-0002 — the backend owns the rate);
+ *   - otherwise (offline / self-play demo), the local rate of co-signed state updates this
+ *     game is producing, sampled from the per-game counter its scoped report fills. PvP is
+ *     relay-counted server-side, so a PvP game has no local fallback — it shows a rate only
+ *     while the backend is connected.
  *
- * Renders nothing until there is real activity, so the header never shows a placeholder — only a
- * window actually doing work gets a chip.
+ * Renders nothing until there is real activity to show, so the header never displays a
+ * placeholder — only a game that is actually doing work gets a chip.
  */
 export function GameTpsBadge({
-  windowId,
+  gameId,
   className,
 }: {
-  windowId: string;
+  gameId: string;
   className?: string;
 }) {
-  const { getGameTotal } = useTelemetry();
-  const tps = useSampledRate(
-    useCallback(() => getGameTotal(windowId), [getGameTotal, windowId]),
+  const { backend, getGameTotal } = useTelemetry();
+  const backendTps = backend?.perGame?.[backendGameKey(gameId)]?.tps;
+  // Local fallback: instantaneous state-updates/sec from this game's counter (authoritative
+  // backend rate wins when present).
+  const localTps = useSampledRate(
+    useCallback(() => getGameTotal(gameId), [getGameTotal, gameId]),
   );
+
+  const tps = backendTps ?? localTps;
   if (tps == null) return null;
 
   return (
     <span
-      title="This window's TPS (tx/s)"
+      title="Your TPS (tx/s)"
       className={cn(
         "inline-flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-primary",
         className,

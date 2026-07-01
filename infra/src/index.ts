@@ -12,6 +12,7 @@ import { createFrontend } from "./components/Frontend.js";
 import { createDatabase } from "./components/Database.js";
 import { createDatabaseProxy } from "./components/DatabaseProxy.js";
 import { createCache } from "./components/Cache.js";
+import { createTranscriptsBucket } from "./components/TranscriptsBucket.js";
 import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
@@ -77,6 +78,53 @@ if (cfg.settlerKey) {
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
+// Internal-faucet bearer token + Enoki private key follow the settler-key path: secret config
+// => Secrets Manager => ECS `secrets`, never inlined into the task definition. Created only
+// when the stack configures them; absent => the backend disables that feature (faucet/internal
+// 503, Enoki off) rather than booting with a plaintext secret.
+let faucetAdminTokenSecretArn: pulumi.Output<string> | undefined;
+if (cfg.faucetAdminToken) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-faucet-admin-token`,
+    {
+      description: `Internal MTPS faucet bearer token for dopamint-${cfg.environment}`,
+    },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-faucet-admin-token-version`,
+    { secretId: secret.id, secretString: cfg.faucetAdminToken },
+  );
+  faucetAdminTokenSecretArn = secret.arn;
+}
+
+let enokiApiKeySecretArn: pulumi.Output<string> | undefined;
+if (cfg.enokiApiKey) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-enoki-api-key`,
+    { description: `Enoki private API key for dopamint-${cfg.environment}` },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-enoki-api-key-version`,
+    { secretId: secret.id, secretString: cfg.enokiApiKey },
+  );
+  enokiApiKeySecretArn = secret.arn;
+}
+
+// Wallet-pool passphrase (PR #124): same secret-config => Secrets Manager => ECS `secrets` path.
+// Absent => the backend can't open the pool and the arena opener degrades to Noop (no funded seat-B).
+let walletPoolAccessSecretArn: pulumi.Output<string> | undefined;
+if (cfg.walletPoolAccessValue) {
+  const secret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-wallet-pool-access`,
+    { description: `Wallet pool passphrase for dopamint-${cfg.environment}` },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-wallet-pool-access-version`,
+    { secretId: secret.id, secretString: cfg.walletPoolAccessValue },
+  );
+  walletPoolAccessSecretArn = secret.arn;
+}
+
 const ecr = createEcr(`dopamint-${cfg.environment}`);
 const ecs = createEcs(`dopamint-${cfg.environment}`);
 
@@ -103,6 +151,16 @@ new aws.secretsmanager.SecretVersion(
   },
 );
 
+const cache = createCache(`dopamint-${cfg.environment}`, {
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.cache.id,
+  nodeType: cfg.cacheNodeType,
+});
+
+const transcriptsBucket = createTranscriptsBucket(
+  `dopamint-${cfg.environment}`,
+);
+
 const iam = createIam(`dopamint-${cfg.environment}`, {
   githubOrg: "CommandOSSLabs",
   githubRepo: "dopamint-arena",
@@ -110,13 +168,13 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
     database.dbPasswordSecretArn,
     databaseUrlSecret.arn,
     ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
+    ...(faucetAdminTokenSecretArn ? [faucetAdminTokenSecretArn] : []),
+    ...(enokiApiKeySecretArn ? [enokiApiKeySecretArn] : []),
+    ...(walletPoolAccessSecretArn ? [walletPoolAccessSecretArn] : []),
   ],
-});
-
-const cache = createCache(`dopamint-${cfg.environment}`, {
-  subnetIds: network.privateSubnetIds,
-  securityGroupId: sgs.cache.id,
-  nodeType: cfg.cacheNodeType,
+  taskRoleTranscriptsBucketArn: transcriptsBucket.bucketArn,
+  // Task role gets s3:GetObject on the wallet-pool bucket (the running container reads the blob).
+  walletPoolS3Bucket: "dev-env-dopamint-wallet-pool",
 });
 
 const backend = createBackend({
@@ -129,6 +187,10 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
+  s3TranscriptsBucket: transcriptsBucket.bucketName,
+  faucetAdminTokenSecretArn,
+  enokiApiKeySecretArn,
+  walletPoolAccessSecretArn,
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,
   ollamaImageTag: cfg.ollamaImageTag,
@@ -219,8 +281,7 @@ export const githubEnv = githubEnvOutputs({
   ecrUrl: ecr.repositoryUrl,
   ecsCluster: ecs.clusterName,
   ecsService: backendService.serviceName,
-  migrationTaskDef: backend.migrationTaskDefinitionArn,
-  backendTaskDefArn: backend.taskDefinitionArn,
+  backendTaskDefFamily: backend.taskDefinition.family,
   githubDeployRoleArn: iam.githubDeployRoleArn,
   privateSubnetIds: network.privateSubnetIds,
   backendSecurityGroupId: sgs.backend.id,

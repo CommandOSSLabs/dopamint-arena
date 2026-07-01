@@ -2,7 +2,6 @@ import { memo, useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 
 import { get } from "../games/registry";
-import { GameCabinet } from "@/shell/cabinet/GameCabinet";
 import {
   TelemetryContext,
   useTelemetry,
@@ -18,23 +17,20 @@ import {
  * game effects that depend on it don't churn on each telemetry tick.
  */
 function GameTelemetryScope({
-  windowId,
+  gameId,
   children,
 }: {
-  windowId: string;
+  gameId: string;
   children: ReactNode;
 }) {
   const base = useTelemetry();
   const { report: baseReport, recordGameUpdate } = base;
-  // Tag per WINDOW (not gameId): each window's TPS chip shows its own worker's rate, and the
-  // aggregate (getGamesTotal) still sums across every open window. Two windows of the same game keep
-  // separate counters.
   const report = useMemo<TelemetryWriter>(
     () => ({
       ...baseReport,
-      recordActions: (n) => recordGameUpdate(windowId, n),
+      recordActions: (n) => recordGameUpdate(gameId, n),
     }),
-    [baseReport, recordGameUpdate, windowId],
+    [baseReport, recordGameUpdate, gameId],
   );
   const value = useMemo(() => ({ ...base, report }), [base, report]);
   return (
@@ -45,10 +41,9 @@ function GameTelemetryScope({
 }
 
 /**
- * A game's `Window` wrapped in the shared arcade cabinet, memoized so a floor
- * re-render (a sibling drag, a telemetry tick) doesn't re-render this game. Inert
- * for games that don't register a CabinetController yet. Shared by the desktop
- * floor and the phone floor so both mount a game identically.
+ * A game's `Window`, memoized so a floor re-render (a sibling drag, a telemetry
+ * tick) doesn't re-render this game. Shared by the desktop floor and the phone
+ * floor so both mount a game identically.
  *
  * `onClose` takes the windowId (the floor closes by id); the memo holds across
  * re-renders only while `onClose` is stable (the floor passes a memoized setter).
@@ -67,10 +62,8 @@ export const GameContent = memo(function GameContent({
   if (!mod) return null;
   const Content = mod.Window;
   return (
-    <GameTelemetryScope windowId={windowId}>
-      <GameCabinet>
-        <Content windowId={windowId} onClose={close} />
-      </GameCabinet>
+    <GameTelemetryScope gameId={gameId}>
+      <Content windowId={windowId} onClose={close} />
     </GameTelemetryScope>
   );
 });

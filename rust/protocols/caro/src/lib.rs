@@ -34,10 +34,12 @@ pub struct CaroState {
     pub move_accumulator: [u8; 32],
 }
 
+/// Move-wire serde for `salt`: the relayed move is JSON, and the FE `caroMoveCodec` sends `salt` as a
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaroMove {
     pub cell: i64,
     /// Per-move salt, >= 16 bytes (enforced by compute_commitment).
+    #[serde(with = "tunnel_harness::wire_hex::bytes")]
     pub salt: Vec<u8>,
 }
 
@@ -897,5 +899,29 @@ mod tests {
         assert_eq!(state.inner.balance_b, 0);
         // B cannot fund the next game (balance 0 < stake 50), so series is terminal.
         assert!(proto.is_terminal(&state));
+    }
+}
+
+#[cfg(test)]
+mod move_wire_parity {
+    use super::*;
+
+    // The relayed move is JSON; the FE `caroMoveCodec` sends `{cell:<number>, salt:"<bare-hex>"}`
+    // (lowercase hex, NO 0x). The bot's `CaroMove` serde MUST match or the move loop can't decode.
+    #[test]
+    fn move_json_matches_fe_caro_move_codec() {
+        let m = CaroMove {
+            cell: 112,
+            salt: vec![0xcd; 16],
+        };
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({ "cell": 112, "salt": "cd".repeat(16) }),
+        );
+        let parsed: CaroMove =
+            serde_json::from_value(serde_json::json!({ "cell": 0, "salt": "00".repeat(16) }))
+                .unwrap();
+        assert_eq!(parsed.cell, 0);
+        assert_eq!(parsed.salt, vec![0u8; 16]);
     }
 }

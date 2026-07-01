@@ -1,67 +1,30 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
-import type { CabinetController } from "@/shell/cabinet/CabinetController";
-import { ArrowLeft, Bot, Check, Crosshair, Users, Wallet } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowLeft, Check, Wallet } from "lucide-react";
 import { ConnectModal, useCurrentAccount } from "@mysten/dapp-kit";
 import { isEnokiWallet } from "@mysten/enoki";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
 import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
-import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
-import { WorkerBotGame } from "./WorkerBotGame";
-import { engineEnabled } from "@/engine/flag";
 import { SketchDefs } from "../sketch";
 import "./battleship.css";
 
-type Mode = "bot" | "pvp";
-
-// Which mode a window is in, kept by windowId so a remount (minimize / maximize /
-// desktop reflow) returns to the live game rather than the chooser. Cleared on close.
-const modeStore = new Map<string, Mode | null>();
-
-// Big pill actions in the shared hand-drawn "sketch" skin (matches Quantum Poker):
-// amber-inked "go" for the primary, plain ink outline for the secondary. The
-// `qp-btn` class carries the wobble border + cqmin sizing; we add layout utilities.
+// Big pill action in the shared hand-drawn "sketch" skin (matches Quantum Poker):
+// amber-inked "go" for the primary. The `qp-btn` class carries the wobble border +
+// cqmin sizing; we add layout utilities.
 const BTN_PRIMARY =
   "sketch-btn sketch-btn--go inline-flex w-full items-center justify-center gap-2";
-const BTN_SECONDARY =
-  "sketch-btn inline-flex w-full items-center justify-center gap-2";
 
 /**
- * Battleship over a REAL Sui tunnel. Both modes require a connected wallet (gas is
- * sponsored, so play is free): vs-Bot opens + funds a self-play tunnel from one
- * wallet; PvP matches a real opponent over the relay. Every shot is commit-revealed
- * and co-signed; the result settles on-chain. The session lives in a windowId-keyed
- * store, so minimizing or resizing the window never drops the game. ADR 0003.
+ * Battleship over a REAL Sui tunnel, PvP only. Requires a connected wallet (gas is
+ * sponsored, so play is free): matchmaking pairs a real opponent over the relay, every
+ * shot is commit-revealed and co-signed, and the winner settles on-chain. The session
+ * lives in a windowId-keyed store, so minimizing or resizing the window never drops the
+ * game. ADR 0003.
  */
-export function BattleshipWindow({ windowId }: GameWindowProps) {
-  // Default straight into vs-Bot (it auto-starts with autopilot on); Back reaches the
-  // chooser for PvP. A remount restores the window's last mode.
-  const [mode, setModeState] = useState<Mode | null>(
-    () => modeStore.get(windowId) ?? "bot",
-  );
-  useEffect(() => {
-    registerWindowDisposer(windowId, "battleship-mode", () => {
-      modeStore.delete(windowId);
-    });
-  }, [windowId]);
-  const setMode = (m: Mode | null) => {
-    if (m === null) modeStore.delete(windowId);
-    else modeStore.set(windowId, m);
-    setModeState(m);
-  };
-
+export function BattleshipWindow({ windowId, onClose }: GameWindowProps) {
   // One size-container for the whole game so every pane sizes off the WINDOW's
   // width AND height (container queries + cqh units), not the viewport — correct
   // in a small floating window on a big screen, or full-width on mobile.
@@ -72,50 +35,13 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
 
       {/* Actual game layout sits on top */}
       <div className="relative z-20 h-full w-full">
-        {mode === "bot" ? (
-          engineEnabled() ? (
-            <WorkerBotGame windowId={windowId} onExit={() => setMode(null)} />
-          ) : (
-            <BotGame windowId={windowId} onExit={() => setMode(null)} />
-          )
-        ) : mode === "pvp" ? (
-          <PvpGame windowId={windowId} onExit={() => setMode(null)} />
-        ) : (
-          <ModeChooser onPick={setMode} />
-        )}
+        <PvpGame windowId={windowId} onExit={onClose} />
       </div>
     </div>
   );
 }
 
-/** Home screen (reached via Back): pick an opponent — vs-Bot or a PvP match. */
-function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 p-5 text-center">
-      <div className="flex flex-col items-center gap-1">
-        <span className="sketch-eyebrow">You vs the sea</span>
-        <h2 className="sketch-title text-[clamp(26px,9cqmin,40px)]">
-          Battleship
-        </h2>
-        <p className="sketch-note mt-1 max-w-xs">
-          Hide your fleet, then sink your foe's. Every shot is{" "}
-          <span className="text-[var(--sketch-accent)]">commit-revealed</span>{" "}
-          and co-signed in the tunnel — the winner settles on-chain.
-        </p>
-      </div>
-      <div className="flex w-full max-w-xs flex-col gap-2.5">
-        <button onClick={() => onPick("bot")} className={BTN_PRIMARY}>
-          <Bot className="size-4" /> Play vs Bot
-        </button>
-        <button onClick={() => onPick("pvp")} className={BTN_SECONDARY}>
-          <Users className="size-4" /> Find Match · PvP
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export function Centered({ children }: { children: ReactNode }) {
+function Centered({ children }: { children: ReactNode }) {
   return (
     <div className="sketch-note flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
       {children}
@@ -147,8 +73,8 @@ function ConnectWalletPane({ note }: { note: string }) {
   );
 }
 
-/** Big tap-to-toggle "Auto" checkbox: hands your shots to autopilot vs the bot. */
-export function AutoToggle({
+/** Big tap-to-toggle "Auto" checkbox: hands your shots to autopilot. */
+function AutoToggle({
   on,
   onChange,
 }: {
@@ -175,60 +101,10 @@ export function AutoToggle({
   );
 }
 
-/** Header action: settle + close the multi-game tunnel now (allowed anytime). */
-export function SettleButton({ onSettle }: { onSettle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onSettle}
-      title="Settle and close the tunnel now (cash out)"
-      className="sketch-btn sketch-btn--go"
-    >
-      Settle
-    </button>
-  );
-}
-
-/** Shown while settling / after a multi-game session closes: the running tally + a
- *  way to start a fresh tunnel. */
-export function SettledPane({
-  score,
-  settling,
-  onNewGame,
-}: {
-  score: { you: number; foe: number };
-  settling: boolean;
-  onNewGame: () => void;
-}) {
-  const games = score.you + score.foe;
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-5 text-center">
-      <div className="flex flex-col items-center gap-1">
-        <span className="sketch-eyebrow">
-          {settling ? "Settling" : "Session settled"}
-        </span>
-        <h3 className="sketch-title text-[clamp(20px,7cqmin,30px)]">
-          {settling ? "Closing tunnel…" : "Settled ✓"}
-        </h3>
-        <p className="sketch-note mt-1 max-w-xs">
-          You <span className="text-[var(--sketch-felt)]">{score.you}</span> –{" "}
-          <span className="text-[var(--sketch-red)]">{score.foe}</span> Bot over{" "}
-          {games} game{games === 1 ? "" : "s"} on one tunnel.
-        </p>
-      </div>
-      {!settling && (
-        <button onClick={onNewGame} className={cn(BTN_PRIMARY, "max-w-xs")}>
-          <Crosshair className="size-4" /> New session
-        </button>
-      )}
-    </div>
-  );
-}
-
 /** Every mode renders inside this frame: a thin control strip carries the back button
  *  and optional trailing actions (Auto / Settle) — NOT a title, since the desktop window
  *  chrome above already shows one — with the mode's own UI filling the space below it. */
-export function ModeFrame({
+function ModeFrame({
   onBack,
   headerExtra,
   children,
@@ -257,7 +133,7 @@ export function ModeFrame({
   );
 }
 
-export function ErrorPane({
+function ErrorPane({
   error,
   onBack,
 }: {
@@ -276,146 +152,10 @@ export function ErrorPane({
   );
 }
 
-export function settleLabel(status: string): string | undefined {
+function settleLabel(status: string): string | undefined {
   if (status === "settling") return "settling on-chain…";
   if (status === "settled") return "settled ✓";
   return undefined;
-}
-
-function BotGame({
-  windowId,
-  onExit,
-}: {
-  windowId: string;
-  onExit: () => void;
-}) {
-  const {
-    status,
-    view,
-    error,
-    fire,
-    autoStartOnLoad,
-    auto,
-    setAuto,
-    pause,
-    resume,
-    score,
-    gamesPlayed,
-    playNextGame,
-    settleNow,
-    reset,
-  } = useBattleship(windowId);
-  const account = useCurrentAccount();
-  // Manual rematch: with autopilot off, "Play Again" re-opens the placement board to
-  // deploy a fresh fleet for the next game on the SAME tunnel.
-  const [placingNext, setPlacingNext] = useState(false);
-
-  // First open: drop straight into an auto-played game once the wallet is ready
-  // (idempotent — the session guards against re-opening a tunnel). Skipped while
-  // the player is hand-placing the next game.
-  useEffect(() => {
-    if (!placingNext) autoStartOnLoad();
-  }, [autoStartOnLoad, account?.address, status, placingNext]);
-
-  // Stable refs so the cabinet controller below doesn't re-register every render.
-  const onExitRef = useRef(onExit);
-  onExitRef.current = onExit;
-  const back = useCallback(() => {
-    setPlacingNext(false);
-    reset();
-    onExitRef.current();
-  }, [reset]);
-  const newSession = useCallback(() => {
-    setPlacingNext(false);
-    reset();
-  }, [reset]);
-
-  // Arcade-cabinet take-over (shared GameCabinet shell, applied to every window).
-  // While autopilot runs this is the "attract" state: hovering freezes the demo and
-  // offers "Play vs Bot" — take-over reuses manual play (autopilot off). Inert
-  // otherwise (connect / placement / manual / settled), so those scenes are untouched.
-  const takeOver = useCallback(() => {
-    setAuto(false);
-    resume(); // unfreeze if the hover paused the loop
-  }, [setAuto, resume]);
-  const cabinet = useMemo<CabinetController>(
-    () => ({
-      active: auto && status === "playing",
-      pause,
-      resume,
-      takeOver,
-      returnHome: back,
-    }),
-    [auto, status, pause, resume, takeOver, back],
-  );
-  useRegisterCabinet(cabinet);
-
-  const live = status === "playing";
-  // State bar (top): which game + the running score.
-  let content: ReactNode;
-  if (!account && !view) {
-    // No wallet → require connect before the on-chain match opens.
-    content = (
-      <ConnectWalletPane note="Bot matches open a real tunnel and settle on-chain — gas is sponsored, so it's free to play." />
-    );
-  } else if (status === "error") {
-    content = <ErrorPane error={error} onBack={back} />;
-  } else if (status === "settling" || status === "settled") {
-    content = (
-      <SettledPane
-        score={score}
-        settling={status === "settling"}
-        onNewGame={newSession}
-      />
-    );
-  } else if (status === "funding") {
-    content = (
-      <Centered>
-        Opening + funding the tunnel on-chain… approve in your wallet.
-      </Centered>
-    );
-  } else if (live && placingNext) {
-    content = (
-      <PlacementBoard
-        ctaLabel="Start"
-        onReady={(p) => {
-          setPlacingNext(false);
-          playNextGame(p);
-        }}
-      />
-    );
-  } else if (live && view) {
-    content = (
-      <BattleView
-        view={view}
-        statusLabel={settleLabel(status)}
-        onFire={fire}
-        onPlayAgain={() => setPlacingNext(true)}
-        onSettle={settleNow}
-        auto={auto}
-        score={score}
-        gameNumber={gamesPlayed + 1}
-      />
-    );
-  } else {
-    // Idle for the instant before the auto-start lands (e.g. wallet just connected).
-    content = <Centered>Starting…</Centered>;
-  }
-
-  // Header (top): Auto toggle + Settle whenever a tunnel is live (one tunnel hosts
-  // many games). Hidden while hand-placing the next game.
-  const headerExtra =
-    live && !placingNext ? (
-      <div className="flex items-center gap-1.5">
-        <AutoToggle on={auto} onChange={setAuto} />
-        <SettleButton onSettle={settleNow} />
-      </div>
-    ) : undefined;
-  return (
-    <ModeFrame onBack={back} headerExtra={headerExtra}>
-      {content}
-    </ModeFrame>
-  );
 }
 
 function PvpGame({
@@ -435,6 +175,7 @@ function PvpGame({
     auto,
     setAuto,
     reset,
+    endMatch,
   } = useBattleshipPvp(windowId);
   const account = useCurrentAccount();
 
@@ -465,9 +206,27 @@ function PvpGame({
     return () => clearTimeout(t);
   }, [status, auto, view?.myTurn, setAuto]);
 
+  // Back: publish our settlement half, then leave once it's on the wire (status → settled) or if it
+  // errors — a failed/stuck close must never trap the player. A timeout backstops an unreachable
+  // settle boundary. Pre-match (idle/matching/funding/error) there's nothing to settle, so just close.
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (!leaving) return;
+    if (status === "settled" || status === "error") {
+      onExit();
+      return;
+    }
+    const bail = window.setTimeout(onExit, 8000);
+    return () => window.clearTimeout(bail);
+  }, [leaving, status, onExit]);
   const back = () => {
-    reset();
-    onExit();
+    if (status === "playing" || status === "settling") {
+      setLeaving(true);
+      endMatch(); // publish our half; the leaving effect closes the window on "settled"
+    } else {
+      reset();
+      onExit();
+    }
   };
   let content: ReactNode;
   if (!account && !view) {
@@ -478,7 +237,7 @@ function PvpGame({
   } else if (status === "error") {
     content = <ErrorPane error={error} onBack={back} />;
   } else if (status === "idle") {
-    content = <PlacementBoard onReady={findMatch} ctaLabel="Find Match" />;
+    content = <PlacementBoard onReady={findMatch} ctaLabel="Play" />;
   } else if (status === "matching" || status === "funding" || !view) {
     content = (
       <Centered>
@@ -500,6 +259,9 @@ function PvpGame({
         view={view}
         statusLabel={settleLabel(status)}
         onFire={fire}
+        // End the match early without leaving the window: publish our half + show the settled screen
+        // (BattleView hides this once settled). Back instead closes the window — same publish path.
+        onSettle={endMatch}
         // "Find next match": after the match settles, reset to placement (stay in PvP)
         // so the next Find Match is one tap away — not back out to the arena.
         onPlayAgain={reset}

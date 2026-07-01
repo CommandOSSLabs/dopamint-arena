@@ -2,7 +2,7 @@
 
 - **Status**: Proposed
 - **Date**: 2026-06-27
-- **Refs**: required by [0020](0020-bot-fleet-topology-shared-core.md); relates to [0017](0017-deterministic-seed-vs-commit-reveal.md)
+- **Refs**: required by [0020](../../backend/docs/decisions/0020-bot-fleet-topology-shared-core.md); relates to [0017](0017-deterministic-seed-vs-commit-reveal.md)
 
 ## Context
 

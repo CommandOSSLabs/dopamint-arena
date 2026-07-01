@@ -5,14 +5,17 @@ mod chat_store;
 mod config;
 mod enoki;
 mod error;
+mod fleet;
 mod mp;
 mod ollama;
 mod routes;
+mod s3;
 mod state;
 mod stats;
 mod stats_counter;
 mod store;
 mod sui;
+mod wallet;
 mod walrus;
 
 use std::sync::Arc;
@@ -32,6 +35,13 @@ use crate::state::{AppState, SharedState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Pin a single rustls CryptoProvider (ring) as the process default BEFORE any TLS
+    // client (fred, reqwest, aws-sdk-s3) initializes. aws-sdk-s3 compiles aws-lc
+    // (hence cmake in the Dockerfile) but at runtime every rustls user shares this one
+    // provider, avoiding the rustls 0.23 "two default providers" panic. See Cargo.toml
+    // TLS-provider note + ADR-0023.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -43,7 +53,10 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let bind_addr = config.bind_addr.clone();
 
-    let settler = sui::SuiSettler::new(
+    // Shared via Arc: the arena opener has the settler sponsor each bot open's gas (ADR-0028), so the
+    // settler instance — and its single `sponsor_nonce` — is the one gas payer behind opens, faucet,
+    // `/settle`, and user sponsors.
+    let settler = Arc::new(sui::SuiSettler::new(
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
@@ -51,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
         config.streaming_payment_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
         config.mtps_admin_cap_id.as_deref(),
-    )?;
+    )?);
     // Enoki is the primary gas sponsor when configured; the settler above is the fallback (ADR-0014).
     // The settler's close/fallback path pins a hard-coded testnet genesis digest (`sui.rs`), so guard
     // against a mainnet-Enoki / testnet-settler split-brain until that digest is config-driven.
@@ -89,6 +102,26 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "qwen2.5:1.5b".into()),
     )?;
 
+    // S3 transcript archival (ADR-0023). Optional: absent in dev/test when
+    // S3_TRANSCRIPTS_BUCKET is unset. Concurrent with Walrus; Walrus above is unchanged.
+    let archiver: Option<std::sync::Arc<dyn crate::s3::TranscriptArchiver>> =
+        match config.s3_bucket.clone() {
+            Some(bucket) => {
+                let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&aws_cfg);
+                tracing::info!(bucket = %bucket, "s3 transcript archival enabled");
+                Some(std::sync::Arc::new(crate::s3::S3Archiver::new(
+                    client, bucket,
+                )))
+            }
+            None => {
+                tracing::info!("s3 transcript archival disabled (S3_TRANSCRIPTS_BUCKET unset)");
+                None
+            }
+        };
+
     let instance_id = config
         .instance_id
         .clone()
@@ -120,6 +153,59 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(750);
+
+    // Funded seat-B wallet pool (PR #124): opened once if WALLET_POOL_ID is set, else None (bots use
+    // the placeholder identity, the off-chain/Noop dev path). Same RPC + network as the settler. A
+    // failed open (bad S3/passphrase/IAM) must NOT take down the whole backend — only arena opens lose
+    // funded seat-B; faucet/settle/stats stay up. Degrade to None (Noop opener) and log loudly.
+    let wallet_pool = match crate::wallet::build(
+        config.wallet_pool_id.as_deref(),
+        config.wallet_pool_access_value.as_deref(),
+        config.wallet_pool_funded_count,
+        config.sui_rpc_url.as_deref().unwrap_or_default(),
+        if config.sui_network == "mainnet" {
+            wallet_pool::Network::Mainnet
+        } else {
+            wallet_pool::Network::Testnet
+        },
+    )
+    .await
+    {
+        Ok(pool) => pool.map(Arc::new),
+        Err(e) => {
+            tracing::error!(
+                "wallet pool open failed — arena opener falls back to Noop/placeholder: {e:#}"
+            );
+            None
+        }
+    };
+
+    // Arena opener (ADR-0028): the real `SuiArenaOpener` — each open self-signs create + fund-seat-B as
+    // the checked-out pool member — when the wallet pool + on-chain package/RPC are configured; else
+    // `Noop` so the allocate contract + FE deposit path still work for tests/dev without the pool.
+    let arena_opener: Arc<dyn crate::fleet::arena_opener::ArenaTunnelOpener> = match (
+        &wallet_pool,
+        &config.sui_rpc_url,
+        &config.package_id,
+    ) {
+        (Some(pool), Some(rpc), Some(pkg)) => Arc::new(
+            crate::fleet::arena_opener::SuiArenaOpener::new(
+                rpc.clone(),
+                pkg,
+                &config.coin_type,
+                pool.clone(),
+                settler.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("arena opener build: {e:#}"))?,
+        ),
+        _ => {
+            tracing::info!(
+                    "arena opener: Noop (set WALLET_POOL_ID + SUI_RPC_URL + TUNNEL_PACKAGE_ID for real on-chain opens)"
+                );
+            Arc::new(crate::fleet::arena_opener::NoopArenaOpener)
+        }
+    };
+
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
@@ -127,12 +213,19 @@ async fn main() -> anyhow::Result<()> {
         settler,
         enoki,
         walrus,
+        archiver,
+        s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
         chat: crate::chat_store::ChatTranscriptStore::new(),
+        fleet: crate::fleet::BotPool::default(),
+        arena_opener,
+        arena_fleet_count: config.colocated_fleet_count,
+        arena_fleet_games: config.colocated_fleet_games.iter().cloned().collect(),
+        wallet_pool,
         faucet_user_amount: config.faucet_user_amount,
         faucet_internal_amount: config.faucet_internal_amount,
         faucet_cooldown_secs: config.faucet_cooldown_secs,
@@ -141,6 +234,9 @@ async fn main() -> anyhow::Result<()> {
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
+    // Co-located fleet (ADR-0027): bots are spawned on demand by `arena_allocate`
+    // (`reserve_or_spawn`), bounded by `arena_fleet_count`/`arena_fleet_games` on `AppState` — no
+    // startup pre-spawn. Inert unless `FLEET_COLOCATED_COUNT > 0`.
     // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
     // live feed reflects real settlements; without this the stats SSE never emits any.
     sui::spawn_event_indexer(state.clone());
@@ -154,11 +250,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
-        // Settlement carries the off-chain transcript as a v2 binary body (one fixed ~248 B entry
+        // Settlement carries the off-chain transcript as a v2 binary body (one fixed 250 B entry
         // per co-signed move), archived to Walrus verbatim. Maximizing moves/tunnel amortizes the
         // on-chain close and Walrus per-blob cost, so a long self-play game ships tens of thousands
-        // of moves. 16 MB for /settle only (≈67k moves) caps tunnel length; the body is raw bytes,
-        // so it stays ~1× in memory (the canonical MAX_MOVES_PER_TUNNEL=50k sits well inside this).
+        // of moves. 32 MB for /settle only (≈134k moves) caps tunnel length; the body streams to
+        // Walrus by reference (Bytes), so it stays 1× in memory (canonical MAX_MOVES_PER_TUNNEL=100k
+        // ≈ 25 MB sits well inside this).
         .route(
             "/v1/tunnels/:tunnel_id/settle",
             // One ServiceBuilder (not two chained `.layer()`s, which leaves axum's error type
@@ -169,7 +266,7 @@ async fn main() -> anyhow::Result<()> {
                     .layer(GlobalConcurrencyLimitLayer::new(
                         config.settle_max_concurrency,
                     ))
-                    .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+                    .layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
@@ -184,6 +281,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
+        // Arena one-signature flow (ADR-0026, ADR-0005 co-location): `allocate` seeds a shared
+        // reservation recipe; `arena.join` (over /v1/mp) claims it and spawns the co-located bot.
+        // `opened` is a compatibility 204 no-op.
+        .route("/v1/arena/allocate", post(routes::arena_allocate))
+        .route("/v1/arena/opened", post(routes::arena_opened))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
         .with_state(state);
@@ -283,5 +385,13 @@ mod flush_tests {
             state.control.snapshot().await.per_game["ttt"].total_actions,
             5
         );
+    }
+}
+
+#[cfg(test)]
+mod test_init {
+    #[ctor::ctor]
+    fn install_ring_crypto_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
     }
 }

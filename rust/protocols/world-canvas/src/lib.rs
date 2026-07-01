@@ -14,6 +14,11 @@ pub const NUM_COLORS: u64 = 16;
 pub const DEFAULT_CAP: u64 = 1_000_000_000_000;
 pub const MAX_BATCH_CELLS: usize = 128;
 const MAX_RENDER_CELLS: usize = 8000;
+/// Auto-settle ceiling for the winner-less stroke canvas: terminal once this many CO-SIGNED UPDATES
+/// (tunnel moves) are applied — the canonical per-tunnel update cap. Counted by `updates` (bumped per
+/// move that folds ≥1 fresh cell, replay-safe). MUST equal the TS `WORLD_CANVAS_UPDATE_CAP` and stay
+/// ≤ the fleet `MAX_MOVES`, so the cooperative `is_terminal` fires before the max-moves backstop.
+pub const WORLD_CANVAS_UPDATE_CAP: u64 = 100_000;
 
 const CELL_DOMAIN: &[u8] = b"sui_tunnel::proto::world_canvas.cell.v1";
 const STROKE_DOMAIN: &[u8] = b"sui_tunnel::proto::world_canvas.stroke.v1";
@@ -235,6 +240,9 @@ pub struct StrokeCanvasState {
     pub digest: [u8; 32],
     pub cells: Vec<RenderCell>,
     pub paint_count: u64,
+    /// Co-signed updates applied — bumped once per move that folds ≥1 fresh cell (replay-safe). The
+    /// auto-settle terminal reads this; MUST mirror the TS `updates`. Not in `encode_state`.
+    pub updates: u64,
     pub applied_seq_a: u64,
     pub applied_seq_b: u64,
     pub balance_a: u64,
@@ -278,6 +286,7 @@ impl Protocol for WorldCanvasStroke {
             digest: blake2b256(STROKE_DOMAIN),
             cells: Vec::new(),
             paint_count: 0,
+            updates: 0,
             applied_seq_a: 0,
             applied_seq_b: 0,
             balance_a: ctx.initial.a,
@@ -334,6 +343,13 @@ impl Protocol for WorldCanvasStroke {
             digest,
             cells,
             paint_count,
+            // One co-signed update iff this move folded ≥1 fresh cell — a replayed move (all cells
+            // skipped by the seq gate) never advances it, so `updates` stays identical on both seats.
+            updates: if paint_count > state.paint_count {
+                state.updates + 1
+            } else {
+                state.updates
+            },
             applied_seq_a,
             applied_seq_b,
             balance_a: state.balance_a,
@@ -353,8 +369,8 @@ impl Protocol for WorldCanvasStroke {
         }
     }
 
-    fn is_terminal(&self, _state: &StrokeCanvasState) -> bool {
-        false
+    fn is_terminal(&self, state: &StrokeCanvasState) -> bool {
+        state.updates >= WORLD_CANVAS_UPDATE_CAP
     }
 
     fn sample_move(
@@ -385,5 +401,46 @@ impl Protocol for WorldCanvasStroke {
             });
         }
         Some(StrokePaintMove { cells })
+    }
+}
+
+#[cfg(test)]
+mod wire_parity {
+    use super::*;
+
+    // The relayed move is JSON (the fleet's JsonFrameCodec), so the bot's `StrokePaintMove` must
+    // serialize to the EXACT shape the FE `WorldCanvasPvpProtocol` sends — a `cells` array of plain
+    // {cx,cy,x,y,color,seq} ints (no codec) — or the human's tunnel rejects the frame.
+    #[test]
+    fn move_json_matches_fe_world_canvas_wire() {
+        let mv = StrokePaintMove {
+            cells: vec![StrokeCellMove {
+                cx: -1,
+                cy: 2,
+                x: 3,
+                y: 4,
+                color: 13,
+                seq: 7,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&mv).unwrap(),
+            serde_json::json!({
+                "cells": [{ "cx": -1, "cy": 2, "x": 3, "y": 4, "color": 13, "seq": 7 }]
+            }),
+        );
+        let parsed: StrokePaintMove = serde_json::from_value(serde_json::json!({
+            "cells": [{ "cx": 0, "cy": 0, "x": 1, "y": 1, "color": 0, "seq": 1 }]
+        }))
+        .unwrap();
+        assert_eq!(parsed.cells.len(), 1);
+    }
+
+    // The co-signed genesis digest is `blake2b256(domain)`; the domain MUST equal the FE's
+    // `protocolDomain("world_canvas.stroke.v1")` = "sui_tunnel::proto::world_canvas.stroke.v1", or the
+    // two parties' INITIAL state hashes differ and co-signing fails before any move is even painted.
+    #[test]
+    fn genesis_domain_matches_fe_protocol_domain() {
+        assert_eq!(STROKE_DOMAIN, b"sui_tunnel::proto::world_canvas.stroke.v1");
     }
 }

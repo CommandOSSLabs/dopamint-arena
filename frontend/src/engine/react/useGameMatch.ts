@@ -46,8 +46,8 @@ export function useGameMatch(windowId: string, gameId: GameId): MatchSnapshot {
   }, [windowId]);
 
   const snap = useSyncExternalStore(
-    (cb) => engineClient.subscribe(windowId, "pvp", cb),
-    () => engineClient.getSnapshot(windowId, "pvp"),
+    (cb) => engineClient.subscribe(windowId, cb),
+    () => engineClient.getSnapshot(windowId),
   );
 
   // Per-window local TPS: feed the delta of the match's co-signed updates (tunnel nonce) into the

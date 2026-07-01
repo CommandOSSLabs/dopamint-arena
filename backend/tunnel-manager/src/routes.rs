@@ -24,16 +24,18 @@ pub(crate) mod test_support {
     pub(crate) fn test_state() -> SharedState {
         use base64::Engine;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-        let settler = crate::sui::SuiSettler::new(
-            "http://127.0.0.1:9999".into(),
-            "0x2",
-            "0x2::sui::SUI",
-            None,
-            None,
-            &key,
-            None,
-        )
-        .expect("test settler");
+        let settler = std::sync::Arc::new(
+            crate::sui::SuiSettler::new(
+                "http://127.0.0.1:9999".into(),
+                "0x2",
+                "0x2::sui::SUI",
+                None,
+                None,
+                &key,
+                None,
+            )
+            .expect("test settler"),
+        );
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
         let ollama = crate::ollama::OllamaClient::new(
             "http://localhost:11434".into(),
@@ -48,12 +50,19 @@ pub(crate) mod test_support {
             settler,
             enoki: None,
             walrus,
+            archiver: None,
+            s3_prefix: "".into(),
             ollama,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
             chat: crate::chat_store::ChatTranscriptStore::new(),
+            fleet: crate::fleet::BotPool::default(),
+            arena_opener: std::sync::Arc::new(crate::fleet::arena_opener::NoopArenaOpener),
+            arena_fleet_count: 0,
+            arena_fleet_games: std::collections::HashSet::new(),
+            wallet_pool: None,
             faucet_user_amount: 10_000,
             faucet_internal_amount: 1_000_000,
             faucet_cooldown_secs: 1_800,
@@ -232,6 +241,130 @@ pub(crate) async fn heartbeat(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ===== Arena one-signature flow (ADR-0026). =====
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaAllocateRequest {
+    user_address: String,
+    games: Vec<ArenaGameRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaGameRequest {
+    id: String,
+    /// The user's per-game ephemeral pubkey (hex) — tunnel party A's `pk`, baked in at create
+    /// (ADR-0028). One keypair per game so a key leak is isolated to a single tunnel.
+    user_eph_pubkey: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaAllocation {
+    game: String,
+    match_id: String,
+    /// The on-chain tunnel the fleet pre-created + funded seat B for (ADR-0028). The user's
+    /// deposit-only PTB funds seat A into THIS tunnel; the tunnel activates on that one signature.
+    tunnel_id: String,
+    /// The reserved bot's ephemeral pubkey (hex) — tunnel party B's `pk` (verifies move sigs).
+    bot_eph_pubkey: String,
+    /// The reserved bot's on-chain address — tunnel party B's `address` (funds/receives seat B).
+    /// Distinct from the ephemeral pubkey; the frontend needs both to build the open PTB's party B.
+    bot_address: String,
+    /// Per-seat stake (smallest MTPS unit) from the game's `GameProfile`. The fleet funded seat B
+    /// with exactly this; the user's batched deposit must fund seat A with the SAME amount, or the
+    /// off-chain initial balances diverge and co-signing fails. Single source of truth so the FE
+    /// never hardcodes a per-game stake.
+    stake_each: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaAllocateResponse {
+    allocations: Vec<ArenaAllocation>,
+}
+
+/// Spawn + reserve one on-demand bot per requested game and notify each that it's matched to this
+/// user. Games at the per-game cap (or with no `GameProfile`, or whose open fails) are omitted, so the
+/// frontend opens only what it actually got.
+pub(crate) async fn arena_allocate(
+    State(state): State<SharedState>,
+    Json(req): Json<ArenaAllocateRequest>,
+) -> Json<ArenaAllocateResponse> {
+    let mut allocations = Vec::new();
+    for game in &req.games {
+        // Served-set gate (`FLEET_COLOCATED_GAMES`): only offer games the fleet can actually play.
+        // The concurrency cap is enforced at `arena.join`, where the bot is spawned (ADR-0005
+        // co-location) — allocate no longer spawns anything.
+        if !state.arena_fleet_games.contains(&game.id) {
+            continue;
+        }
+        // The stake comes from the game's `GameProfile` so the on-chain deposit matches the off-chain
+        // initial balances the FE co-signs; an unknown game (no profile) is omitted.
+        let Some(profile) = fleet_core::play_match::profile_for(&game.id) else {
+            tracing::warn!(game = %game.id, "arena allocate: no GameProfile, omitting");
+            continue;
+        };
+        // Mint the match recipe (globally-unique id, seat-B identity, per-match key) WITHOUT spawning
+        // a bot — the bot is spawned at `arena.join`, co-located with the user's socket.
+        let slot = crate::fleet::colocated::reserve_arena_slot(&state, &game.id);
+        // The fleet pre-creates the tunnel + funds seat B now, so the user joins with a deposit-only
+        // PTB. On-chain-bound and may fail per game — omit a game whose open errors.
+        let tunnel_id = match state
+            .arena_opener
+            .open_and_fund_seat_b(crate::fleet::arena_opener::ArenaOpenRequest {
+                game: &game.id,
+                user_address: &req.user_address,
+                user_eph_pubkey: &game.user_eph_pubkey,
+                bot_address: &slot.bot_address,
+                bot_eph_pubkey: &slot.eph_pubkey,
+                stake_each: profile.stake_each,
+            })
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(game = %game.id, "arena open failed, omitting: {e:#}");
+                continue;
+            }
+        };
+        // Seed the shared reservation: ANY instance's `arena.join` reads this to reconstruct party B
+        // and spawn the bot locally. The running bot is never stored — only this recipe.
+        state
+            .mp
+            .put_arena_reservation(
+                &slot.match_id,
+                crate::store::ArenaReservation {
+                    game: game.id.clone(),
+                    seat_a: req.user_address.clone(),
+                    seat_b: slot.bot_address.clone(),
+                    tunnel_id: tunnel_id.clone(),
+                    eph_secret_hex: slot.eph_secret_hex.clone(),
+                },
+            )
+            .await;
+        allocations.push(ArenaAllocation {
+            game: game.id.clone(),
+            match_id: slot.match_id,
+            tunnel_id,
+            bot_eph_pubkey: slot.eph_pubkey,
+            bot_address: slot.bot_address,
+            stake_each: profile.stake_each,
+        });
+    }
+    tracing::info!(user = %req.user_address, allocated = allocations.len(), "arena allocate");
+    Json(ArenaAllocateResponse { allocations })
+}
+
+/// The user finished the batched deposit PTB. In the co-located design the bot is spawned at
+/// `arena.join` (which always follows this call in the FE flow), so there is nothing to signal here —
+/// the endpoint is retained for FE compatibility and returns 204, ignoring the body. The reservation's
+/// TTL covers the deposit-signing window between allocate and join.
+pub(crate) async fn arena_opened() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 /// Submit `close_cooperative_with_root` for a tunnel. Authorization is the co-signed settlement
 /// itself — the chain re-verifies both seat signatures — so there is NO session/bearer gate
 /// (ADR-0007). The settler dry-runs the close before sponsoring gas, so a bad settlement is
@@ -308,10 +441,31 @@ pub(crate) async fn settle(
                 .control
                 .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
                 .await;
+            // S3 archival runs CONCURRENTLY with Walrus and is independent of it (ADR-0023).
+            // Fire-and-forget from the response; the SDK handles inline retries. `body` is
+            // cheap to clone (Bytes is ref-counted); Walrus below still gets `body.to_vec()`
+            // exactly as before — its call site, error handling, and result are unchanged.
+            if let Some(archiver) = state.archiver.clone() {
+                let key = crate::s3::archive_key(&state.s3_prefix, &tunnel_id, &digest);
+                let meta = crate::s3::ArchiveMeta {
+                    tunnel_id: tunnel_id.clone(),
+                    tx_digest: digest.clone(),
+                    transcript_root: transcript_root_hex.clone(),
+                    settle_version: crate::routes::SETTLE_BODY_VERSION,
+                };
+                let s3_bytes = body.clone();
+                let s3_digest = digest.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = archiver.archive(&key, &s3_bytes, &meta).await {
+                        tracing::warn!(%s3_digest, error = %e, "s3 archive failed");
+                    }
+                });
+            }
+
             // Archive the body verbatim — the blob IS the settle body. The in-browser verifier
             // (verifyTranscript) parses the same fixed-offset bytes and re-checks the
             // co-signed root against the recomputed Merkle root and the on-chain anchor.
-            let (blob_id, proof_url) = match state.walrus.upload_transcript(body.to_vec()).await {
+            let (blob_id, proof_url) = match state.walrus.upload_transcript(body).await {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::error!(%digest, error = %e, "walrus archival failed");
@@ -833,6 +987,7 @@ fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
 mod tests {
     use super::test_support::test_state;
     use super::*;
+    use crate::state::AppState;
 
     // The binary /settle body the SDK codec (`encodeSettleBody`) emits — byte-identical to
     // the TS golden vector (settleBinary.test.ts). Pasting it here pins TS↔Rust wire parity: a
@@ -1085,7 +1240,7 @@ mod tests {
         let mut state = test_state();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
-            .settler = settler_with_admin_cap("http://127.0.0.1:9999");
+            .settler = std::sync::Arc::new(settler_with_admin_cap("http://127.0.0.1:9999"));
         let recipient = crate::sui::canonical_address("0x9").unwrap();
         for _ in 0..state.faucet_max_per_window {
             assert!(
@@ -1124,7 +1279,7 @@ mod tests {
         let mut state = test_state();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
-            .settler = settler_with_admin_cap("http://127.0.0.1:9999");
+            .settler = std::sync::Arc::new(settler_with_admin_cap("http://127.0.0.1:9999"));
         let recipient = crate::sui::canonical_address("0x9").unwrap();
         let resp = faucet(
             State(state.clone()),
@@ -1185,7 +1340,7 @@ mod tests {
         {
             let s = std::sync::Arc::get_mut(&mut state).expect("unique test arc");
             s.faucet_admin_token = Some("tok".into());
-            s.settler = settler_with_admin_cap("http://127.0.0.1:9999");
+            s.settler = std::sync::Arc::new(settler_with_admin_cap("http://127.0.0.1:9999"));
         }
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1263,6 +1418,64 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     }
 
+    // POST /v1/tunnels/:tunnel_id/settle archives the identical binary body to S3 concurrently
+    // with Walrus (ADR-0023). The bytes recorded by the S3 archiver must match the request body
+    // byte-for-byte, and the object key must live under the `transcripts/` prefix.
+    #[tokio::test]
+    async fn settle_archives_identical_body_to_s3() {
+        use std::time::Duration;
+
+        use axum::routing::post;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        use crate::s3::FakeArchiver;
+
+        let body = sample_settle_body();
+        let parsed = parse_settle_body(&body).expect("valid settle body");
+        let tunnel_id = normalize_tunnel_id(&parsed.tunnel_id);
+
+        let archiver = std::sync::Arc::new(FakeArchiver::default());
+        let mut state = AppState::with_fake_archiver(archiver.clone());
+        // Reach the settlement success path (S3 archival sits inside it) without real RPC.
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .settler = crate::sui::SuiSettler::fixed_digest("DiG123").into();
+
+        let app = Router::new()
+            .route("/v1/tunnels/:tunnel_id/settle", post(settle))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tunnels/{}/settle", tunnel_id))
+                    .header("x-settle-version", SETTLE_BODY_VERSION.to_string())
+                    .body(axum::body::Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Give the fire-and-forget S3 spawn a chance to finish before inspecting the recording.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let archived = archiver.archived.lock().unwrap().clone();
+        assert_eq!(archived.len(), 1, "expected exactly one S3 archive");
+        assert_eq!(
+            archived[0].1,
+            body.to_vec(),
+            "archived bytes must match the settle body"
+        );
+        assert!(
+            archived[0].0.starts_with("transcripts/"),
+            "key must start with transcripts/: {}",
+            archived[0].0
+        );
+    }
+
     // GET /v1/chat/topic asks Ollama for a short random conversation topic.
     #[tokio::test]
     async fn chat_topic_endpoint_returns_topic() {
@@ -1283,5 +1496,81 @@ mod tests {
 
         let resp = chat_topic(axum::extract::State(state)).await;
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+}
+
+#[cfg(test)]
+mod arena_tests {
+    use super::*;
+    use crate::state::AppState;
+
+    fn game_req(id: &str) -> ArenaGameRequest {
+        ArenaGameRequest {
+            id: id.into(),
+            user_eph_pubkey: format!("ueph_{id}"),
+        }
+    }
+
+    // Co-located design (ADR-0005 addendum): `arena_opened` is a 204 no-op — the bot is spawned at
+    // `arena.join`, not signalled here. The claim + spawn is covered by the `fleet::colocated` tests
+    // (`second_join_is_rejected_not_double_spawned`, `join_and_spawn_settles_against_a_stand_in_human`).
+
+    // No bots registered → allocate returns an empty list, never an error.
+    #[tokio::test]
+    async fn allocate_with_no_bots_is_empty() {
+        let state = AppState::in_memory_for_test();
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec![game_req("blackjack")],
+            }),
+        )
+        .await;
+        assert!(resp.0.allocations.is_empty());
+    }
+
+    // On-demand seat-fill through the handler: with the co-located fleet configured (cap + game) and
+    // NO warm bot, arena_allocate spawns a bot and allocates. Seat-fill no longer needs a warm pool,
+    // only free capacity — this is the static-pool → on-demand cutover at the route boundary.
+    #[tokio::test]
+    async fn allocate_fills_a_seat_on_demand_when_fleet_configured() {
+        let state = AppState::in_memory_with_arena_fleet(1, vec!["blackjack".into()]);
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec![game_req("blackjack")],
+            }),
+        )
+        .await;
+        assert_eq!(
+            resp.0.allocations.len(),
+            1,
+            "a configured game fills on demand with no warm bot"
+        );
+        assert!(
+            !resp.0.allocations[0].bot_eph_pubkey.is_empty(),
+            "the on-demand bot has a fresh ephemeral key"
+        );
+    }
+
+    // The `FLEET_COLOCATED_GAMES` gate: a game NOT in the served set has an effective cap of 0, so
+    // even with the fleet enabled it is omitted — no bot is spawned for an untrusted/unlisted game.
+    #[tokio::test]
+    async fn allocate_omits_a_game_outside_the_served_set() {
+        let state = AppState::in_memory_with_arena_fleet(1, vec!["blackjack".into()]);
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: vec![game_req("quantum_poker")], // enabled fleet, but not in the served set
+            }),
+        )
+        .await;
+        assert!(
+            resp.0.allocations.is_empty(),
+            "a game outside FLEET_COLOCATED_GAMES is not served"
+        );
     }
 }

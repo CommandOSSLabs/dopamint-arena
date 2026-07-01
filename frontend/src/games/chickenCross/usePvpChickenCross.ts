@@ -26,6 +26,10 @@ export interface PvpChickenCross extends Omit<
   setDir: (dir: CrossDir) => void;
 }
 
+/** Backend arena/`profile_for` id (underscore form of the registry id). Single source of truth for
+ *  both the engine's arena consumer (the spec below) and `GameModule.arenaGameId` (index.ts). */
+export const CHICKEN_CROSS_ARENA_GAME_ID = "chicken_cross";
+
 /** Main-thread path (default): per-seat input is a hop direction wrapped into the acting seat's field. */
 const useLegacyMatch = createPvpMatchHook<
   CrossState,
@@ -34,6 +38,7 @@ const useLegacyMatch = createPvpMatchHook<
   CrossView
 >({
   game: "chicken-cross",
+  arenaGameId: CHICKEN_CROSS_ARENA_GAME_ID,
   stepMs: 300,
   stake: 10n, // per-seat MTPS (must match chickenCrossSpec.ts)
   makeProtocol: () => new CrossProtocol(),
@@ -67,6 +72,7 @@ function useWorkerChickenCross(windowId: string): PvpChickenCross {
     findMatch: () => engineClient.findMatch(windowId, "chicken-cross"),
     toggleAuto: () => engineClient.setAuto(windowId, !snap.auto),
     reset: () => engineClient.reset(windowId),
+    leave: () => engineClient.reset(windowId),
     setDir: (dir) => engineClient.submitInput(windowId, dir),
   };
 }

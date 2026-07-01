@@ -7,6 +7,7 @@ use std::pin::Pin;
 use crate::heartbeat::HeartbeatReporter;
 use tunnel_harness::{
     DriverOutcome, FrameTransport, HarnessError, MoveStrategy, PartyDriver, Protocol, Signer,
+    TranscriptRecorder, TunnelAnchor,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -57,8 +58,8 @@ impl FleetSupervisor {
 ///
 /// The returned `DriverUnit` must be polled within a tokio runtime: the reporter
 /// spawns its POSTs onto the ambient runtime (as `FleetSupervisor` does).
-pub fn into_serving_unit<P, Pol, Ch, S>(
-    driver: PartyDriver<P, Pol, Ch, S>,
+pub fn into_serving_unit<P, Pol, Ch, S, A, R>(
+    driver: PartyDriver<P, Pol, Ch, S, A, R>,
     reporter: HeartbeatReporter,
     max_moves: u64,
     now: impl FnMut() -> u64 + Send + 'static,
@@ -68,8 +69,16 @@ where
     Pol: MoveStrategy<P>,
     Ch: FrameTransport,
     S: Signer,
+    A: TunnelAnchor + Send + Sync + 'static,
+    R: TranscriptRecorder<P::Move> + Send + Sync + 'static,
 {
-    Box::pin(driver.observe(Box::new(reporter)).run(max_moves, now))
+    Box::pin(async move {
+        driver
+            .observe(Box::new(reporter))
+            .run(max_moves, now)
+            .await
+            .map(|(outcome, _recorder)| outcome)
+    })
 }
 
 #[cfg(test)]
@@ -82,6 +91,7 @@ mod tests {
             Ok(DriverOutcome {
                 moves,
                 final_balances: Balances { a: 1, b: 1 },
+                play_ns: 0,
             })
         })
     }

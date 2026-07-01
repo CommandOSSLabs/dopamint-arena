@@ -35,7 +35,11 @@ import {
   randomPokerPersona,
   type PokerSeatBot,
 } from "./pokerSelfPlay";
-import { POKER_BUYIN, POKER_ANTE, QUANTUM_POKER_HAND_CAP } from "./constants";
+import {
+  POKER_BUYIN,
+  QUANTUM_POKER_ANTE,
+  QUANTUM_POKER_HAND_CAP,
+} from "./constants";
 import type { BotContext } from "@/agent/gameKit";
 import {
   derivePokerLegal,
@@ -309,7 +313,7 @@ export const quantumPokerPvpSpec: GameSessionSpec<
   game: GAME_ID,
   stake: POKER_BUYIN,
   makeProtocol: () =>
-    new QuantumPokerProtocol(HAND_CAP, POKER_ANTE),
+    new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE),
   moveCodec: pokerMoveCodec,
   createMatch: (io) => new PokerPvpController(io),
 });

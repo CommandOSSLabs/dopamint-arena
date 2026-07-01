@@ -23,6 +23,16 @@ export interface InfraConfig {
   // (Phase 0) and fails loud at settler construction if absent. Sourced from secret
   // config so it lands in Secrets Manager, never in the task definition.
   settlerKey?: pulumi.Output<string>;
+  // Bearer secret gating POST /v1/faucet/internal, injected as FAUCET_ADMIN_TOKEN. Secret
+  // config => Secrets Manager => ECS `secrets`. Unset => the internal faucet stays disabled (503).
+  faucetAdminToken?: pulumi.Output<string>;
+  // Enoki PRIVATE api key (enoki_private_…), injected as ENOKI_API_KEY. Secret config =>
+  // Secrets Manager => ECS `secrets`. Unset => Enoki off, settler is the sole gas source.
+  enokiApiKey?: pulumi.Output<string>;
+  // Wallet-pool passphrase (PR #124), injected as WALLET_POOL_ACCESS_VALUE. Secret config =>
+  // Secrets Manager => ECS `secrets`. Unset => the pool can't open and the arena opener degrades to
+  // Noop (no funded seat-B). Set via `pulumi config set --secret dopamint:wallet-pool-access-value`.
+  walletPoolAccessValue?: pulumi.Output<string>;
   // Ollama sidecar for the chat-v2 feature. Enabled by default; disable in envs
   // where chat is not needed or where you want to supply an external Ollama URL.
   ollamaEnabled: boolean;
@@ -45,6 +55,9 @@ export function getConfig(): InfraConfig {
     cacheNodeType: config.require("cache-node-type"),
     backendImageTag: config.get("backend-image-tag") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
+    faucetAdminToken: config.getSecret("faucet-admin-token"),
+    enokiApiKey: config.getSecret("enoki-api-key"),
+    walletPoolAccessValue: config.getSecret("wallet-pool-access-value"),
     ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
     ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.5b",
     ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",

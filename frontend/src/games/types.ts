@@ -35,6 +35,13 @@ export interface GameModule {
   /** Which arena workspace this module opens in. Defaults to `games` (the window
    *  floor). `payment`/`chat` route the Add dialog to their focused workspace view. */
   workspace?: Workspace;
+  /** The backend arena/`profile_for` id(s) (underscore form, e.g. `quantum_poker`) when this game is
+   *  wired into the co-located fleet. Set ONLY for games with a working Rust↔TS parity + fleet
+   *  profile + FE arena consumer; the centralized batched entry enumerates these to deposit every
+   *  game's seat A in ONE PTB. Absent ⇒ not in the arena batch yet. An ARRAY when one module hosts
+   *  multiple protocols (e.g. tic-tac-toe + caro share one window) — all are allocated; the window
+   *  consumes whichever variant it's currently showing. */
+  arenaGameId?: string | string[];
   // Window size is uniform across games — the desktop opens every window at the same
   // tile size (see TILE in Desktop.tsx), so games no longer declare their own footprint.
   // Deferred until games drive the engine:

@@ -335,6 +335,21 @@ export class MpClient {
     );
   }
 
+  /** Join a pre-allocated arena match by its id (ADR-0027/0028). Unlike [`quickMatch`] (which
+   *  matchmakes any opponent for a game), this binds to the ONE bot + tunnel the fleet reserved at
+   *  `allocate`. The server replies with `match.found` (party A) once the co-located bot also
+   *  binds, so the resolution path is identical — this only changes the request frame.
+   *
+   *  Never consumes the `#matchQueue` buffer: a buffered `match.found` belongs to a prior
+   *  `quickMatch` (a different match id), so stealing it would cross-wire the arena join. The
+   *  arena match's own `match.found` arrives after the bot binds and resolves this waiter. */
+  joinMatch(matchId: string): Promise<MatchInfo> {
+    this.#send({ type: "arena.join", matchId });
+    return new Promise((resolve, reject) =>
+      this.#matchWaiters.push({ resolve, reject }),
+    );
+  }
+
   /** Build the engine transport + peer side-channel for a paired match; inbound frames route
    *  by matchId so concurrent matches never clobber each other. */
   channel(matchId: string): PvpChannel {

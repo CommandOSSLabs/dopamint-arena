@@ -2,9 +2,6 @@
  * Dedicated entry for the SHARED PvP worker (M1: one socket for all PvP windows). A SINGLE instance
  * of this worker is spawned by `engineClient` and `Comlink.expose`s a `PvpHubApi`; every PvP window
  * routes its commands here keyed by `windowId`, and the hub multiplexes them over one `MpClient`.
- *
- * Solo self-play runs in its own per-window `engine.worker.ts` instead — it is pure crypto with no
- * relay socket, so it keeps per-window isolation; only PvP shares this hub.
  */
 import * as Comlink from "comlink";
 import { PvpHub } from "./pvpHub";

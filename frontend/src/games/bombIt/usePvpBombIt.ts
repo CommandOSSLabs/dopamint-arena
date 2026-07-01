@@ -26,6 +26,10 @@ export interface PvpBombIt extends Omit<
   queueAction: (a: BombItAction) => void;
 }
 
+/** Backend arena/`profile_for` id (underscore form of the registry id). Single source of truth for
+ *  both the engine's arena consumer (the spec below) and `GameModule.arenaGameId` (index.ts). */
+export const BOMB_IT_ARENA_GAME_ID = "bomb_it";
+
 /** Main-thread path (default): Bomb It's per-seat input is a single action; the engine
  *  wraps it into the acting seat's field. */
 const useLegacyMatch = createPvpMatchHook<
@@ -35,6 +39,7 @@ const useLegacyMatch = createPvpMatchHook<
   BombItView
 >({
   game: "bomb-it",
+  arenaGameId: BOMB_IT_ARENA_GAME_ID,
   stepMs: 250,
   stake: 10n, // per-seat MTPS (must match bombItSpec.ts)
   makeProtocol: () => new BombItProtocol(),
@@ -69,6 +74,9 @@ function useWorkerBombIt(windowId: string): PvpBombIt {
     findMatch: () => engineClient.findMatch(windowId, "bomb-it"),
     toggleAuto: () => engineClient.setAuto(windowId, !snap.auto),
     reset: () => engineClient.reset(windowId),
+    // Back/Cancel: the worker tears the match down (release + orphan-cancel); the legacy path
+    // publishes a settlement half first, which the worker does automatically on terminal.
+    leave: () => engineClient.reset(windowId),
     queueAction: (a) => engineClient.submitInput(windowId, a),
   };
 }

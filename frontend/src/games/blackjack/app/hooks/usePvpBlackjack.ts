@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -60,6 +61,16 @@ import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
 import type { MatchSnapshot } from "@/engine/engineApi";
 import type { BlackjackPvpView } from "@/games/blackjack/blackjackPvpView";
+import type { KeyPair } from "sui-tunnel-ts/core/crypto";
+import type { ArenaAllocation } from "@/onchain/arenaEnter";
+import {
+  consumeArenaEntry,
+  subscribeArena,
+} from "@/onchain/arenaAllocationStore";
+
+/** Backend arena/`profile_for` id (= the FE registry id; single token, same both ways). Single source
+ *  of truth for the arena-store consumer (below) and `GameModule.arenaGameId` (index.ts). */
+export const BLACKJACK_ARENA_GAME_ID = "blackjack";
 
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
@@ -75,16 +86,21 @@ const MP_URL =
 /** Default buy-in (bankroll) deposited on-chain per seat — whole MTPS (0-decimal; ADR-0023), shown
  *  1:1 as chips. Each player chooses their own before matchmaking; the bet protocol caps each round
  *  at min(both balances). */
-const DEFAULT_STAKE = 1000n;
+const DEFAULT_STAKE = 100n;
 /** Buy-in options offered before "Find match" — whole MTPS (0-decimal), shown 1:1 as chips. Stacks
- *  big enough for many rounds (min-bet 1, options up to 100); each fits a single faucet pull. */
-const FUND_OPTIONS = [500, 1000, 2500] as const;
+ *  big enough for many rounds (min-bet 1, bet options up to 10); each fits a single faucet pull. */
+const FUND_OPTIONS = [100, 250, 500] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const NEXT_MS = 900; // pause before auto-dealing the next round
 const DEFAULT_BET = Number(MIN_BET); // auto's starting bet until the player picks one
 
 /** Pacing for auto-driven commit/reveal plumbing moves (ms). */
 const PLUMBING_MS = 120;
+// Flat-out auto pacing: in-match auto moves/rounds fire on the next tick (0ms still defers, so the
+// confirmed-update sync runs first); the inter-match requeue keeps a short glimpse. Manual play
+// still uses BOT_MOVE_MS / NEXT_MS / PLUMBING_MS above.
+const AUTO_MOVE_MS = 0;
+const AUTO_REQUEUE_MS = 150;
 
 export type PvpPhase =
   | "idle"
@@ -157,9 +173,9 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
-  // Default OFF: PvP is human-vs-human, so you play your own hands; tick Auto to let the bot
-  // play for you.
-  const [auto, setAutoState] = useState(false);
+  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
+  // tick it on and new games keep a bot playing for you. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto("blackjack"));
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -176,7 +192,7 @@ export function usePvpBlackjack(): PvpView {
     BlackjackMove
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(defaultAuto("blackjack"));
   const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
@@ -297,9 +313,13 @@ export function usePvpBlackjack(): PvpView {
         0n,
       );
       channel.sendPeer({
-        t: "settle",
+        t: "settleHalf",
+        partyABalance: half.settlement.partyABalance.toString(),
+        partyBBalance: half.settlement.partyBBalance.toString(),
+        finalNonce: half.settlement.finalNonce.toString(),
+        timestamp: half.settlement.timestamp.toString(),
+        transcriptRoot: bytesToHex(root),
         sig: bytesToHex(half.sigSelf),
-        root: bytesToHex(root),
       });
       const other =
         bufferedSettleRef.current ??
@@ -314,8 +334,10 @@ export function usePvpBlackjack(): PvpView {
         half.sigSelf,
         other.sig,
       );
-      if (roleRef.current === "B") {
-        // the dealer (the opener) submits the cooperative close
+      // Single submitter = seat A — unified with every other game and the fleet bot, which co-signs
+      // the `settleHalf` and never submits. In the arena the human is always A; the bot (dealer/B)
+      // can't submit. Payout is fixed by the co-signed balances regardless of who sends the tx.
+      if (roleRef.current === "A") {
         const closeDigest = await settleViaBackend({
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
@@ -413,7 +435,7 @@ export function usePvpBlackjack(): PvpView {
                   /* in flight */
                 }
               },
-              autoRef.current ? 50 : PLUMBING_MS,
+              autoRef.current ? AUTO_MOVE_MS : PLUMBING_MS,
             );
           return;
         }
@@ -432,7 +454,7 @@ export function usePvpBlackjack(): PvpView {
                 /* raced / in flight */
               }
             },
-            autoRef.current ? 100 : NEXT_MS,
+            autoRef.current ? AUTO_MOVE_MS : NEXT_MS,
           );
           return;
         }
@@ -448,7 +470,7 @@ export function usePvpBlackjack(): PvpView {
                   /* not my turn / in flight */
                 }
               },
-              autoRef.current ? 50 : BOT_MOVE_MS,
+              autoRef.current ? AUTO_MOVE_MS : BOT_MOVE_MS,
             );
         }
       };
@@ -513,8 +535,9 @@ export function usePvpBlackjack(): PvpView {
       stoppingRef.current = false;
       setRounds([]);
       autoKickedRef.current = false;
-      autoRef.current = false; // default-off: you play your own hands until you tick Auto
-      setAutoState(false);
+      // Fresh match resets Auto to the session default (ON the first time, else your last toggle).
+      autoRef.current = defaultAuto("blackjack");
+      setAutoState(autoRef.current);
       bufferedSettleRef.current = null;
       bufferedStakeRef.current = null;
       bufferedHelloRef.current = null;
@@ -586,9 +609,9 @@ export function usePvpBlackjack(): PvpView {
             else bufferedHelloRef.current = pub;
           } else if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
-          else if (mm.t === "settle") {
+          else if (mm.t === "settleHalf") {
             const sig = hexToBytes(String(mm.sig));
-            const rt = hexToBytes(String(mm.root));
+            const rt = hexToBytes(String(mm.transcriptRoot));
             if (settleResolveRef.current)
               settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };
@@ -798,6 +821,162 @@ export function usePvpBlackjack(): PvpView {
   );
   onMatchRef.current = onMatch;
 
+  // Arena entry (ADR-0028): join a pre-allocated match whose tunnel the fleet already created + funded
+  // seat B for. This seat is always A (the player); seat A was deposited by the batched `enterArena`
+  // PTB, so there is NO create/deposit/stake-exchange here — only the relay + engine wiring over the
+  // live tunnel. The bot (seat B = dealer, and the rotated player on alternate rounds) drives its own
+  // moves via BlackjackV2Strategy. No "ready" wait: the bot enters its loop the instant its tunnel
+  // opens and the relay buffers our first frame. `eph` is the SAME per-game key baked at allocate.
+  const enterArenaMatch = useCallback(
+    (allocation: ArenaAllocation, eph: KeyPair) => {
+      if (!walletAddress) {
+        setError("Connect a wallet on the menu first");
+        setPhase("error");
+        return;
+      }
+      setError(null);
+      setPhase("connecting");
+      settledRef.current = false;
+      stoppingRef.current = false;
+      setRounds([]);
+      autoKickedRef.current = false;
+      autoRef.current = defaultAuto("blackjack");
+      setAutoState(autoRef.current);
+      bufferedSettleRef.current = null;
+      bufferedHelloRef.current = null;
+      openedResolveRef.current = null;
+      settleResolveRef.current = null;
+      helloResolveRef.current = null;
+      void (async () => {
+        try {
+          const connEph = core.generateKeyPair();
+          const mp = new MpClient(
+            resolveMpWsUrl(MP_URL),
+            walletAddress,
+            connEph,
+          );
+          mpRef.current = mp;
+          installResumePersistence();
+          await mp.connect();
+          // Join the ONE pre-allocated match (role A); the fleet bound the bot as seat B at allocate.
+          const m = await mp.joinMatch(allocation.matchId);
+          matchIdRef.current = m.matchId;
+          roleRef.current = m.role;
+          setRole(m.role);
+          const channel = mp.channel(m.matchId);
+          channelRef.current = channel;
+          channel.onPeer((mm: Exclude<PeerMessage, { t: "frame" }>) => {
+            if (mm.t === "hello") {
+              const pub = String(mm.ephemeralPubkey);
+              if (helloResolveRef.current) helloResolveRef.current(pub);
+              else bufferedHelloRef.current = pub;
+            } else if (mm.t === "settleHalf") {
+              const sig = hexToBytes(String(mm.sig));
+              const rt = hexToBytes(String(mm.transcriptRoot));
+              if (settleResolveRef.current)
+                settleResolveRef.current({ sig, root: rt });
+              else bufferedSettleRef.current = { sig, root: rt };
+            } else if (mm.t === "closed")
+              setDigests((d) => ({ ...d, close: String(mm.digest) }));
+            else if (mm.t === "stop") {
+              stoppingRef.current = true;
+              if (tunnelRef.current)
+                void finishSettle(tunnelRef.current, channel, m.matchId);
+            }
+          });
+
+          // The per-game ephemeral key baked into the tunnel at allocate co-signs every move — using a
+          // different key would reject every signature. hello carries it; the bot's was baked as B.
+          channel.sendPeer({
+            t: "hello",
+            ephemeralPubkey: bytesToHex(eph.publicKey),
+          });
+          const oppHello =
+            bufferedHelloRef.current ??
+            (await new Promise<string>((res) => {
+              helloResolveRef.current = res;
+            }));
+          const oppEphPubkey = hexToBytes(oppHello);
+
+          // No create/deposit: the fleet pre-created the tunnel + funded seat B, and seat A was funded
+          // by the batched `enterArena` PTB. Both seats stake the fixed arena buy-in (allocation).
+          const stake = BigInt(allocation.stakeEach);
+          const obj = await client.getObject({
+            id: allocation.tunnelId,
+            options: { showContent: true },
+          });
+          const fields = (
+            obj.data?.content as
+              | { fields?: Record<string, unknown> }
+              | undefined
+          )?.fields;
+          createdAtRef.current = BigInt(
+            (fields?.created_at as string | undefined) ?? 0,
+          );
+
+          const backend = core.defaultBackend();
+          const t = new core.DistributedTunnel<BlackjackState, BlackjackMove>(
+            proto,
+            {
+              tunnelId: allocation.tunnelId,
+              self: core.makeEndpoint(
+                backend,
+                walletAddress,
+                {
+                  publicKey: eph.publicKey,
+                  scheme: 0,
+                  secretKey: eph.secretKey,
+                },
+                true,
+              ),
+              opponent: core.makeEndpoint(
+                backend,
+                m.opponentWallet,
+                { publicKey: oppEphPubkey, scheme: 0 },
+                false,
+              ),
+              selfParty: m.role, // A = player
+              moveCodec: blackjackMoveCodec,
+            },
+            channel.transport,
+            { a: stake, b: stake },
+          );
+          tunnelRef.current = t;
+          transcriptRef.current = new proof.Transcript(allocation.tunnelId);
+
+          activateSession(mp, channel, t, {
+            matchId: m.matchId,
+            role: m.role,
+            opponentWallet: m.opponentWallet,
+            opponentPubkeyHex: oppHello,
+            selfEphemeralSecretHex: bytesToHex(eph.secretKey),
+          });
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        }
+      })();
+    },
+    [walletAddress, proto, client, activateSession, finishSettle],
+  );
+
+  // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited blackjack's seat A in
+  // the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
+  // auto-enter — the window comes alive without a "Find match" click. Only from idle (never clobbers a
+  // live/resumed match); `clearArenaEntry` consumes it so a remount can't re-enter a closed match.
+  const arenaEnteredRef = useRef(false);
+  useEffect(() => {
+    const tryEnter = () =>
+      consumeArenaEntry(
+        BLACKJACK_ARENA_GAME_ID,
+        arenaEnteredRef,
+        () => phase === "idle",
+        enterArenaMatch,
+      );
+    tryEnter();
+    return subscribeArena(tryEnter);
+  }, [enterArenaMatch, phase]);
+
   // Player Hit/Stand (only the player, only on the player's turn).
   const proposePlayer = useCallback((action: "hit" | "stand") => {
     const t = tunnelRef.current;
@@ -852,6 +1031,7 @@ export function usePvpBlackjack(): PvpView {
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
+      rememberAuto("blackjack", on);
       const t = tunnelRef.current;
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       // Resume auto from the current state.
@@ -879,7 +1059,7 @@ export function usePvpBlackjack(): PvpView {
                 /* ignore */
               }
             },
-            autoRef.current ? 50 : BOT_MOVE_MS,
+            autoRef.current ? AUTO_MOVE_MS : BOT_MOVE_MS,
           );
       } else if (st.phase === "round_over") {
         const mv = bjBetMove(lastBetRef.current ?? Number(MIN_BET), st);
@@ -891,7 +1071,7 @@ export function usePvpBlackjack(): PvpView {
               /* ignore */
             }
           },
-          autoRef.current ? 100 : NEXT_MS,
+          autoRef.current ? AUTO_MOVE_MS : NEXT_MS,
         );
       }
     },
@@ -899,8 +1079,8 @@ export function usePvpBlackjack(): PvpView {
   );
 
   // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
-  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Covers a
+  // player who ticks Auto on before play; Auto is OFF by default on a fresh load.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -924,6 +1104,34 @@ export function usePvpBlackjack(): PvpView {
   }, [phase, state, proto, finishSettle]);
 
   const leave = useCallback(() => {
+    // Back: publish our settlement half before abandoning, so leaving SETTLES (the staying seat / 1h
+    // grace path submits the close) instead of stranding the staked tunnel. Sync + best-effort, so the
+    // half is on the wire before the transport closes; no live/unsettled match ⇒ just abandon.
+    const lt = tunnelRef.current;
+    const lch = channelRef.current;
+    if (lt && lch && !settledRef.current) {
+      try {
+        const root = transcriptRef.current
+          ? transcriptRef.current.root()
+          : new Uint8Array(32);
+        const half = lt.buildSettlementHalfWithRoot(
+          createdAtRef.current,
+          root,
+          0n,
+        );
+        lch.sendPeer({
+          t: "settleHalf",
+          partyABalance: half.settlement.partyABalance.toString(),
+          partyBBalance: half.settlement.partyBBalance.toString(),
+          finalNonce: half.settlement.finalNonce.toString(),
+          timestamp: half.settlement.timestamp.toString(),
+          transcriptRoot: bytesToHex(root),
+          sig: bytesToHex(half.sigSelf),
+        });
+      } catch (e) {
+        console.error("[blackjack pvp] leave publish failed:", e);
+      }
+    }
     detachResumeRef.current?.();
     detachResumeRef.current = null;
     // Explicit leave = abandon this match: drop its resume record so it can't hijack the next
@@ -943,8 +1151,8 @@ export function usePvpBlackjack(): PvpView {
     settledRef.current = false;
     stoppingRef.current = false;
     autoKickedRef.current = false;
-    autoRef.current = false;
-    setAutoState(false);
+    autoRef.current = defaultAuto("blackjack");
+    setAutoState(autoRef.current);
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
@@ -1005,7 +1213,7 @@ export function usePvpBlackjack(): PvpView {
     if (phase !== "done" || !autoRef.current) return;
     const id = setTimeout(() => {
       if (autoRef.current) requeue();
-    }, NEXT_MS);
+    }, AUTO_REQUEUE_MS);
     return () => clearTimeout(id);
   }, [phase, requeue]);
 

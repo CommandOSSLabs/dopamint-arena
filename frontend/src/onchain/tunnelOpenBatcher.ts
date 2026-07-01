@@ -6,12 +6,14 @@
 import {
   openAndFundMany,
   openAndFundSelfPlay,
+  depositSeatAMany,
   normalizeSuiAddress,
   BatchCommittedError,
   type PartyOnchain,
   type SignExec,
   type SuiReads,
   type TunnelOpenManySpec,
+  type TunnelDepositSeatASpec,
 } from "./tunnelTx";
 import { withSponsorFallback } from "./sponsor";
 import { MTPS_COIN_TYPE, isMtpsAddressBalance, isMtpsConfigured } from "./mtps";
@@ -21,6 +23,13 @@ export interface TunnelOpenRequest {
   partyB: PartyOnchain;
   aAmount: bigint;
   bAmount: bigint;
+  /** What this request builds. `"open"` (default) is self-play — one wallet opens + funds BOTH
+   *  seats in one `create_and_fund` (ADR-0019). `"deposit"` is the genuine-two-party arena join
+   *  (ADR-0025): the fleet already created the tunnel + funded seat B, so the user only deposits
+   *  seat A into the existing `tunnelId` (`partyB`/`bAmount` are unused). */
+  mode?: "open" | "deposit";
+  /** The fleet-pre-opened tunnel to deposit seat A into. Required for `mode: "deposit"`. */
+  tunnelId?: string;
   /** Coin type `T` for the tunnel; defaults per env (MTPS when configured, else SUI). */
   coinType?: string;
   /** ADR-0013: fund the stake from the player's address balance when the env supports it. */
@@ -79,6 +88,17 @@ const specOf = (req: TunnelOpenRequest): TunnelOpenManySpec => ({
   penaltyAmount: req.penaltyAmount,
 });
 
+const depositSpecOf = (req: TunnelOpenRequest): TunnelDepositSeatASpec => {
+  if (!req.tunnelId)
+    throw new Error("deposit request missing tunnelId (arena join, ADR-0025)");
+  return { tunnelId: req.tunnelId, partyA: req.partyA, amount: req.aAmount };
+};
+
+/** The stake this request funds: seat A only when depositing into the arena's pre-opened tunnel,
+ *  both seats when opening a self-play tunnel. */
+const stakeTotalOf = (req: TunnelOpenRequest): bigint =>
+  req.mode === "deposit" ? req.aAmount : req.aAmount + req.bAmount;
+
 export class TunnelOpenBatcher {
   private queue: Pending[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -125,7 +145,9 @@ export class TunnelOpenBatcher {
     // PTB stream. In practice the arena runs one mode, so this is usually a single group.
     const groups = new Map<string, Pending[]>();
     for (const p of batch) {
-      const key = `${fundingModeOf(p.req)}:${coinTypeOf(p.req) ?? "SUI"}`;
+      // Mode joins the key: an arena deposit and a self-play open build different PTBs and sum
+      // stakes differently, so they must not share one chunk.
+      const key = `${p.req.mode ?? "open"}:${fundingModeOf(p.req)}:${coinTypeOf(p.req) ?? "SUI"}`;
       (groups.get(key) ?? groups.set(key, []).get(key)!).push(p);
     }
 
@@ -137,10 +159,7 @@ export class TunnelOpenBatcher {
   private async flushGroup(group: Pending[], deps: BatcherDeps): Promise<void> {
     const mode = fundingModeOf(group[0].req);
     const coinType = coinTypeOf(group[0].req);
-    const groupTotal = group.reduce(
-      (sum, p) => sum + p.req.aAmount + p.req.bAmount,
-      0n,
-    );
+    const groupTotal = group.reduce((sum, p) => sum + stakeTotalOf(p.req), 0n);
 
     // Address-balance mode: top up ONCE for the whole group; each chunk's PTB withdraws its share.
     if (mode === "balance") {
@@ -169,20 +188,27 @@ export class TunnelOpenBatcher {
     mode: FundingMode,
     coinType: string | undefined,
   ): Promise<void> {
-    const specs = chunkPending.map((p) => specOf(p.req));
-    const chunkTotal = specs.reduce((s, x) => s + x.aAmount + x.bAmount, 0n);
-    // Always-on visibility into each queued self-play PTB sign (how many opens collapse into ONE tx).
-    console.log(
-      `🧾 [PTB sign] self-play open · ${chunkPending.length} open(s) → ONE ${mode} PTB`,
-      chunkPending.map((p) => ({
-        partyA: p.req.partyA.address,
-        partyB: p.req.partyB.address,
-        aAmount: String(p.req.aAmount),
-        bAmount: String(p.req.bAmount),
-      })),
+    const deposit = chunkPending[0].req.mode === "deposit";
+    const chunkTotal = chunkPending.reduce(
+      (s, p) => s + stakeTotalOf(p.req),
+      0n,
     );
     try {
-      const map = await this.openChunk(deps, mode, coinType, specs, chunkTotal);
+      const map = deposit
+        ? await this.depositChunk(
+            deps,
+            mode,
+            coinType,
+            chunkPending.map((p) => depositSpecOf(p.req)),
+            chunkTotal,
+          )
+        : await this.openChunk(
+            deps,
+            mode,
+            coinType,
+            chunkPending.map((p) => specOf(p.req)),
+            chunkTotal,
+          );
       for (const p of chunkPending) {
         const id = map.get(normalizeSuiAddress(p.req.partyA.address));
         if (id) p.resolve(id);
@@ -208,7 +234,10 @@ export class TunnelOpenBatcher {
       await Promise.all(
         chunkPending.map(async (p) => {
           try {
-            p.resolve(await this.openSingle(deps, mode, coinType, p.req));
+            const id = deposit
+              ? await this.depositSingle(deps, mode, coinType, p.req)
+              : await this.openSingle(deps, mode, coinType, p.req);
+            p.resolve(id);
           } catch (singleErr) {
             p.reject(singleErr);
           }
@@ -281,6 +310,91 @@ export class TunnelOpenBatcher {
         `batched open/fund: sponsored path failed [${String((sponsorErr as Error)?.message ?? sponsorErr)}]; sender-pays fallback failed [${String((payErr as Error)?.message ?? payErr)}]`,
       );
     }
+  }
+
+  /** Arena-join analog of {@link openChunk} (ADR-0025): one PTB depositing seat A into N tunnels
+   *  the fleet already opened + funded seat B for, resolved by party-A. Same sponsor → sender-pays
+   *  fallback; a committed deposit must never retry (double-deposit). */
+  private async depositChunk(
+    deps: BatcherDeps,
+    mode: FundingMode,
+    coinType: string | undefined,
+    specs: TunnelDepositSeatASpec[],
+    total: bigint,
+  ): Promise<Map<string, string>> {
+    if (mode === "balance") {
+      return depositSeatAMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeFromBalance: {
+          amount: total,
+          coinType: coinType ?? MTPS_COIN_TYPE,
+        },
+      });
+    }
+    if (mode === "mtps-coin") {
+      const stakeCoinId = await deps.prepareStake(total);
+      return depositSeatAMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeCoinId,
+      });
+    }
+    // SUI: sponsored deposit off a user coin, else wallet-signed gas-funded. BatchCommittedError
+    // propagates immediately — a committed PTB must never retry (double-deposit).
+    let sponsorErr: unknown;
+    try {
+      return await depositSeatAMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeCoinId: await deps.selectStakeCoin(total),
+      });
+    } catch (err) {
+      if (err instanceof BatchCommittedError) throw err;
+      sponsorErr = err;
+    }
+    console.warn(
+      `[sponsor] arena batched deposit: sponsor failed, falling back to sender-pays`,
+      sponsorErr,
+    );
+    try {
+      return await depositSeatAMany({
+        reads: deps.reads,
+        signExec: deps.signExec,
+        specs,
+        coinType,
+      });
+    } catch (payErr) {
+      if (payErr instanceof BatchCommittedError) throw payErr;
+      throw new Error(
+        `arena batched deposit: sponsored path failed [${String((sponsorErr as Error)?.message ?? sponsorErr)}]; sender-pays fallback failed [${String((payErr as Error)?.message ?? payErr)}]`,
+      );
+    }
+  }
+
+  /** Pre-commit fallback for one arena deposit: a single-spec {@link depositSeatAMany}. */
+  private async depositSingle(
+    deps: BatcherDeps,
+    mode: FundingMode,
+    coinType: string | undefined,
+    req: TunnelOpenRequest,
+  ): Promise<string> {
+    const map = await this.depositChunk(
+      deps,
+      mode,
+      coinType,
+      [depositSpecOf(req)],
+      req.aAmount,
+    );
+    const id = map.get(normalizeSuiAddress(req.partyA.address));
+    if (!id) throw new Error(`deposit did not resolve tunnel ${req.tunnelId}`);
+    return id;
   }
 
   private async openSingle(

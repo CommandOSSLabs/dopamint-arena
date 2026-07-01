@@ -1,30 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { useCurrentAccount } from "@mysten/dapp-kit";
-import { registerWindowDisposer } from "@/lib/windowSessions";
-import { useSoloCabinet, type WindowMode } from "@/shell/cabinet/soloCabinet";
-import { useSoloAutoRetry } from "@/lib/useSoloAutoRetry";
+import { type ReactNode } from "react";
 import type { GameWindowProps } from "../types";
-import type { SessionStatus } from "./soloSessionHook";
 import { ArenaScreen, type ArenaScreenTheme } from "./ArenaScreen";
-
-/** The solo-session surface the window controller reads (the board reads the rest). */
-interface ArenaSolo {
-  status: SessionStatus;
-  auto: boolean;
-  error: string | null;
-  view: unknown;
-  start: (stake: number) => void;
-  reset: () => void;
-  toggleAuto: () => void;
-  pause: () => void;
-  resume: () => void;
-}
 
 /** The pvp-match surface the window controller reads. */
 interface ArenaPvp {
@@ -33,121 +9,41 @@ interface ArenaPvp {
   view: unknown;
   reset: () => void;
   findMatch: () => void;
+  /** Back/Cancel: settles (publishes a half) when a match is live, else resets. See pvpMatchHook. */
+  leave: () => void;
 }
 
-export interface ArenaWindowSpec<Solo extends ArenaSolo, Pvp extends ArenaPvp> {
+export interface ArenaWindowSpec<Pvp extends ArenaPvp> {
   /** Disposer/label prefix (e.g. "bomb-it"). */
   game: string;
-  useSolo: (windowId: string) => Solo;
   usePvp: (windowId: string) => Pvp;
-  Lobby: (props: {
-    onSolo: (stake: number) => void;
-    onFind: () => void;
-  }) => ReactNode;
+  /** The idle screen: a single "Play" button that joins the relay queue. */
+  Lobby: (props: { onPlay: () => void }) => ReactNode;
   /** Per-game card-chrome theme for the transitional screens. */
   screen: ArenaScreenTheme;
   /** PvP matchmaking title — "Finding match" / "Finding…" (kept per game, not unified). */
   matchingTitle: string;
-  /** Whether the solo error screen shows an "Error" eyebrow (chicken-cross does, bomb-it doesn't). */
-  errorEyebrow?: boolean;
-  /** Render the game's board for the live solo session. */
-  renderSoloBoard: (solo: Solo, onPlayAgain: () => void) => ReactNode;
   /** Render the game's board for the live pvp match. */
   renderPvpBoard: (pvp: Pvp, onPlayAgain: () => void) => ReactNode;
 }
 
-/** Default per-DUEL stake for the auto-started solo match. Small (1 token) so the funded bank
- *  (~100/seat) lasts ~100 duels — NOT the bank itself. Setting this ≈ the bank made each session
- *  one duel (loser → 0 → settle); larger than the bank underflows the loser's balance (u64 crash). */
-const AUTO_STAKE = 1;
-
 /**
- * Build an arena game Window: the Solo/PvP chooser + status router shared by every self-play-and-PvP
- * tunnel game. It owns the persisted mode (`modeStore`), the once-per-window auto-start, the
- * solo-error auto-retry, the cabinet attract/take-over wiring, the funding/matching/error/loading
- * screen copy, and the status→Lobby|Screen|Board routing — all identical between games. A game
- * supplies only its hooks, lobby, board renders, and the handful of strings/theme that differ. The
- * previous per-game windows were ~210-line copies of this body.
+ * Build an arena game Window: the single-button "Play" entry + status router shared by every
+ * symmetric PvP tunnel game (bomb-it, chicken-cross). Driven entirely off the PvP session status —
+ * `idle` shows the lobby's Play button; everything else routes through the matching/funding/error
+ * screens to the live board. The session lives out-of-React (keyed by windowId), so a minimize /
+ * reflow stays connected and a remount mid-match resumes straight to the board. A game supplies
+ * only its hook, lobby, board render, and the strings/theme that differ.
  */
-export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
-  spec: ArenaWindowSpec<Solo, Pvp>,
+export function createArenaWindow<Pvp extends ArenaPvp>(
+  spec: ArenaWindowSpec<Pvp>,
 ): (props: GameWindowProps) => ReactNode {
-  // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
-  // session instead of the chooser. Both modes survive remount — the sessions live out-of-React,
-  // windowId-keyed. One map per game (each game calls this once). Cleared on window close.
-  const modeStore = new Map<string, "solo" | "pvp">();
-  // Auto-start fires AT MOST ONCE per window. Module-scoped so a minimize/maximize remount never
-  // re-funds, and Back returns to the lobby rather than re-triggering. Cleared on close.
-  const autoStarted = new Map<string, boolean>();
-
   return function ArenaWindow({ windowId }: GameWindowProps): ReactNode {
-    const account = useCurrentAccount();
-    const [mode, setModeState] = useState<WindowMode>(
-      () => modeStore.get(windowId) ?? null,
-    );
     const pvp = spec.usePvp(windowId);
-    const solo = spec.useSolo(windowId);
-
-    useEffect(() => {
-      registerWindowDisposer(windowId, `${spec.game}-mode`, () => {
-        modeStore.delete(windowId);
-        autoStarted.delete(windowId);
-      });
-    }, [windowId]);
-
-    const setMode = (m: WindowMode) => {
-      if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
-      else modeStore.delete(windowId);
-      setModeState(m);
-    };
-
-    const backToMenu = () => {
-      if (mode === "solo") solo.reset();
-      else if (mode === "pvp") pvp.reset();
-      setMode(null);
-    };
-
-    // Cabinet "Return to Home": stop solo + show the chooser. Stable (module-const modeStore + stable
-    // setModeState + session.reset) so the controller doesn't re-register every render.
-    const goHome = useCallback(() => {
-      solo.reset();
-      modeStore.delete(windowId);
-      setModeState(null);
-    }, [solo.reset, windowId]);
-
-    // Hand seat A to the human: flip auto off (reads `auto` fresh, so a double take-over is a no-op).
-    const goManual = useCallback(() => {
-      if (solo.auto) solo.toggleAuto();
-    }, [solo.auto, solo.toggleAuto]);
-    useSoloCabinet({
-      offerable: mode === "solo" && solo.status === "playing" && solo.auto,
-      pause: solo.pause,
-      resume: solo.resume,
-      goManual,
-      goHome,
-    });
-
-    // Auto-retry a failed solo start every 5s while it sits in "error" (cold-start faucet race /
-    // transient sponsor blip) so the unattended bot game self-heals. Retries with the stake last
-    // started (auto-start uses AUTO_STAKE; the lobby's chosen stake otherwise).
-    const lastStakeRef = useRef(AUTO_STAKE);
-    const retrySolo = useCallback(() => {
-      solo.reset();
-      solo.start(lastStakeRef.current);
-    }, [solo.reset, solo.start]);
-    useSoloAutoRetry(mode === "solo", solo.status, retrySolo);
-
-    // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
-    // other arena games), instead of landing on the lobby. Once-only per window: a remount never
-    // re-funds (the out-of-React session is already live), and Back returns to the lobby, not a refund.
-    useEffect(() => {
-      if (autoStarted.get(windowId)) return;
-      if (mode !== null || !account || solo.status !== "idle") return;
-      autoStarted.set(windowId, true);
-      setMode("solo");
-      solo.start(AUTO_STAKE);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [account, mode, solo.status, windowId]);
+    // Back/Cancel: `leave` settles first when a match is live (publishes our half, then returns to the
+    // lobby); on the matching/error/settled screens it just resets. So an in-game Back no longer
+    // strands the staked tunnel — it publishes a settlement half on the way out.
+    const backToLobby = () => pvp.leave();
 
     const screen = (
       children: ReactNode,
@@ -169,54 +65,16 @@ export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
     );
     const loading = screen(<p className="sketch-note">Loading…</p>);
 
-    if (mode === null) {
+    if (pvp.status === "idle") {
       const { Lobby } = spec;
-      return (
-        <Lobby
-          onSolo={(s) => {
-            lastStakeRef.current = s;
-            setMode("solo");
-            solo.start(s);
-          }}
-          onFind={() => {
-            setMode("pvp");
-            pvp.findMatch();
-          }}
-        />
-      );
+      return <Lobby onPlay={() => pvp.findMatch()} />;
     }
-
-    if (mode === "solo") {
-      if (solo.status === "error")
-        return screen(
-          <>
-            {spec.errorEyebrow ? (
-              <span className="sketch-eyebrow">Error</span>
-            ) : null}
-            <p className="sketch-note text-[var(--sketch-red)]">
-              {solo.error ?? "something went wrong"}
-            </p>
-          </>,
-          backToMenu,
-        );
-      if (solo.status === "funding") return funding;
-      if (
-        (solo.status === "playing" ||
-          solo.status === "settling" ||
-          solo.status === "settled") &&
-        solo.view !== null
-      )
-        return spec.renderSoloBoard(solo, backToMenu);
-      return loading;
-    }
-
-    // PvP
     if (pvp.status === "error")
       return screen(
         <p className="sketch-note text-[var(--sketch-red)]">
           {pvp.error ?? "something went wrong"}
         </p>,
-        backToMenu,
+        backToLobby,
       );
     if (pvp.status === "matching")
       return screen(
@@ -227,7 +85,7 @@ export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
             Matching you with the next player over the relay.
           </p>
         </>,
-        backToMenu,
+        backToLobby,
         "Cancel",
       );
     if (pvp.status === "funding") return funding;
@@ -237,7 +95,7 @@ export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
         pvp.status === "settled") &&
       pvp.view !== null
     )
-      return spec.renderPvpBoard(pvp, backToMenu);
+      return spec.renderPvpBoard(pvp, backToLobby);
     return loading;
   };
 }

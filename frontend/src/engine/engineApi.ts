@@ -2,10 +2,9 @@
  * Contracts for the browser tunnel-client Web Worker (design:
  * docs/design/frontend-tunnel-client-worker.md).
  *
- * Two lanes (M1): SOLO self-play runs ONE dedicated worker per window ({@link SoloEngineApi}),
- * while ALL PvP windows share ONE relay-socket "hub" worker ({@link PvpHubApi}), multiplexed by
- * matchId. A worker owns its `DistributedTunnel` + ephemeral signing + any hidden-info secret; the
- * main thread renders snapshots and serves wallet/Sui-client through the bridge.
+ * ALL PvP windows share ONE relay-socket "hub" worker ({@link PvpHubApi}), multiplexed by matchId.
+ * The worker owns its `DistributedTunnel` + ephemeral signing + any hidden-info secret; the main
+ * thread renders snapshots and serves wallet/Sui-client through the bridge.
  *
  * The boundary is Comlink: commands + the snapshot/bridge callbacks cross as RPC; their *payloads*
  * are plain / structured-cloneable (the callbacks themselves ride as `Comlink.proxy`'d references).
@@ -54,24 +53,8 @@ export interface MatchSnapshot<View = unknown, Winner = unknown> {
   /** Socket lifecycle for this match, folded in from the worker (design §7). */
   connStatus: ConnStatus;
   error: string | null;
-  /**
-   * Set by the main-thread manager (never the worker) when the device live-window cap
-   * (design §2.1) refused to spawn this window's worker. The UI keys off this to fall back to
-   * an SSE-spectate tile instead of an interactive worker-hosted match.
-   */
-  capped?: boolean;
-  /**
-   * Self-play only (omitted on the PvP path): running per-seat win tally across the multi-duel
-   * session — `you` = seat A's wins, `foe` = seat B's. One funded tunnel hosts many duels.
-   */
-  score?: { you: number; foe: number };
-  /** Self-play only: completed duels behind the running one (the live duel is `gamesPlayed + 1`). */
-  gamesPlayed?: number;
-  /** Self-play only: the session payout result (game-specific), set once the tunnel settles. */
-  result?: unknown;
-  /** Self-play only: CUMULATIVE co-signed updates this session — the worker can't reach the
-   *  main-thread telemetry, so the React binding feeds the delta to `recordGameUpdate` (the local
-   *  TPS fallback the window chip shows when the backend feed is absent). PvP is relay-counted. */
+  /** CUMULATIVE co-signed updates this match (the tunnel nonce). The React binding feeds the delta
+   *  to the scoped telemetry so a PvP window's TPS chip shows its own local co-sign rate. */
   moves?: number;
 }
 
@@ -90,59 +73,13 @@ export interface EngineConfig {
   wallet: string;
 }
 
-/** Which engine a game window drives: PvP over the shared relay socket, or solo self-play. */
-export type Lane = "pvp" | "solo";
-
 // --- Worker RPC surfaces (Comlink) --------------------------------------------------------
 
 /**
- * The SOLO (self-play) engine the per-window worker `Comlink.expose`s (design §4, channel 1).
- * One dedicated worker per solo game window — self-play is pure crypto with no relay socket, so it
- * stays isolated per window. Each method is a Comlink RPC (awaitable on main via
- * `Comlink.Remote<SoloEngineApi>`).
- *
- * Setup order: `engineClient` posts `init` → `attachBridge` → `subscribe` once at spawn, in that
- * order without awaiting between them — Comlink preserves channel order, so they land before any
- * later `findSoloMatch`. Proxy lifetimes: the bridge and `onSnapshot` are `Comlink.proxy`'d on main
- * and live as long as the worker; `dispose` releases the wrapped API + `terminate()`s the worker.
- */
-export interface SoloEngineApi {
-  /** Bootstrap config (main-resolved WS URL + wallet label); set before the first match. */
-  init(config: EngineConfig): void;
-  /** Hand the worker the main-thread chain bridge (a Comlink proxy; its methods RPC to main). */
-  attachBridge(bridge: MainBridge): void;
-  /** Register the coalesced-snapshot sink (a Comlink proxy, invoked ~per move / 16 ms). */
-  subscribe(onSnapshot: (snap: MatchSnapshot) => void): void;
-  /**
-   * Self-play (bot-vs-bot) over ONE funded tunnel hosting many duels. `setup` is the optional
-   * per-duel stake (a number, or `{ stake }`); defaults to the spec's stake.
-   */
-  findSoloMatch(gameId: GameId, setup?: unknown): Promise<void>;
-  submitInput(input: unknown): void;
-  setAuto(on: boolean): void;
-  setVisibility(visible: boolean): void;
-  /**
-   * Cabinet hover-freeze. Pause (true) / resume (false) the self-play advance loop AND its snapshot
-   * flush — independent of {@link setVisibility} (the tab-visibility driver). The loop runs only
-   * when BOTH say "active", so one resuming never overrides the other still paused.
-   */
-  setPaused(paused: boolean): void;
-  /**
-   * On-demand cooperative cash-out: close the funded tunnel NOW at the current co-signed state — the
-   * SAME settle path the engine runs at bank exhaustion, but player-triggered. Idempotent if already
-   * settling/settled.
-   */
-  settleSolo(): void;
-  /** Tear the session down (cancel any queued open, cooperative-close intent). Async so
-   *  `engineClient.disposeWindow` can let it land before it terminates the worker. */
-  reset(): Promise<void>;
-}
-
-/**
- * The shared PvP hub the SINGLE relay worker `Comlink.expose`s (M1: one socket for all PvP). Unlike
- * {@link SoloEngineApi}, every method is keyed by `windowId` because ONE worker multiplexes MANY
- * windows' matches over ONE `MpClient` (one WebSocket), routed by matchId. The snapshot sink is
- * therefore `(windowId, snap)` so the manager can fan each match's snapshots back to its window.
+ * The shared PvP hub the SINGLE relay worker `Comlink.expose`s (M1: one socket for all PvP). Every
+ * method is keyed by `windowId` because ONE worker multiplexes MANY windows' matches over ONE
+ * `MpClient` (one WebSocket), routed by matchId. The snapshot sink is therefore `(windowId, snap)`
+ * so the manager can fan each match's snapshots back to its window.
  *
  * Setup (`init`/`attachBridge`/`subscribe`) is posted once for the whole hub; per-window matches
  * then start via `findMatch(windowId, …)`.
@@ -294,86 +231,3 @@ export interface GameSessionSpec<
   ): MatchController<State, Move, Setup, Input, View>;
 }
 
-// --- Self-play (solo) lane: one funded tunnel hosts many bot-vs-bot duels --------------------
-
-/**
- * The multi-duel protocol state the `SoloEngine` reads directly (it tallies per-duel winners and
- * surfaces `gamesPlayed`). A game's full state extends this; everything else is opaque to the engine.
- */
-export interface SoloMultiGameState {
-  /** Completed duels behind the running one (the live duel is `gamesPlayed + 1`). */
-  gamesPlayed: number;
-  /** The running duel's protocol state; `winner` stays null until that duel decides. */
-  inner: { winner: "A" | "B" | "draw" | null };
-}
-
-/** One `stepWith` outcome: a tick was co-signed, the inner duel ended, or the bank is exhausted. */
-export type SoloStepOutcome = "stepped" | "game-over" | "session-over";
-
-/** Read (and clear) the take-over seat's queued intent; a null/undefined return ⇒ autopilot this
- *  tick (the bot steers the seat). The engine consumes the queued intent exactly once. */
-export type SoloTakeIntent<Intent> = () => Intent | undefined;
-
-/**
- * Everything game-specific the generic `SoloEngine` needs, registered by `gameId` (parallel to
- * {@link GameSessionSpec} for the PvP lane). The engine owns the solo skeleton — the one-signature
- * open+fund of BOTH ephemeral seats over the bridge, the `OffchainTunnel.selfPlay` per-duel loop,
- * the autopilot/manual cadence, multi-duel rematch, transcript, and cooperative settle; the spec
- * supplies the protocol, bots, view/result derivation, and the per-tick co-sign.
- *
- * `Bots` and `Proto` are trailing defaulted generics so the canonical `<State, Move, Intent, View,
- * Result>` form stays the usage site while a game can still type its bots/protocol precisely.
- *
- * @typeParam State the multi-duel protocol state (`{ gamesPlayed, inner: { winner } }`).
- * @typeParam Move  the inner protocol move (JSON-native).
- * @typeParam Intent a single seat's per-tick input (an action/direction) before it becomes a Move.
- * @typeParam View  the flattened, render-ready snapshot the board consumes.
- * @typeParam Result who took the pot ("A" | "B" | "draw" | "push").
- */
-export interface SoloGameSpec<
-  State extends SoloMultiGameState,
-  Move,
-  Intent,
-  View,
-  Result,
-  Bots = unknown,
-  Proto = Protocol<State, Move>,
-> {
-  game: GameId;
-  /** Per-DUEL stake (the small swap settled each duel), in the staked coin's base units. The LARGE
-   *  per-seat bank the engine funds on-chain (which survives many duels) is derived by the engine. */
-  stake: bigint;
-  /**
-   * The LARGE per-seat bank funded on-chain (the staked coin's base units), which survives MANY
-   * duels — distinct from the small per-duel {@link stake}. Defaults to the engine's 1-MTPS bank;
-   * a game whose on-chain balance IS its in-game stack (e.g. poker's chip buy-in) overrides it so
-   * the funded bank equals the protocol's starting balances. (SUI-fallback funding ignores this.)
-   */
-  lockedPerSeat?: bigint;
-  /** Idle pacing for an auto/bot seat (ms); a throughput showcase may omit it. */
-  stepMs?: number;
-  /** A beat between finished duels so the result + score register before the rematch (ms). */
-  rematchMs?: number;
-  /** When set, MANUAL play co-signs ONE tick per this many ms so a reaction game's fuse stays
-   *  legible; when undefined, manual play batches at the autopilot rate. */
-  manualStepMs?: number;
-  /** Build the multi-duel protocol once the tunnel id + per-duel stake are known. */
-  makeProtocol(tunnelId: string, stakePerGame: bigint): Proto;
-  /** Build the per-seat kit bots for this stake; opaque to the engine, threaded into `stepWith`. */
-  makeBots(stakePerGame: bigint): Bots;
-  /** Render-ready view. `bots` is passed so a hidden-info self-play (battleship) can render the
-   *  seats' actual fleets — the secrets live in the bots, never in `state`. Public-state specs ignore it. */
-  deriveView(state: State, bots?: Bots): View;
-  /** Map the just-settled inner duel to the session's payout result. */
-  sessionResult(inner: State["inner"]): Result;
-  /** Co-sign one tick. `take` null ⇒ autopilot (bot drives both seats); non-null ⇒ the take-over
-   *  seat consumes the player's queued intent this tick (the other seat stays bot-driven). */
-  stepWith(
-    protocol: Proto,
-    tunnel: OffchainTunnel<State, Move>,
-    bots: Bots,
-    take: SoloTakeIntent<Intent> | null,
-  ): SoloStepOutcome;
-  /** Start the next duel on the SAME tunnel (seat A's reset first move). */
-  kickoffNextGame(tunnel: OffchainTunnel<State, Move>): void;
-}

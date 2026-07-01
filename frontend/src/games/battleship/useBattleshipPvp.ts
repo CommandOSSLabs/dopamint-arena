@@ -11,6 +11,7 @@ import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
@@ -44,8 +45,17 @@ import {
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
-import { type Placement, placementsToBoard } from "./engine/fleet";
+import {
+  type Placement,
+  placementsToBoard,
+  placeFleetRandom,
+} from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
+import type { ArenaAllocation } from "@/onchain/arenaEnter";
+import {
+  consumeArenaEntry,
+  subscribeArena,
+} from "@/onchain/arenaAllocationStore";
 import { proposeDue } from "./engine/pvpDriver";
 import { pickShot, BOT_CONFIGS, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 import { deriveBattleshipView, type BattleshipView } from "./view";
@@ -63,8 +73,12 @@ import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
 import type { MatchSnapshot } from "@/engine/engineApi";
 
+/** Backend arena/`profile_for` id (single token, same both ways). Single source of truth for the
+ *  arena-store consumer (below) and `GameModule.arenaGameId` (index.ts). */
+export const BATTLESHIP_ARENA_GAME_ID = "battleship";
+
 const STAKE_BALANCE = 1n; // locked per seat: 1 MTPS (0 decimals; ADR-0023)
-const STAKE_SHIFT = 1n; // decisive result moves the loser's 1-token stake → winner (0-decimal)
+const STAKE_SHIFT = 1n; // winner-take-all: the loser's 1 MTPS stake moves to the winner (0 decimals; ADR-0023)
 /** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
  *  stale/dead match (or a backend that predates resume support) never confirms, so we
  *  abandon to idle rather than hang on a frozen board. */
@@ -94,6 +108,9 @@ export interface BattleshipPvp {
   /** Toggle autopilot for your seat; flipping it on fires immediately if it's your turn. */
   setAuto: (on: boolean) => void;
   reset: () => void;
+  /** Back / Settle: publish this seat's settlement half and stop (status → settled). Unlike `reset`
+   *  (a bare disconnect), this settles — the staying seat / grace path submits the close. */
+  endMatch: () => void;
 }
 
 type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
@@ -169,7 +186,7 @@ class PvpSession {
     view: null,
     opponentWallet: null,
     error: null,
-    auto: false,
+    auto: defaultAuto("battleship"),
   };
   private listeners = new Set<() => void>();
 
@@ -182,9 +199,11 @@ class PvpSession {
   private lastEnemyShot: number | null = null;
   // Client-side autopilot: when on, fire YOUR shots automatically (one tunnel = one
   // game in PvP, so the loop doesn't rematch — it just plays this game out).
-  private auto = false;
+  private auto = defaultAuto("battleship");
   // Monotonic id for "My Activity" rows pushed per finished match.
   private txnId = 0;
+  /** Set per live match to `settle(publishOnly)`; lets `endMatch()` publish a half outside `onConfirmed`. */
+  private settleNow: ((publishOnly: boolean) => void) | null = null;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -233,6 +252,7 @@ class PvpSession {
   setAuto = (on: boolean) => {
     if (this.auto === on) return;
     this.auto = on;
+    rememberAuto("battleship", on);
     this.emit();
     // Flipping autopilot on while it's your turn: fire now.
     if (on) this.autoFireIfDue();
@@ -272,7 +292,21 @@ class PvpSession {
     this.view = null;
     this.opponentWallet = null;
     this.error = null;
+    this.settleNow = null;
     this.emit();
+  };
+
+  /** End the match now (Back / Settle button): publish this seat's settlement half, then stop — the
+   *  staying seat / 1h grace path submits the cooperative close. Status advances settling→settled, so
+   *  the window can either close (Back) or show the settled screen (Settle). No live match ⇒ no-op
+   *  (the caller resets). Never blocks on a peer that won't co-sign an early end (the fleet bot). */
+  endMatch = () => {
+    if (
+      this.settleNow &&
+      (this.status === "playing" || this.status === "settling")
+    ) {
+      this.settleNow(true);
+    }
   };
 
   dispose = () => {
@@ -329,6 +363,37 @@ class PvpSession {
     const proto = new BattleshipProtocol(STAKE_SHIFT);
     const transcript = new Transcript(dt.tunnelId);
     let settling = false;
+    // One cooperative close, guarded to fire once. A natural terminal (all ships sunk) does the full
+    // half-exchange + submit; `publishOnly` (Back / Settle button) publishes our half and stops, so
+    // ending early never blocks on a peer that won't co-sign it (the fleet bot only settles at
+    // terminal). Stored on `settleNow` so `endMatch()` can drive the publish-only path.
+    const triggerSettle = (publishOnly: boolean) => {
+      if (settling) return;
+      settling = true;
+      this.status = "settling";
+      this.emit();
+      void settle(
+        dt,
+        info.role,
+        channel,
+        waitPeer,
+        reads,
+        signExec as never,
+        sponsoredSignExec as never,
+        dt.tunnelId,
+        transcript,
+        getControlPlaneClient(),
+        coinType,
+        publishOnly,
+      ).then(
+        () => {
+          this.status = "settled";
+          this.emit();
+        },
+        (e) => this.fail(e),
+      );
+    };
+    this.settleNow = triggerSettle;
     dt.onConfirmed = (u) => {
       transcript.append(u); // verifiable move log, root-anchored at settle
       const st = dt.state;
@@ -343,7 +408,6 @@ class PvpSession {
       const proposed = proposeDue(dt, info.role, this.secret!);
       if (!proposed) this.autoFireIfDue();
       if (proto.isTerminal(st) && !settling) {
-        settling = true;
         // One "My Activity" row per finished match, from this seat's perspective.
         const iWon = st.winner === (info.role === "A" ? 1 : 2);
         this.deps?.report.pushLocalTxn({
@@ -355,27 +419,7 @@ class PvpSession {
           status: "Success",
           amount: "",
         });
-        this.status = "settling";
-        this.emit();
-        void settle(
-          dt,
-          info.role,
-          channel,
-          waitPeer,
-          reads,
-          signExec as never,
-          sponsoredSignExec as never,
-          dt.tunnelId,
-          transcript,
-          getControlPlaneClient(),
-          coinType,
-        ).then(
-          () => {
-            this.status = "settled";
-            this.emit();
-          },
-          (e) => this.fail(e),
-        );
+        triggerSettle(false);
       }
     };
 
@@ -645,6 +689,103 @@ class PvpSession {
     })();
   };
 
+  /** Arena entry (ADR-0028): join a pre-allocated match whose tunnel the fleet already created +
+   *  funded seat B for. This seat (always A) deposits nothing (batched by the caller's `enterArena`,
+   *  one wallet popup) and plays on AUTOPILOT vs the fleet bot — the user placed no ships, so a random
+   *  fleet is generated for the seat (they can toggle Auto off to take over). No "ready" wait: the bot
+   *  enters its loop the instant its tunnel opens and the relay buffers our first frame. `eph` is the
+   *  SAME per-game key baked into the tunnel at allocate (a different key rejects every co-signature). */
+  enterArenaMatch = (allocation: ArenaAllocation, eph: KeyPair) => {
+    const deps = this.deps;
+    if (!deps?.account) {
+      this.error = "connect a wallet first";
+      this.status = "error";
+      this.emit();
+      return;
+    }
+    const wallet = deps.account.address;
+    installResumePersistence();
+    evictExpiredRecords();
+    // Auto-place a fleet for the user's seat and turn autopilot ON (the seat fires automatically).
+    const placements = placeFleetRandom(Math.random);
+    this.placements = placements;
+    const secret = makeFleetSecret(
+      placementsToBoard(placements),
+      randomSalts(),
+    );
+    this.secret = secret;
+    this.auto = true;
+
+    void (async () => {
+      try {
+        this.error = null;
+        this.status = "matching";
+        this.emit();
+        const ephemeral = eph;
+        const mp = new MpClient(
+          resolveMpWsUrl(resolveBackendUrl()),
+          wallet,
+          ephemeral,
+        );
+        this.mp = mp;
+        await mp.connect();
+        // Join the ONE pre-allocated match (role A); the fleet bound the bot as seat B at allocate.
+        const match = await mp.joinMatch(allocation.matchId);
+        this.role = match.role;
+        this.opponentWallet = match.opponentWallet;
+        this.emit();
+
+        const channel = mp.channel(match.matchId);
+        const waitPeer = makeInbox(channel);
+
+        channel.sendPeer({
+          t: "hello",
+          ephemeralPubkey: toHex(ephemeral.publicKey),
+        });
+        const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
+        const oppPub = fromHex(hello.ephemeralPubkey);
+
+        // Seat A was deposited by the batched `enterArena` PTB and seat B by the fleet at allocate —
+        // the tunnel is live, so build the engine over the pre-created tunnelId (no funding here).
+        const proto = new BattleshipProtocol(STAKE_SHIFT);
+        const backend = defaultBackend();
+        const self = makeEndpoint(backend, wallet, ephemeral, true);
+        const opp = makeEndpoint(
+          backend,
+          match.opponentWallet,
+          { publicKey: oppPub, scheme: ephemeral.scheme },
+          false,
+        );
+        const dt = new DistributedTunnel<BattleshipState, BattleshipMove>(
+          proto,
+          {
+            tunnelId: allocation.tunnelId,
+            self,
+            opponent: opp,
+            selfParty: match.role,
+            moveCodec: battleshipMoveCodec,
+          },
+          channel.transport,
+          { a: STAKE_BALANCE, b: STAKE_BALANCE },
+        );
+        this.dt = dt;
+        this.activateSession(mp, channel, dt, waitPeer, {
+          matchId: match.matchId,
+          role: match.role,
+          opponentWallet: match.opponentWallet,
+          opponentPubkeyHex: toHex(oppPub),
+          selfEphemeralSecretHex: toHex(ephemeral.secretKey),
+        });
+
+        // No "ready" handshake with the fleet bot — kick the ordered commits immediately.
+        proposeDue(dt, match.role, secret);
+        this.sync();
+      } catch (e) {
+        this.fail(e);
+      }
+    })();
+  };
+
   fire = (cell: number) => {
     const dt = this.dt;
     const r = this.role;
@@ -719,6 +860,24 @@ function useLegacyBattleshipPvp(windowId: string): BattleshipPvp {
   }, [session, account?.address]);
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+  // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited battleship's seat A in
+  // the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
+  // auto-enter — the window comes alive (autopilot vs the fleet bot) without a "Find match" click.
+  // Only from idle (never clobbers a live/resumed match); `clearArenaEntry` consumes it.
+  const arenaEntered = useRef(false);
+  useEffect(() => {
+    const tryEnter = () =>
+      consumeArenaEntry(
+        BATTLESHIP_ARENA_GAME_ID,
+        arenaEntered,
+        () => session.getSnapshot().status === "idle",
+        (allocation, keypair) => session.enterArenaMatch(allocation, keypair),
+      );
+    tryEnter();
+    return subscribeArena(tryEnter);
+  }, [session, snap.status]);
+
   return {
     status: snap.status,
     role: snap.role,
@@ -730,6 +889,7 @@ function useLegacyBattleshipPvp(windowId: string): BattleshipPvp {
     auto: snap.auto,
     setAuto: session.setAuto,
     reset: session.reset,
+    endMatch: session.endMatch,
   };
 }
 
@@ -753,6 +913,10 @@ async function settle(
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
+  // Leaver (Back): publish our signed half and return WITHOUT waiting on the peer or submitting — the
+  // staying seat / 1h grace path submits. Lets Back settle without blocking on a peer that won't
+  // co-sign an early end (e.g. the fleet bot, which only settles at terminal).
+  publishOnly = false,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -766,6 +930,7 @@ async function settle(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
+  if (publishOnly) return;
   const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
     "settleHalf",
   );
@@ -837,6 +1002,8 @@ function useWorkerBattleship(windowId: string): BattleshipPvp {
     fire: (cell: number) => engineClient.submitInput(windowId, cell),
     setAuto: (on: boolean) => engineClient.setAuto(windowId, on),
     reset: () => engineClient.reset(windowId),
+    // Settle + close now: the worker settles automatically on terminal, so end = tear down.
+    endMatch: () => engineClient.reset(windowId),
   };
 }
 

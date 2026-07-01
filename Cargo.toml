@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "backend/tunnel-manager", "backend/explorer", "backend/shared",
   "rust/engine/tunnel-core", "rust/engine/tunnel-harness",
+  "rust/engine/sui-tunnel-anchor", "rust/engine/telemetry",
   "rust/protocols/api-credits", "rust/protocols/blackjack",
   "rust/protocols/battleship",
   "rust/protocols/bomb-it",
@@ -12,7 +13,9 @@ members = [
   "rust/protocols/quantum-poker",
   "rust/protocols/tic-tac-toe",
   "rust/protocols/world-canvas",
-  "rust/fleet/serve", "rust/fleet/bench",
+  "rust/fleet/serve", "rust/fleet/bench", "rust/fleet/core",
+  "rust/services/bot-fleet",
+  "wallet-pool", "wallet-pool/core", "wallet-pool/s3",
 ]
 
 [workspace.package]
@@ -41,6 +44,7 @@ async-trait = "0.1"
 fred = { version = "9", features = ["i-scripts", "subscriber-client", "enable-rustls-ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 hex = "0.4"
+bech32 = "0.9"
 blake2 = "0.10"
 ed25519-dalek = "2"
 # Lightweight crates.io Sui SDK (write path: PTB build + Ed25519 sign + BCS).
@@ -49,6 +53,12 @@ ed25519-dalek = "2"
 # NOTE: this supersedes ADR-0002's "sui-sdk (git, MystenLabs)" Tech-Stack line.
 sui-sdk-types = "0.3"
 sui-transaction-builder = "0.3"
+# gRPC fullnode client (tonic). Same 0.3.x sui-rust-sdk family as the crates
+# above, so it shares their toolchain. Read/execute path for the anchor; the
+# anchor issues only point lookups + executes, so gRPC suffices over GraphQL.
+sui-rpc = "0.3"
+# gRPC status/code matching for the sui-rpc client (NotFound -> Ok(None)).
+tonic = { version = "0.14", default-features = false }
 sui-crypto = { version = "0.3", features = ["ed25519"] }
 bcs = "0.2"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
@@ -63,6 +73,7 @@ rayon = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 sysinfo = "0.32"
 getrandom = "0.2"
+thiserror = "1"
 
 [profile.release]
 lto = "thin"

@@ -65,6 +65,7 @@ async fn stroke_strategy_continues_this_seats_recent_line() {
             },
         ],
         paint_count: 2,
+        updates: 2,
         applied_seq_a: 5,
         applied_seq_b: 0,
         balance_a: 100,

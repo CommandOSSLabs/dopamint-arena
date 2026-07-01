@@ -22,7 +22,13 @@ pub enum ClientMsg {
         nonce: String,
     },
     #[serde(rename = "queue.join")]
-    QueueJoin { game: String },
+    QueueJoin {
+        game: String,
+        /// Set by fleet bots so the matchmaker never pairs two bots. Absent for human
+        /// clients (defaults false).
+        #[serde(default)]
+        is_bot: bool,
+    },
     #[serde(rename = "queue.leave")]
     QueueLeave,
     #[serde(rename = "challenge.create")]
@@ -55,10 +61,18 @@ pub enum ClientMsg {
     /// Authorization is the seat-ownership check server-side.
     #[serde(rename = "resume")]
     Resume { match_id: String },
+    /// Join a pre-allocated arena match by its id (ADR-0027/0028). Unlike `queue.join` (matchmaking),
+    /// this binds the user's connection to the SPECIFIC co-located bot + tunnel reserved at allocate;
+    /// the server completes the `MatchRecord` and replies `MatchFound` (always party A). Valid only
+    /// after `Connect`; authorized by wallet == the match's allocator.
+    #[serde(rename = "arena.join")]
+    ArenaJoin { match_id: String },
 }
 
-/// Messages the server sends to the client.
-#[derive(Debug, Serialize, PartialEq)]
+/// Messages the server sends to the client. `Deserialize` is for the co-located fleet (ADR-0027):
+/// an in-process bot reads its own bus-delivered frames back into typed form (the bus carries only
+/// strings). The browser still only ever deserializes these — same wire either way.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -151,7 +165,13 @@ mod tests {
     #[test]
     fn client_queue_join_deserializes_dotted_name() {
         let m: ClientMsg = serde_json::from_str(r#"{"type":"queue.join","game":"ttt"}"#).unwrap();
-        assert_eq!(m, ClientMsg::QueueJoin { game: "ttt".into() });
+        assert_eq!(
+            m,
+            ClientMsg::QueueJoin {
+                game: "ttt".into(),
+                is_bot: false,
+            }
+        );
     }
 
     // The relay payload is an opaque string the server never parses — an arbitrary
@@ -190,6 +210,20 @@ mod tests {
             m,
             ClientMsg::Resume {
                 match_id: "m1".into()
+            }
+        );
+    }
+
+    // The arena join wire shape is the contract the FE arena tile (T14) must send to bind to its
+    // pre-allocated match. A rename of the tag or `matchId` field silently breaks that join.
+    #[test]
+    fn client_arena_join_deserializes_dotted_name() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"type":"arena.join","matchId":"arena_7"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::ArenaJoin {
+                match_id: "arena_7".into()
             }
         );
     }

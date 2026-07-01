@@ -54,7 +54,8 @@ export function PvpScene({
   onBack: () => void;
   isPortrait?: boolean;
 }) {
-  const [variant, setVariant] = useState<Variant>("ttt");
+  // Default to Caro (15×15) — the headline variant for this window; the 3×3 classic is a toggle.
+  const [variant, setVariant] = useState<Variant>("caro");
   const [boardSize, setBoardSize] = useState(15);
   const g = usePvpTicTacToe(windowId, variant, boardSize);
 
@@ -147,7 +148,7 @@ export function PvpScene({
                   ? "Opening tunnel…"
                   : g.phase === "funding"
                     ? "Funding seat…"
-                    : "Find Match"}
+                    : "Play"}
           </button>
 
           {(g.phase === "queuing" || g.phase === "connecting") && (

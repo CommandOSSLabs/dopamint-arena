@@ -12,7 +12,7 @@
 //! (e.g. the protocol's `actor_for`), which is what the serve/bench fleets do.
 
 use crate::frame::{AckFrame, FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame};
-use crate::{Balances, HarnessError, Protocol, Seat, Signer, TunnelContext};
+use crate::{Balances, HarnessError, Protocol, Seat, Signer, TranscriptEntry, TunnelContext};
 use tunnel_core::crypto::{blake2b256, verify};
 use tunnel_core::wire::{serialize_state_update, StateUpdate};
 
@@ -20,6 +20,12 @@ struct Pending<P: Protocol> {
     next: P::State,
     msg: Vec<u8>,
     nonce: u64,
+    mv: P::Move,
+    state_hash: [u8; 32],
+    timestamp: u64,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    sig_proposer: [u8; 64],
 }
 
 pub struct PartyRuntime<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFrameCodec> {
@@ -32,6 +38,11 @@ pub struct PartyRuntime<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFra
     state: P::State,
     nonce: u64,
     pending: Option<Pending<P>>,
+    last_committed: Option<TranscriptEntry<P::Move>>,
+    /// The ACK we co-signed for the most recently applied peer move, retained so a
+    /// resent MOVE whose ACK was lost can be re-acknowledged idempotently instead of
+    /// aborting the match. Mirrors the TS engine's `_latest` re-sign path.
+    last_ack: Option<AckFrame>,
 }
 
 impl<P: Protocol, S: Signer, C: FrameCodec<P::Move> + Default> PartyRuntime<P, S, C> {
@@ -61,6 +72,8 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
             state,
             nonce: 0,
             pending: None,
+            last_committed: None,
+            last_ack: None,
         }
     }
 
@@ -81,6 +94,11 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     }
     pub fn balances(&self) -> Balances {
         self.protocol.balances(&self.state)
+    }
+    /// Take the transition committed by the most recent `handle_frame`, if any.
+    /// The driver maps this into its transcript; the seat itself never records.
+    pub fn take_last_committed(&mut self) -> Option<TranscriptEntry<P::Move>> {
+        self.last_committed.take()
     }
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
@@ -131,7 +149,20 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
             sig_proposer: sig,
         });
         let bytes = self.codec.encode(&frame);
-        self.pending = Some(Pending { next, msg, nonce });
+        let TunnelFrame::Move(MoveFrame { mv, .. }) = frame else {
+            unreachable!("constructed a Move frame above");
+        };
+        self.pending = Some(Pending {
+            next,
+            msg,
+            nonce,
+            mv,
+            state_hash: update.state_hash,
+            timestamp,
+            party_a_balance: update.party_a_balance,
+            party_b_balance: update.party_b_balance,
+            sig_proposer: sig,
+        });
         Ok(bytes)
     }
 
@@ -143,6 +174,16 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     }
 
     fn on_move(&mut self, m: MoveFrame<P::Move>) -> Result<Vec<Vec<u8>>, HarnessError> {
+        // Idempotent re-ACK: a peer whose ACK was lost resends the MOVE. If we already
+        // applied this nonce, re-emit the ACK we co-signed rather than aborting on a
+        // nonce gap. Mirrors distributedTunnel.ts `onMove` (frame.nonce <= _nonce). This
+        // precedes the pending check so a peer resend is absorbed even mid-proposal.
+        if m.nonce <= self.nonce {
+            if let Some(ack) = self.last_ack.as_ref().filter(|a| a.nonce == m.nonce) {
+                return Ok(vec![self.codec.encode(&TunnelFrame::Ack(ack.clone()))]);
+            }
+            return Ok(Vec::new());
+        }
         if self.pending.is_some() {
             return Err(HarnessError::Verification("expected ack, got move".into()));
         }
@@ -179,14 +220,33 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         let sig_responder = self.signer.sign(&msg);
         self.state = next;
         self.nonce = m.nonce;
-        let ack: TunnelFrame<P::Move> = TunnelFrame::Ack(AckFrame {
+        self.last_committed = Some(TranscriptEntry {
             nonce: m.nonce,
+            by,
+            mv: m.mv,
+            state_hash,
+            timestamp: m.timestamp,
+            party_a_balance: bals.a,
+            party_b_balance: bals.b,
+            sig_proposer: m.sig_proposer,
             sig_responder,
         });
-        Ok(vec![self.codec.encode(&ack)])
+        let ack = AckFrame {
+            nonce: m.nonce,
+            sig_responder,
+        };
+        self.last_ack = Some(ack.clone());
+        Ok(vec![self.codec.encode(&TunnelFrame::Ack(ack))])
     }
 
     fn on_ack(&mut self, a: AckFrame) -> Result<Vec<Vec<u8>>, HarnessError> {
+        // Idempotent: a duplicate or delayed ACK for an already-committed nonce is a
+        // no-op. Our own resend (or the peer re-ACKing it) can produce a second ACK for
+        // a nonce we already committed; erroring would abort the match. Mirrors
+        // distributedTunnel.ts `onAck` (frame.nonce <= _nonce).
+        if a.nonce <= self.nonce {
+            return Ok(Vec::new());
+        }
         let p = self
             .pending
             .take()
@@ -199,6 +259,17 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         }
         self.state = p.next;
         self.nonce = p.nonce;
+        self.last_committed = Some(TranscriptEntry {
+            nonce: p.nonce,
+            by: self.seat,
+            mv: p.mv,
+            state_hash: p.state_hash,
+            timestamp: p.timestamp,
+            party_a_balance: p.party_a_balance,
+            party_b_balance: p.party_b_balance,
+            sig_proposer: p.sig_proposer,
+            sig_responder: a.sig_responder,
+        });
         Ok(Vec::new())
     }
 }
@@ -329,6 +400,29 @@ mod tests {
     }
 
     #[test]
+    fn take_last_committed_yields_one_entry_per_commit_on_both_paths() {
+        let (mut a, mut b) = seats();
+        // A proposes; B applies it (peer-move path on B); A acks (our-move path on A).
+        let mv_frame = a.propose(TinyMove, 7).unwrap();
+        let ack = b.handle_frame(&mv_frame).unwrap();
+        // B committed a peer move authored by A.
+        let b_entry = b.take_last_committed().expect("b commit");
+        assert_eq!(b_entry.nonce, 1);
+        assert_eq!(b_entry.by, Seat::A);
+        assert_eq!(b_entry.timestamp, 7);
+        assert_eq!(b_entry.party_a_balance, 4);
+        assert_eq!(b_entry.party_b_balance, 6);
+        assert!(b.take_last_committed().is_none()); // taken once
+
+        a.handle_frame(&ack[0]).unwrap();
+        let a_entry = a.take_last_committed().expect("a commit");
+        assert_eq!(a_entry.nonce, 1);
+        assert_eq!(a_entry.by, Seat::A); // A authored it
+        assert_eq!(a_entry.timestamp, 7);
+        assert_eq!(a_entry.sig_responder, b_entry.sig_responder); // same ACK signature
+    }
+
+    #[test]
     fn tampered_ack_signature_is_rejected() {
         let (mut a, mut b) = seats();
         let mv_frame = a.propose(TinyMove, 1).unwrap();
@@ -371,5 +465,38 @@ mod tests {
         };
         let err = fresh.handle_frame(&mv_frame).unwrap_err();
         assert!(matches!(err, HarnessError::Verification(_)));
+    }
+
+    // A resend whose original ACK was merely delayed produces a second ACK for an
+    // already-committed nonce. The proposer must absorb it, not abort the match.
+    #[test]
+    fn duplicate_ack_is_idempotent_noop() {
+        let (mut a, mut b) = seats();
+        let mv = a.propose(TinyMove, 1).unwrap();
+        let ack = b.handle_frame(&mv).unwrap();
+        assert!(a.handle_frame(&ack[0]).unwrap().is_empty());
+        assert_eq!(a.nonce(), 1);
+        // Feeding the very same ACK again is a no-op, not "unexpected ack".
+        assert!(a.handle_frame(&ack[0]).unwrap().is_empty());
+        assert_eq!(a.nonce(), 1);
+        assert!(!a.has_pending());
+    }
+
+    // When the proposer resends a MOVE whose ACK was lost, the responder must re-emit
+    // the identical ACK it already co-signed rather than aborting on a nonce gap, and
+    // must not advance its state a second time.
+    #[test]
+    fn resent_move_is_re_acked_not_nonce_gapped() {
+        let (mut a, mut b) = seats();
+        let mv = a.propose(TinyMove, 1).unwrap();
+        let ack1 = b.handle_frame(&mv).unwrap();
+        assert_eq!(b.nonce(), 1);
+        let ack2 = b.handle_frame(&mv).unwrap();
+        assert_eq!(ack1, ack2); // same co-signed ACK, re-emitted
+        assert_eq!(b.nonce(), 1); // no double-apply
+        assert_eq!(b.balances(), Balances { a: 4, b: 6 });
+        // The resurfaced ACK still lets the proposer commit exactly once.
+        a.handle_frame(&ack2[0]).unwrap();
+        assert_eq!(a.nonce(), 1);
     }
 }

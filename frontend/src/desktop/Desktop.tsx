@@ -9,7 +9,7 @@ import { ChevronDown, Eye, Plus, X } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 
 import "../games"; // register all game modules (side-effect import)
-import { get, listByWorkspace } from "../games/registry";
+import { get, listByWorkspace, arenaGameIdForModule } from "../games/registry";
 import type { GameModule, Workspace } from "../games/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +49,8 @@ import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useCurrentAccount } from "@mysten/dapp-kit";
+import { requestArenaGame } from "@/onchain/arenaLazyEntry";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
 import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
 import { SystemDashboard } from "../panels/SystemDashboard";
@@ -62,9 +64,6 @@ import { MobileAddSheet } from "./MobileAddSheet";
 import { AddAppDialog } from "./AddAppDialog";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import type { MobileSection } from "./AppShell";
-import { toast } from "sonner";
-import { engineClient } from "@/engine/engineClient";
-import { engineEnabled } from "@/engine/flag";
 
 type DockSide = "bottom" | "right";
 
@@ -336,6 +335,9 @@ function MobileLive() {
  * tab bar live in AppShell so this view swaps without remounting the chrome.
  */
 export function ArenaView() {
+  // The connected wallet — adding a game window mid-session funds its arena seat for THIS owner (the
+  // connect-time batch in `useArenaAutoEnter` only covered windows already open then).
+  const arenaOwner = useCurrentAccount()?.address;
   // Each workspace keeps its own floor (tiled + minimized + floating windows), all held
   // here so switching workspaces — or adding a window to one you're not on — never resets
   // another. v1: per-workspace shape (replaces the old single-floor layout/hidden/floating).
@@ -556,6 +558,10 @@ export function ArenaView() {
       ...prev,
       [workspace]: tile([...prev[workspace], { id, x: 0, y: 0, ...TILE }]),
     }));
+    // Fund this game's arena seat on the spot (idempotent + coalesced by the shared batcher). No-op if
+    // not arena-wired or no wallet yet — in the latter case the connect-time batch picks it up.
+    const arenaId = arenaGameIdForModule(gameId);
+    if (arenaId && arenaOwner) void requestArenaGame(arenaId, arenaOwner);
     return id;
   };
 
@@ -564,23 +570,13 @@ export function ArenaView() {
   const openApp = (module: GameModule) => {
     setAddOpen(false);
     const workspace = module.workspace ?? "games";
-    // Warn BEFORE opening if the device is already at the self-play worker cap (design §2.1): a new
-    // solo window past the cap gets no worker (CAPPED_SNAPSHOT) and just sits idle. Only meaningful
-    // under the worker engine; PvP windows share the hub and never count against the cap.
-    if (engineEnabled()) {
-      const { live, max, atCap } = engineClient.liveWindowStats();
-      if (atCap)
-        toast.warning(`Device limit: ${max} live self-play games`, {
-          description: `${live}/${max} workers are running. A new window won't get its own worker (it'll sit idle) until you close one.`,
-        });
-    }
     const id = addWindowTo(workspace, module.id);
     goToSection(workspace);
     revealWindow(id);
   };
 
   // One window per workspace module not already on this floor.
-  const addAll = () =>
+  const addAll = () => {
     setLayout((cur) => {
       const present = new Set(cur.map((w) => gameOf(w.id)));
       const adds = listByWorkspace(floorWs)
@@ -588,6 +584,16 @@ export function ArenaView() {
         .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...TILE }));
       return tile([...cur, ...adds]);
     });
+    // Fund each newly-added arena game (best-effort coalesce; addAll isn't the one-popup connect path).
+    if (arenaOwner) {
+      const present = new Set(layout.map((w) => gameOf(w.id)));
+      for (const m of listByWorkspace(floorWs)) {
+        if (present.has(m.id)) continue;
+        const arenaId = arenaGameIdForModule(m.id);
+        if (arenaId) void requestArenaGame(arenaId, arenaOwner);
+      }
+    }
+  };
 
   // Tear down every open/hidden/floating window's live session (sockets, timers) —
   // shared by both the Reset-layout and Remove-all confirmations before they clear.
@@ -899,7 +905,7 @@ export function ArenaView() {
           const win = (
             <GameWindow
               title={mod.name}
-              icon={<GameTpsBadge windowId={item.id} />}
+              icon={<GameTpsBadge gameId={gameOf(item.id)} />}
               domId={item.id}
               dragHandleProps={
                 fl ? floatDragProps(item.id) : handle.dragHandleProps
@@ -910,9 +916,8 @@ export function ArenaView() {
               onRestore={fl ? () => dockFloat(item.id) : undefined}
               onClose={() => close(item.id)}
             >
-              {/* Shared arcade cabinet + the game, isolated in a memo so a floor re-render
-                  (a sibling drag, a telemetry tick) doesn't re-render this game. Inert for
-                  games that don't register a CabinetController yet. */}
+              {/* The game, isolated in a memo so a floor re-render (a sibling drag, a
+                  telemetry tick) doesn't re-render this game. */}
               <GameContent
                 gameId={gameOf(item.id)}
                 windowId={item.id}

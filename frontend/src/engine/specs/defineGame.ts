@@ -12,19 +12,13 @@
  * import cycle — under a cycle the `const PVP_SPECS` initializer would be in its temporal dead
  * zone when a spec's top-level `defineGame(...)` runs.
  */
-import type { GameSessionSpec, SoloGameSpec } from "../engineApi";
+import type { GameSessionSpec } from "../engineApi";
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
 export type AnySpec = GameSessionSpec<any, any, any, any, any>;
-/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-export type AnySoloSpec = SoloGameSpec<any, any, any, any, any>;
 
 /** gameId → spec, populated by `defineGame` import side-effects. */
 const PVP_SPECS = new Map<string, AnySpec>();
-
-/** gameId → self-play spec, populated by `defineSoloGame` import side-effects (the solo lane's
- *  parallel to {@link PVP_SPECS}; a game may register in either or both). */
-const SOLO_SPECS = new Map<string, AnySoloSpec>();
 
 /**
  * Register `spec` under its canonical `game` id and return it unchanged, so a spec module can
@@ -48,25 +42,4 @@ export function defineGame<S extends AnySpec>(spec: S): S {
 /** Look up a registered spec by its canonical game id (called inside the worker). */
 export function getSpec(gameId: string): AnySpec | undefined {
   return PVP_SPECS.get(gameId);
-}
-
-/**
- * Register `spec` for the self-play lane under its canonical `game` id and return it unchanged, so a
- * spec module can export and self-register in one statement. Mirrors {@link defineGame}; a separate
- * map because solo specs ({@link AnySoloSpec}) and PvP specs are distinct shapes routed to distinct
- * engines. Throws on a duplicate solo id (silent overwrite would mis-route a session).
- */
-export function defineSoloGame<S extends AnySoloSpec>(spec: S): S {
-  // Idempotent: Vite HMR re-executes modules; re-registering the same id is a no-op.
-  const existing = SOLO_SPECS.get(spec.game);
-  if (existing && existing !== spec) {
-    throw new Error(`duplicate solo game spec registered for "${spec.game}"`);
-  }
-  SOLO_SPECS.set(spec.game, spec);
-  return spec;
-}
-
-/** Look up a registered self-play spec by its canonical game id (called inside the worker). */
-export function getSoloSpec(gameId: string): AnySoloSpec | undefined {
-  return SOLO_SPECS.get(gameId);
 }

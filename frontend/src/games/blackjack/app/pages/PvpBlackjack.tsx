@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
@@ -18,7 +17,7 @@ import {
 
 import { SketchDefs } from "@/games/blackjack/app/App";
 
-const MIN_BUYIN = 1000;
+const MIN_BUYIN = 100;
 const chipsToSui = (chips: bigint) =>
   (Number(chips) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 });
 
@@ -44,7 +43,6 @@ function statusText(g: PvpView): string {
 
 export default function PvpBlackjack({ windowId }: { windowId: string }) {
   const g = useRoutedPvpBlackjack(windowId);
-  const navigate = useGameNavigate();
   const { isPortrait } = useGameScale();
   const account = useCurrentAccount();
   useEffect(() => {
@@ -255,12 +253,9 @@ export default function PvpBlackjack({ windowId }: { windowId: string }) {
         <div className="bj-felt w-full h-full relative">
           {playing && (
             <button
-              onClick={() => {
-                g.leave();
-                navigate("/");
-              }}
+              onClick={() => g.leave()}
               className="qp-btn !px-4 !py-2 !absolute !top-4 !left-4 z-30 !text-sm font-semibold cursor-pointer"
-              title="Back to menu"
+              title="Back"
             >
               ← Back
             </button>
@@ -457,16 +452,6 @@ export default function PvpBlackjack({ windowId }: { windowId: string }) {
           {!playing && (
             <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
               <div className="qp-panel qp-stroke max-w-[min(48rem,95%)] p-10 md:p-12 flex flex-col items-center gap-5 text-center relative">
-                <button
-                  onClick={() => {
-                    g.leave();
-                    navigate("/");
-                  }}
-                  className="qp-btn !px-4 !py-2 !absolute !top-4 !left-4 z-30 !text-sm font-semibold cursor-pointer"
-                  title="Back to menu"
-                >
-                  ← Back to menu
-                </button>
                 <span className="qp-eyebrow">Blackjack · PvP</span>
                 <h2 className="qp-title uppercase text-center mb-1">
                   Blackjack PvP
@@ -503,16 +488,13 @@ export default function PvpBlackjack({ windowId }: { windowId: string }) {
                               }
                               className={`qp-btn !py-2.5 !text-base font-black tabular-nums transition-colors disabled:opacity-40 ${selected ? "qp-btn--go" : ""}`}
                             >
-                              ${amt.toLocaleString()}
+                              {amt.toLocaleString()}
                             </button>
                           );
                         })}
                       </div>
                       {/* Custom buy-in */}
                       <div className="flex items-center gap-2">
-                        <span className="text-[var(--qp-ink)] text-sm font-bold">
-                          $
-                        </span>
                         <input
                           type="number"
                           inputMode="numeric"
@@ -532,7 +514,7 @@ export default function PvpBlackjack({ windowId }: { windowId: string }) {
                       </div>
                       {!isMtpsConfigured && (
                         <div className="text-[11px] text-[var(--qp-ink-soft)] text-center leading-relaxed">
-                          ${Number(g.stake).toLocaleString()} buy-in ≈{" "}
+                          {Number(g.stake).toLocaleString()} buy-in ≈{" "}
                           <span className="font-mono text-emerald-600 font-bold">
                             {chipsToSui(g.stake)} SUI
                           </span>{" "}
@@ -541,7 +523,7 @@ export default function PvpBlackjack({ windowId }: { windowId: string }) {
                       )}
                       {g.stake < BigInt(MIN_BUYIN) && (
                         <div className="text-[var(--qp-red)] text-[11px] text-center font-bold">
-                          minimum buy-in is ${MIN_BUYIN.toLocaleString()}
+                          minimum buy-in is {MIN_BUYIN.toLocaleString()}
                         </div>
                       )}
                     </div>
@@ -567,7 +549,7 @@ export default function PvpBlackjack({ windowId }: { windowId: string }) {
                         ? "Finding opponent…"
                         : g.phase === "connecting"
                           ? "Connecting…"
-                          : "Find match"}
+                          : "Play"}
                     </button>
                     {g.phase === "queuing" && (
                       <button

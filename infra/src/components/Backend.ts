@@ -20,6 +20,15 @@ export interface BackendArgs {
   // Secrets Manager ARN holding the base64 ed25519 settler key, injected as
   // SUI_SETTLER_KEY via ECS `secrets`. Omitted => the env var is simply absent.
   settlerKeySecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the internal-faucet bearer token, injected as FAUCET_ADMIN_TOKEN
+  // via ECS `secrets`. Omitted => POST /v1/faucet/internal stays disabled (503).
+  faucetAdminTokenSecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the Enoki PRIVATE api key, injected as ENOKI_API_KEY via ECS
+  // `secrets`. Omitted => Enoki sponsorship is off and the settler is the sole gas source.
+  enokiApiKeySecretArn?: pulumi.Input<string>;
+  // Secrets Manager ARN for the wallet-pool passphrase (PR #124), injected as WALLET_POOL_ACCESS_VALUE
+  // via ECS `secrets`. Omitted => the pool can't open and the arena opener degrades to Noop.
+  walletPoolAccessSecretArn?: pulumi.Input<string>;
   // Ollama sidecar for the chat-v2 feature. Defaults off so existing tests and
   // small environments keep the current 1024/2048 task size.
   ollamaEnabled?: pulumi.Input<boolean>;
@@ -29,52 +38,72 @@ export interface BackendArgs {
   ollamaImageTag?: pulumi.Input<string>;
   // Comma-separated list of origins allowed by the CORS layer. Omitted => permissive CORS.
   corsAllowedOrigins?: pulumi.Input<string>;
+  // S3 bucket for transcript archival. Injected as S3_TRANSCRIPTS_BUCKET plaintext env.
+  // Omitted => archival disabled.
+  s3TranscriptsBucket?: pulumi.Input<string>;
 }
 
 function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
   const repositoryUrl = pulumi.output(args.repositoryUrl);
   const imageTag = pulumi.output(args.imageTag);
-  const pubSubEndpoint = pulumi.output(args.pubSubEndpoint);
-  const cacheEndpoint = pulumi.output(args.cacheEndpoint);
   const logGroupName = pulumi.output(args.logGroupName);
-  const settlerKeySecretArn = pulumi.output(
-    args.settlerKeySecretArn ?? undefined,
-  );
+  // Bundle the three secret ARNs into one Output so the outer pulumi.all stays an 8-tuple
+  // (its typed overloads stop at 8) — same reason the ollama trio is bundled below.
+  const secretArns = pulumi
+    .all([
+      pulumi.output(args.settlerKeySecretArn ?? undefined),
+      pulumi.output(args.faucetAdminTokenSecretArn ?? undefined),
+      pulumi.output(args.enokiApiKeySecretArn ?? undefined),
+      pulumi.output(args.walletPoolAccessSecretArn ?? undefined),
+    ])
+    .apply(([settler, faucetAdminToken, enoki, walletPoolAccess]) => ({
+      settler,
+      faucetAdminToken,
+      enoki,
+      walletPoolAccess,
+    }));
   const corsAllowedOrigins = pulumi.output(
     args.corsAllowedOrigins ?? undefined,
   );
-  const ollamaEnabled = pulumi.output(args.ollamaEnabled ?? false);
-  const ollamaModel = pulumi.output(args.ollamaModel ?? "qwen2.5:1.5b");
-  const ollamaImageTag = pulumi.output(args.ollamaImageTag ?? "0.6.2");
-  // pulumi.all's tuple overloads stop at 8 elements; bundling the ollama trio
-  // into one output keeps the outer all an 8-tuple, so it stays heterogeneously
-  // typed (the boolean enabled flag alongside the string config) rather than
-  // collapsing to the homogeneous-array overload that rejects the boolean.
   const ollama = pulumi
-    .all([ollamaEnabled, ollamaModel, ollamaImageTag])
+    .all([
+      pulumi.output(args.ollamaEnabled ?? false),
+      pulumi.output(args.ollamaModel ?? "qwen2.5:1.5b"),
+      pulumi.output(args.ollamaImageTag ?? "0.6.2"),
+    ])
     .apply(([enabled, model, imageTag]) => ({ enabled, model, imageTag }));
+  // Bundle the two Redis endpoints (related) so the outer tuple stays at 8 typed slots.
+  const redis = pulumi
+    .all([
+      pulumi.output(args.pubSubEndpoint),
+      pulumi.output(args.cacheEndpoint),
+    ])
+    .apply(([pubsub, cache]) => ({ pubsub, cache }));
+  const s3Cfg = pulumi
+    .all([pulumi.output(args.s3TranscriptsBucket ?? undefined)])
+    .apply(([bucket]) => ({ bucket }));
 
   return pulumi
     .all([
       repositoryUrl,
       imageTag,
-      pubSubEndpoint,
-      cacheEndpoint,
+      redis,
       logGroupName,
-      settlerKeySecretArn,
+      secretArns,
       corsAllowedOrigins,
       ollama,
+      s3Cfg,
     ])
     .apply(
       ([
         repositoryUrl,
         imageTag,
-        pubSubEndpoint,
-        cacheEndpoint,
+        redis,
         logGroupName,
-        settlerKeySecretArn,
+        secretArns,
         corsAllowedOrigins,
         ollama,
+        s3Cfg,
       ]) => {
         const {
           enabled: ollamaEnabled,
@@ -84,11 +113,11 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
         const backendEnv: Array<{ name: string; value: string }> = [
           {
             name: "REDIS_PUBSUB_URL",
-            value: `rediss://${pubSubEndpoint}:6379`,
+            value: `rediss://${redis.pubsub}:6379`,
           },
           {
             name: "REDIS_CACHE_URL",
-            value: `rediss://${cacheEndpoint}:6379`,
+            value: `rediss://${redis.cache}:6379`,
           },
           {
             name: "SUI_RPC_URL",
@@ -99,12 +128,31 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             value:
               "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b",
           },
+          // Slim example-app packages whose ops the sponsor gas-funds when set.
+          {
+            name: "AGENT_ALLOWANCE_PACKAGE_ID",
+            value:
+              "0x36d982ffdcf89c709829650bd6b07128f505f41d8953f48658746291d5bfb679",
+          },
+          {
+            name: "STREAMING_PAYMENT_PACKAGE_ID",
+            value:
+              "0x5125f1e0b65ba5c27cc5eb130ee34133bf55ddc30322cf7099d748f4df23e7ea",
+          },
           // The sponsor only gas-funds MTPS faucet mints + staked tunnel opens whose coin
           // type matches this; without it config defaults to 0x2::sui::SUI and /v1/sponsor 422s.
+          // ADR-0023 admin-mint MTPS package — must own MTPS_ADMIN_CAP_ID below.
           {
             name: "TUNNEL_COIN_TYPE",
             value:
-              "0x62e31a8b5105c16c67936fe129e3db17e5977a8667a3464db583baa89c04272c::mtps::MTPS",
+              "0xe0f8eae320959eb7300cb599a6e7a287355c60b299a7e80a808d9196e0aea8ea::mtps::MTPS",
+          },
+          // AdminCap the faucet signs admin_mint with (ADR-0023). Must be owned by the settler
+          // key and belong to TUNNEL_COIN_TYPE's package; unset => both faucet routes 503.
+          {
+            name: "MTPS_ADMIN_CAP_ID",
+            value:
+              "0x7cc2d628c6ceeefb1e48502b0900eac5bc77f2dd9d170bdc339053e38b03ceae",
           },
           {
             name: "WALRUS_PUBLISHER_URL",
@@ -114,6 +162,12 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             name: "WALRUS_AGGREGATOR_URL",
             value: "https://aggregator.walrus-testnet.walrus.space",
           },
+          ...(s3Cfg.bucket
+            ? [
+                { name: "S3_TRANSCRIPTS_BUCKET", value: s3Cfg.bucket },
+                { name: "AWS_REGION", value: aws.config.region ?? "us-east-1" },
+              ]
+            : []),
           ...(corsAllowedOrigins
             ? [
                 {
@@ -122,6 +176,25 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
                 },
               ]
             : []),
+          // Co-located arena fleet (ADR-0027) + funded seat-B wallet pool (PR #124). UNCONDITIONAL —
+          // unrelated to the Ollama sidecar below. COUNT x served-games <= WALLET_POOL_FUNDED_COUNT
+          // (each match consumes one funded seat-B wallet). GAMES is the served-set gate. The pool also
+          // needs WALLET_POOL_ACCESS_VALUE (Secrets Manager) + s3:GetObject on the task role; absent =>
+          // the opener degrades to Noop. AWS_REGION is required for the in-container S3 SDK (ECS does
+          // not auto-inject it); credentials still come from the task role.
+          { name: "FLEET_COLOCATED_COUNT", value: "5000" },
+          {
+            name: "FLEET_COLOCATED_GAMES",
+            value:
+              "quantum_poker,bomb_it,chicken_cross,world_canvas,blackjack,tic_tac_toe,caro,battleship",
+          },
+          { name: "WALLET_POOL_ID", value: "wp_cjmok4DQgZDpAooCGNjmqg" },
+          {
+            name: "WALLET_POOL_S3_BUCKET",
+            value: "dev-env-dopamint-wallet-pool",
+          },
+          { name: "WALLET_POOL_FUNDED_COUNT", value: "5000" },
+          { name: "AWS_REGION", value: aws.config.region ?? "us-east-1" },
         ];
 
         if (ollamaEnabled) {
@@ -131,23 +204,41 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           );
         }
 
+        // Secrets injected from Secrets Manager at launch — never inlined as plaintext env
+        // (a task definition is readable via ecs:DescribeTaskDefinition / committed to git).
+        const backendSecrets: Array<{ name: string; valueFrom: string }> = [];
+        if (secretArns.settler) {
+          backendSecrets.push({
+            name: "SUI_SETTLER_KEY",
+            valueFrom: secretArns.settler,
+          });
+        }
+        if (secretArns.faucetAdminToken) {
+          backendSecrets.push({
+            name: "FAUCET_ADMIN_TOKEN",
+            valueFrom: secretArns.faucetAdminToken,
+          });
+        }
+        if (secretArns.enoki) {
+          backendSecrets.push({
+            name: "ENOKI_API_KEY",
+            valueFrom: secretArns.enoki,
+          });
+        }
+        if (secretArns.walletPoolAccess) {
+          backendSecrets.push({
+            name: "WALLET_POOL_ACCESS_VALUE",
+            valueFrom: secretArns.walletPoolAccess,
+          });
+        }
+
         const backendContainer = {
           name: "backend",
           image: `${repositoryUrl}:${imageTag}`,
           essential: true,
           portMappings: [{ containerPort: 8080, protocol: "tcp" }],
           environment: backendEnv,
-          // Private key: injected from Secrets Manager, never inlined as plaintext env.
-          ...(settlerKeySecretArn
-            ? {
-                secrets: [
-                  {
-                    name: "SUI_SETTLER_KEY",
-                    valueFrom: settlerKeySecretArn,
-                  },
-                ],
-              }
-            : {}),
+          ...(backendSecrets.length > 0 ? { secrets: backendSecrets } : {}),
           logConfiguration: {
             logDriver: "awslogs",
             options: {
@@ -210,10 +301,14 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
 function makeMigrationContainerDefinitions(
   args: BackendArgs,
 ): pulumi.Output<string> {
+  const repositoryUrl = pulumi.output(args.repositoryUrl);
+  const imageTag = pulumi.output(args.imageTag);
+  const logGroupName = pulumi.output(args.logGroupName);
+
   return pulumi
-    .all([args.repositoryUrl, args.imageTag, args.logGroupName])
-    .apply(([repositoryUrl, imageTag, logGroupName]) =>
-      JSON.stringify([
+    .all([repositoryUrl, imageTag, logGroupName])
+    .apply(([repositoryUrl, imageTag, logGroupName]) => {
+      return JSON.stringify([
         {
           name: "migrate",
           image: `${repositoryUrl}:${imageTag}`,
@@ -228,8 +323,8 @@ function makeMigrationContainerDefinitions(
             },
           },
         },
-      ]),
-    );
+      ]);
+    });
 }
 
 export function createBackend(args: BackendArgs): BackendOutputs {
