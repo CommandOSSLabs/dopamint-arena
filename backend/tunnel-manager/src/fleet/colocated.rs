@@ -119,7 +119,10 @@ pub async fn join_and_spawn(
 
     let Some(secret) = secret_from_hex(&rec.eph_secret_hex) else {
         state.fleet.release_arena();
-        tracing::error!(match_id, "arena reservation carried an unreadable eph secret");
+        tracing::error!(
+            match_id,
+            "arena reservation carried an unreadable eph secret"
+        );
         return Err("unknown_arena_match");
     };
     let match_key = DurableSigner::from_secret(&secret);
@@ -152,7 +155,10 @@ pub async fn join_and_spawn(
             .to_text(),
         )
         .await;
-    state.bus.populate(&user_conn, match_id, &match_record).await;
+    state
+        .bus
+        .populate(&user_conn, match_id, &match_record)
+        .await;
     tracing::info!(
         match_id,
         game = %rec.game,

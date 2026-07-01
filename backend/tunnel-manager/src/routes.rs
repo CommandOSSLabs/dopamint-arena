@@ -1622,7 +1622,8 @@ mod arena_tests {
     #[tokio::test]
     async fn allocate_shares_one_bot_address_but_keeps_per_match_identity_distinct() {
         let games = ["blackjack", "caro", "tic_tac_toe"];
-        let state = AppState::in_memory_with_arena_fleet(3, games.iter().map(|g| g.to_string()).collect());
+        let state =
+            AppState::in_memory_with_arena_fleet(3, games.iter().map(|g| g.to_string()).collect());
         let resp = arena_allocate(
             State(state),
             Json(ArenaAllocateRequest {
@@ -1633,18 +1634,34 @@ mod arena_tests {
         .await;
 
         let allocs = &resp.0.allocations;
-        assert_eq!(allocs.len(), 3, "all three served + profiled games allocate");
+        assert_eq!(
+            allocs.len(),
+            3,
+            "all three served + profiled games allocate"
+        );
 
         let uniq = |f: &dyn Fn(&ArenaAllocation) -> String| {
-            allocs.iter().map(f).collect::<std::collections::HashSet<_>>().len()
+            allocs
+                .iter()
+                .map(f)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
         };
         assert_eq!(
             uniq(&|a| a.bot_address.clone()),
             1,
             "one shared seat-B address across the whole batch"
         );
-        assert_eq!(uniq(&|a| a.match_id.clone()), 3, "distinct match id per game");
-        assert_eq!(uniq(&|a| a.tunnel_id.clone()), 3, "distinct tunnel per game");
+        assert_eq!(
+            uniq(&|a| a.match_id.clone()),
+            3,
+            "distinct match id per game"
+        );
+        assert_eq!(
+            uniq(&|a| a.tunnel_id.clone()),
+            3,
+            "distinct tunnel per game"
+        );
         assert_eq!(
             uniq(&|a| a.bot_eph_pubkey.clone()),
             3,
@@ -1652,8 +1669,12 @@ mod arena_tests {
         );
 
         for a in allocs {
-            let profile = fleet_core::play_match::profile_for(&a.game).expect("served game has a profile");
-            assert_eq!(a.stake_each, profile.stake_each, "stake comes from the game profile");
+            let profile =
+                fleet_core::play_match::profile_for(&a.game).expect("served game has a profile");
+            assert_eq!(
+                a.stake_each, profile.stake_each,
+                "stake comes from the game profile"
+            );
         }
     }
 }

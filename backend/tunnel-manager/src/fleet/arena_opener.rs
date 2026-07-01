@@ -276,7 +276,10 @@ impl SuiArenaOpener {
                 .context("user ephemeral pubkey hex")?;
             let bot_pk = hex::decode(r.bot_eph_pubkey.trim_start_matches("0x"))
                 .context("bot ephemeral pubkey hex")?;
-            anyhow::ensure!(user_pk.len() == 32, "user ephemeral pubkey must be 32 bytes");
+            anyhow::ensure!(
+                user_pk.len() == 32,
+                "user ephemeral pubkey must be 32 bytes"
+            );
             anyhow::ensure!(bot_pk.len() == 32, "bot ephemeral pubkey must be 32 bytes");
             want_pks.push(hex::encode(&bot_pk));
             games.push((user_addr, user_pk, bot_pk, r.stake_each));
@@ -285,7 +288,10 @@ impl SuiArenaOpener {
         let kind =
             build_arena_open_kind_many(self.package_id, self.coin_type.clone(), bot_addr, &games)?;
         let kind_bytes = bcs::to_bytes(&kind).context("bcs arena batch open kind")?;
-        let (tx, settler_sig) = self.settler.sponsor_arena_open(bot_addr, &kind_bytes).await?;
+        let (tx, settler_sig) = self
+            .settler
+            .sponsor_arena_open(bot_addr, &kind_bytes)
+            .await?;
         let bot_sig = signer
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign arena batch open tx: {e}"))?;
