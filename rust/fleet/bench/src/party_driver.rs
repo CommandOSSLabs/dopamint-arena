@@ -26,6 +26,13 @@ use tunnel_telemetry::{CollectingSink, StageId, TelemetrySink};
 
 pub(crate) const CREATED_AT: u64 = 1_234_567_890;
 
+/// Liveness bound for the in-process seat A/B rendezvous on the sponsored-Sui
+/// path. Generous versus any real chain round-trip so it never false-aborts a
+/// slow settle, but well under `swarm::TUNNEL_DRAIN_TIMEOUT` so a seat that never
+/// produces its half fails its own tunnel and frees the pool slot mid-run instead
+/// of parking it until the end-of-run drain.
+const BENCH_PAIR_TIMEOUT: Duration = Duration::from_secs(45);
+
 #[derive(Clone)]
 pub struct SuiSponsoredBenchContext {
     anchor: Arc<SuiSponsoredAnchor>,
@@ -104,7 +111,9 @@ pub struct TunnelOutcome {
     pub settle_ok: bool,
     /// Merged telemetry samples from anchor + both transports + both recorders.
     pub sink: CollectingSink,
-    /// Serialized transcript bytes (0 for now; wired in D4).
+    /// Serialized transcript bytes exported by this tunnel — the exact sum of its
+    /// recorder-export sample costs. Nonzero only when the recorder-export stage is
+    /// instrumented (`--per-move-latency` with a transcript recorder).
     pub export_bytes: u64,
 }
 
@@ -379,7 +388,7 @@ impl BenchSubmitter {
         inner: &BenchAnchorInner,
         request: TunnelOpenRequest,
     ) -> OpenResult {
-        self.open_as_seat_with_pair_timeout(seat, inner, request, None)
+        self.open_as_seat_with_pair_timeout(seat, inner, request, Some(BENCH_PAIR_TIMEOUT))
             .await
     }
 
@@ -431,7 +440,7 @@ impl BenchSubmitter {
         inner: &BenchAnchorInner,
         request: TunnelSettleRequest,
     ) -> SettleResult {
-        self.settle_as_seat_with_pair_timeout(seat, inner, request, None)
+        self.settle_as_seat_with_pair_timeout(seat, inner, request, Some(BENCH_PAIR_TIMEOUT))
             .await
     }
 
@@ -1057,6 +1066,16 @@ where
 
     let reference_outcome = outcome_a.as_ref().or(outcome_b.as_ref());
 
+    // Exact per-tunnel transcript-export bytes, summed from this tunnel's own
+    // recorder-export samples. Carried as a scalar so the run-level total stays
+    // exact rather than being re-derived from the bounded sample reservoir.
+    let export_bytes: u64 = sink
+        .samples()
+        .iter()
+        .filter(|s| s.stage == StageId::RecorderExport)
+        .map(|s| s.cost.bytes)
+        .sum();
+
     TunnelOutcome {
         moves: reference_outcome.map_or(0, |outcome| outcome.moves),
         bytes: bytes_a + bytes_b,
@@ -1066,7 +1085,7 @@ where
         open_ok,
         settle_ok,
         sink,
-        export_bytes: 0,
+        export_bytes,
     }
 }
 

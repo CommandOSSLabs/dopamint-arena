@@ -70,7 +70,7 @@ fn run_label(anchor_mode: AnchorMode) -> &'static str {
 
 pub fn format_resources(r: &ResourceSummary) -> String {
     format!(
-        "cpu avg={:.1} cores ({:.0}%) peak={:.1} cores ({:.0}%), rss avg={}MB peak={}MB, samples={}",
+        "cpu avg={:.1} cores (host {:.0}%) peak={:.1} cores (host {:.0}%), rss avg={}MB peak={}MB, samples={}",
         r.cpu_cores_avg,
         r.cpu_pct_avg,
         r.cpu_cores_peak,
@@ -563,7 +563,7 @@ mod tests {
     fn format_resources_matches_loadbench_shape() {
         assert_eq!(
             format_resources(&res()),
-            "cpu avg=11.2 cores (93%) peak=12.0 cores (100%), rss avg=58MB peak=63MB, samples=30"
+            "cpu avg=11.2 cores (host 93%) peak=12.0 cores (host 100%), rss avg=58MB peak=63MB, samples=30"
         );
     }
 

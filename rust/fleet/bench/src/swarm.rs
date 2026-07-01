@@ -65,7 +65,28 @@ pub(crate) struct TunnelSample {
     total_ns: u128,
     open_ok: bool,
     settle_ok: bool,
+    /// Exact serialized transcript bytes exported by this tunnel.
+    export_bytes: u64,
     sink: CollectingSink,
+}
+
+/// How a tunnel task obtains its seat keys. `Fresh` defers key generation into
+/// the spawned task so per-tunnel keygen runs across the worker pool instead of
+/// serializing on the single refill coordinator.
+enum SeatKitSource {
+    /// Boxed so the zero-data `Fresh` variant — the hot refill path — stays
+    /// pointer-sized to move, instead of carrying a full `SeatKit` inline.
+    Preinitialized(Box<SeatKit>),
+    Fresh,
+}
+
+impl SeatKitSource {
+    fn resolve(self) -> SeatKit {
+        match self {
+            SeatKitSource::Preinitialized(kit) => *kit,
+            SeatKitSource::Fresh => random_seat_kit(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +216,7 @@ fn aggregate(
     let tunnels_failed = tunnels_claimed.saturating_sub(tunnels_settled);
     let moves = samples.moves;
     let bytes = samples.bytes;
+    let transcript_export_bytes = samples.export_bytes_total;
     let play_ns_total = samples.play_ns_total;
     let total_ns_total = samples.total_ns_total;
     let retained = samples.reservoir;
@@ -220,9 +242,9 @@ fn aggregate(
             .collect::<Vec<_>>(),
     );
     let telemetry = RunTelemetry::from_sinks(retained.iter().map(|s| s.sink.clone()).collect());
-    // Single source of truth: export bytes come from the recorder's measured
-    // `RecorderExport` samples, never double-counted with a separate total.
-    let transcript_export_bytes = telemetry.export_bytes_total();
+    // `transcript_export_bytes` is the exact per-tunnel running total above, not
+    // `telemetry.export_bytes_total()` — the latter sums only the bounded reservoir
+    // of sinks and would undercount once the run exceeds `SAMPLE_RESERVOIR_CAP`.
 
     SwarmOutcome {
         moves,
@@ -261,10 +283,13 @@ async fn run_one_tunnel(
     initial_balance: u64,
     max_moves_per_tunnel: u64,
     telemetry: TunnelTelemetry,
-    kit: SeatKit,
+    kit_source: SeatKitSource,
     run_control: Option<DriverRunControl>,
     stage_windows: Option<StageWindowRecorder>,
 ) -> TunnelSample {
+    // Resolve seat keys inside the task so `Fresh` keygen parallelizes across the
+    // worker pool rather than serializing on the refill coordinator.
+    let kit = kit_source.resolve();
     let tunnel_id = tunnel_id_for(tunnel_index);
     tracing::debug!(
         tunnel_index,
@@ -311,6 +336,7 @@ async fn run_one_tunnel(
         total_ns: r.e2e_ns,
         open_ok: r.open_ok,
         settle_ok: r.settle_ok,
+        export_bytes: r.export_bytes,
         sink: r.sink,
     }
 }
@@ -349,6 +375,9 @@ struct TunnelSamples {
     settled: u64,
     moves: u64,
     bytes: u64,
+    /// Exact transcript-export bytes across every tunnel, tracked as a running
+    /// scalar so the headline total stays exact independent of the reservoir.
+    export_bytes_total: u64,
     play_ns_total: u128,
     total_ns_total: u128,
     reservoir: Vec<TunnelSample>,
@@ -363,6 +392,7 @@ impl TunnelSamples {
             settled: 0,
             moves: 0,
             bytes: 0,
+            export_bytes_total: 0,
             play_ns_total: 0,
             total_ns_total: 0,
             reservoir: Vec::new(),
@@ -380,6 +410,7 @@ impl TunnelSamples {
         }
         self.moves += sample.moves;
         self.bytes += sample.bytes;
+        self.export_bytes_total += sample.export_bytes;
         self.play_ns_total += sample.play_ns;
         self.total_ns_total += sample.total_ns;
 
@@ -512,11 +543,14 @@ pub fn run_lifecycle_pipeline(
     let stage_windows = StageWindowRecorder::new();
     let stage_windows_for_tasks = stage_windows.clone();
     let (samples, move_window_elapsed_ms, tunnels_aborted) = runtime.block_on(async move {
-        let kit_for = |index: u64| -> SeatKit {
+        let kit_source_for = |index: u64| -> SeatKitSource {
             if preinitialize {
-                preinit_kits[index as usize % preinit_kits.len()].clone()
+                SeatKitSource::Preinitialized(Box::new(
+                    preinit_kits[index as usize % preinit_kits.len()].clone(),
+                ))
             } else {
-                random_seat_kit()
+                // Defer keygen into the task so it runs on a worker, not here.
+                SeatKitSource::Fresh
             }
         };
         let spawn_tunnel = |tasks: &mut JoinSet<TunnelSample>, index: u64| {
@@ -530,7 +564,7 @@ pub fn run_lifecycle_pipeline(
                 initial_balance,
                 max_moves_per_tunnel,
                 telemetry.clone(),
-                kit_for(index),
+                kit_source_for(index),
                 Some(run_control_for_tasks.clone()),
                 Some(stage_windows_for_tasks.clone()),
             ));
@@ -617,6 +651,10 @@ pub fn run_lifecycle_pipeline(
             tunnels_aborted,
         )
     });
+    // Freeze wall time the instant the measured run's tasks finish, before the
+    // shutdown grace below — otherwise a slow telemetry backend's drain would
+    // dilate `elapsed_ms` and deflate wall move-TPS.
+    let elapsed_ms = started.elapsed().as_millis();
     // Give detached telemetry (fire-and-forget heartbeat POSTs) a bounded window
     // to finish; an implicit runtime drop would cancel them mid-request.
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_GRACE);
@@ -630,7 +668,6 @@ pub fn run_lifecycle_pipeline(
         .unwrap_or_default();
     let gas = gas_delta(gas_before, gas_after);
     let sui_ptb_metrics = ptb_metrics_delta(ptb_metrics_before, ptb_metrics_after);
-    let elapsed_ms = started.elapsed().as_millis();
     let open_active_elapsed_ms = stage_windows
         .active_elapsed_ms(tunnel_telemetry::StageId::Open)
         .min(elapsed_ms);
@@ -775,6 +812,7 @@ mod tests {
             total_ns: 2_000_000_000,
             open_ok: true,
             settle_ok: true,
+            export_bytes: 0,
             sink: CollectingSink::with_capacity(0),
         }
     }
@@ -812,6 +850,21 @@ mod tests {
         assert_eq!(samples.claimed, n);
         assert_eq!(samples.committed_moves(), n * 3);
         // ...while retained per-tunnel samples never exceed the reservoir cap.
+        assert_eq!(samples.reservoir.len(), SAMPLE_RESERVOIR_CAP);
+    }
+
+    #[test]
+    fn export_bytes_total_stays_exact_beyond_reservoir_cap() {
+        let mut samples = TunnelSamples::new();
+        let n = SAMPLE_RESERVOIR_CAP as u64 + 1_000;
+        for _ in 0..n {
+            let mut sample = sample_with_tps(1.0);
+            sample.export_bytes = 7;
+            samples.record(sample);
+        }
+        // Exact running scalar across every tunnel — not a sum over the bounded
+        // reservoir, which would undercount once the run exceeds the cap.
+        assert_eq!(samples.export_bytes_total, n * 7);
         assert_eq!(samples.reservoir.len(), SAMPLE_RESERVOIR_CAP);
     }
 
@@ -997,7 +1050,7 @@ mod tests {
                                     record_transcript: false,
                                     heartbeat: None,
                                 },
-                                random_seat_kit(),
+                                SeatKitSource::Preinitialized(Box::new(random_seat_kit())),
                                 Some(run_control),
                                 None,
                             )
