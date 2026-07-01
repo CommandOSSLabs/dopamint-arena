@@ -188,6 +188,74 @@ test("verifyTranscriptEntries: root mismatch vs the on-chain anchor is detected"
   assert.equal(v.ok, false);
 });
 
+// Cross-language root parity for the CHUNK path: reproduce the exact fixture the Rust bot pins in
+// tunnel-harness `transcript_root_matches_the_ts_merkle_fixture`, then prove (a) TS recomputes the
+// same root and (b) the header-less reassembled chunks verify against that on-chain root. This is
+// the "bot root == recomputed root == on-chain root" contract for entries-only chunks.
+const PARITY_TID = "0x" + "55".repeat(32);
+function fill(byte: number, n: number): Uint8Array {
+  return new Uint8Array(n).fill(byte);
+}
+function parityEntry(
+  nonce: bigint,
+  a: bigint,
+  b: bigint,
+  sigAByte: number,
+  sigBByte: number
+): TranscriptEntry {
+  // Mirrors Rust `parity_entry` (Seat::A: sig_a=proposer, sig_b=responder).
+  const stateHash = Uint8Array.from(
+    { length: 32 },
+    (_, i) => (i + Number(nonce)) & 0xff
+  );
+  const message = serializeStateUpdate({
+    tunnelId: PARITY_TID,
+    stateHash,
+    nonce,
+    timestamp: 1000n + nonce,
+    partyABalance: a,
+    partyBBalance: b,
+  });
+  return { nonce, message, sigA: fill(sigAByte, 64), sigB: fill(sigBByte, 64) };
+}
+
+test("cross-language: TS root + entries-only verify match the Rust golden fixture", () => {
+  const entries = [
+    parityEntry(1n, 90n, 110n, 0x11, 0x22),
+    parityEntry(2n, 95n, 105n, 0x33, 0x44),
+    parityEntry(3n, 80n, 120n, 0x55, 0x66),
+  ];
+  // The exact root the Rust recorder computes over these entries (tunnel-harness golden).
+  const RUST_ROOT =
+    "1d96600288a81c30db9384dca7be6d9904bfeb062efd28b9d74bd1fb2d61df30";
+  assert.equal(toHex(transcriptRoot(entries.map(transcriptLeaf))), RUST_ROOT);
+
+  // The header-less bytes the explorer reassembles from the bot's chunks (body minus 229B header).
+  const entriesOnly = encodeSettleBody({
+    tunnelId: PARITY_TID,
+    partyABalance: 0n,
+    partyBBalance: 0n,
+    finalNonce: 0n,
+    timestamp: 0n,
+    transcriptRoot: fill(0, 32),
+    sigA: fill(0, 64),
+    sigB: fill(0, 64),
+    entries: entries.map((e) => ({
+      message: e.message,
+      sigA: e.sigA,
+      sigB: e.sigB,
+    })),
+  }).slice(229);
+  const v = verifyTranscriptEntries(entriesOnly, {
+    ...VPARTIES,
+    onchainRoot: RUST_ROOT,
+  });
+  // Root recomputed from the chunk bytes matches the on-chain anchor (sigs are fixture bytes, so
+  // allSigsValid is expectedly false — the root parity is what this golden asserts).
+  assert.equal(v.rootMatches, true);
+  assert.equal(v.stepCount, 3);
+});
+
 test("verifyTranscript: a forged signature is detected (mutual authorization)", () => {
   // Forge the sig BEFORE computing the root, so the leaf commits to the bad sig and
   // only the per-entry verify trips — rootMatches stays true.
