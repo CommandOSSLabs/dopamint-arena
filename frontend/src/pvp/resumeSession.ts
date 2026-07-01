@@ -74,8 +74,9 @@ export interface AttachResumeArgs<State, Move> {
   };
 }
 
-/** Build the full ResumeRecord from the live tunnel snapshot + static identity + adapter. */
-function buildRecord<State, Move>(
+/** Build the full ResumeRecord from the live tunnel snapshot + static identity + adapter.
+ *  Exported for unit testing of the terminal stamp; production callers use it via `attachResume`. */
+export function buildRecord<State, Move>(
   tunnel: DistributedTunnel<State, Move>,
   adapter: ResumeAdapter<State, Move>,
   identity: ResumeIdentity,
@@ -95,6 +96,9 @@ function buildRecord<State, Move>(
         }
       : undefined,
     secret: adapter.captureSecret ? adapter.captureSecret() : undefined,
+    // Stamp terminality here (proto in hand) so the proto-less arena allocate can tell a finished
+    // match from an in-flight one and not suppress a fresh game after a settle+reload.
+    terminal: tunnel.protocol.isTerminal(snap.state),
     updatedAt: Date.now(),
   };
 }
@@ -217,6 +221,17 @@ export function resumeActiveTunnels<State, Move>(
     const record = readResumeRecord(tunnelId);
     if (!record || record.game !== gameId) continue;
     try {
+      // A record whose persisted state is already terminal is a finished match: settle either
+      // completed (record is stale) or was interrupted. Rebuilding it seats a live "playing"
+      // tunnel that strands the settled board on refresh and blocks a new match. Drop it so the
+      // hook stays idle and the arena allocates a fresh game. Checked pre-rebuild to avoid the
+      // markActive/channel side effects, and heals records already on disk (no field needed).
+      if (
+        spec.proto.isTerminal(spec.adapter.deserializeState(record.latestState))
+      ) {
+        clearResumeRecord(tunnelId);
+        continue;
+      }
       out.push(rebuildTunnel(mp, record, spec, ctx));
     } catch {
       clearResumeRecord(tunnelId); // unrestorable → drop; user falls through to a fresh match

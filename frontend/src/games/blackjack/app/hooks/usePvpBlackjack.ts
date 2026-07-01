@@ -896,19 +896,11 @@ export function usePvpBlackjack(): PvpView {
           // No create/deposit: the fleet pre-created the tunnel + funded seat B, and seat A was funded
           // by the batched `enterArena` PTB. Both seats stake the fixed arena buy-in (allocation).
           const stake = BigInt(allocation.stakeEach);
-          const obj = await client.getObject({
-            id: allocation.tunnelId,
-            options: { showContent: true },
-          });
-          const fields = (
-            obj.data?.content as
-              | { fields?: Record<string, unknown> }
-              | undefined
-          )?.fields;
-          createdAtRef.current = BigInt(
-            (fields?.created_at as string | undefined) ?? 0,
-          );
-
+          // `created_at` is only needed at settle (see finishSettle / leave). Fetching it HERE blocks
+          // the tunnel build on a Sui RPC, and under RPC load that stalls the whole match — the bet
+          // can never fire because `tunnelRef` never gets set (this is why blackjack "never" started
+          // while poker, which reads it lazily, did). Build the engine now; populate created_at in the
+          // background below so settle still has it.
           const backend = core.defaultBackend();
           const t = new core.DistributedTunnel<BlackjackState, BlackjackMove>(
             proto,
@@ -946,6 +938,25 @@ export function usePvpBlackjack(): PvpView {
             opponentPubkeyHex: oppHello,
             selfEphemeralSecretHex: bytesToHex(eph.secretKey),
           });
+
+          // Fetch created_at for settle WITHOUT blocking play (the game is already live above). Settle
+          // happens seconds later, so this resolves in time; if the RPC is slow the match still plays.
+          void client
+            .getObject({
+              id: allocation.tunnelId,
+              options: { showContent: true },
+            })
+            .then((obj) => {
+              const fields = (
+                obj.data?.content as
+                  | { fields?: Record<string, unknown> }
+                  | undefined
+              )?.fields;
+              createdAtRef.current = BigInt(
+                (fields?.created_at as string | undefined) ?? 0,
+              );
+            })
+            .catch(() => {});
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
           setPhase("error");

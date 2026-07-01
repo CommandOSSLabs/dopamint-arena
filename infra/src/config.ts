@@ -19,6 +19,10 @@ export interface InfraConfig {
   // definition at runtime. This lets `pulumi up` run locally without committing a
   // specific tag, while CI still pins an exact SHA via config on backend deploys.
   backendImageTag?: string;
+  // Backend ECS service scaling. Defaults are min 2, max 10, CPU target 70%.
+  backendMinCapacity?: number;
+  backendMaxCapacity?: number;
+  backendTargetCpu?: number;
   // base64 ed25519 settler signing key. Optional: the backend boots without it
   // (Phase 0) and fails loud at settler construction if absent. Sourced from secret
   // config so it lands in Secrets Manager, never in the task definition.
@@ -54,6 +58,9 @@ export function getConfig(): InfraConfig {
     dbMaxCapacity: config.getNumber("db-max-capacity"),
     cacheNodeType: config.require("cache-node-type"),
     backendImageTag: config.get("backend-image-tag") ?? undefined,
+    backendMinCapacity: config.getNumber("backend-min-capacity") ?? 2,
+    backendMaxCapacity: config.getNumber("backend-max-capacity") ?? 10,
+    backendTargetCpu: config.getNumber("backend-target-cpu") ?? 70,
     settlerKey: config.getSecret("settler-key"),
     faucetAdminToken: config.getSecret("faucet-admin-token"),
     enokiApiKey: config.getSecret("enoki-api-key"),

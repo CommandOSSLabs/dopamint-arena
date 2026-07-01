@@ -300,14 +300,23 @@ pub(crate) struct ArenaAllocateResponse {
     allocations: Vec<ArenaAllocation>,
 }
 
-/// Spawn + reserve one on-demand bot per requested game and notify each that it's matched to this
-/// user. Games at the per-game cap (or with no `GameProfile`, or whose open fails) are omitted, so the
-/// frontend opens only what it actually got.
+/// Max tunnel opens per batched PTB (Design 1). ~7 catalog games fit comfortably; 30 is a flood cap
+/// well under the ~1024-command / event ceilings (30 games ≈ 120 commands, ≈ 90 events). Larger
+/// requests chunk into ceil(N / 30) PTBs. Matches the frontend deposit-batch cap.
+const ARENA_OPEN_BATCH_MAX: usize = 30;
+
+/// Reserve a match per requested game and pre-create + fund its tunnel's seat B. A player enters
+/// every arena game at once, so the opens are BATCHED into one sponsored PTB (chunked under
+/// `ARENA_OPEN_BATCH_MAX`) instead of a serial per-game loop — one on-chain wait for the whole batch,
+/// not N. Games at the per-game cap (or with no `GameProfile`, or whose open fails) are omitted, so
+/// the frontend opens only what it actually got.
 pub(crate) async fn arena_allocate(
     State(state): State<SharedState>,
     Json(req): Json<ArenaAllocateRequest>,
 ) -> Json<ArenaAllocateResponse> {
-    let mut allocations = Vec::new();
+    // Plan: keep only served games that have a `GameProfile` (the stake source that makes the on-chain
+    // deposit match the off-chain initial balances the FE co-signs), preserving request order.
+    let mut planned: Vec<(String, String, u64)> = Vec::new(); // (game_id, user_eph_pubkey, stake_each)
     for game in &req.games {
         // Served-set gate (`FLEET_COLOCATED_GAMES`): only offer games the fleet can actually play.
         // The concurrency cap is enforced at `arena.join`, where the bot is spawned (ADR-0005
@@ -315,58 +324,89 @@ pub(crate) async fn arena_allocate(
         if !state.arena_fleet_games.contains(&game.id) {
             continue;
         }
-        // The stake comes from the game's `GameProfile` so the on-chain deposit matches the off-chain
-        // initial balances the FE co-signs; an unknown game (no profile) is omitted.
         let Some(profile) = fleet_core::play_match::profile_for(&game.id) else {
             tracing::warn!(game = %game.id, "arena allocate: no GameProfile, omitting");
             continue;
         };
-        // Mint the match recipe (globally-unique id, seat-B identity, per-match key) WITHOUT spawning
-        // a bot — the bot is spawned at `arena.join`, co-located with the user's socket.
-        let slot = crate::fleet::colocated::reserve_arena_slot(&state, &game.id);
-        // The fleet pre-creates the tunnel + funds seat B now, so the user joins with a deposit-only
-        // PTB. On-chain-bound and may fail per game — omit a game whose open errors.
-        let tunnel_id = match state
-            .arena_opener
-            .open_and_fund_seat_b(crate::fleet::arena_opener::ArenaOpenRequest {
-                game: &game.id,
-                user_address: &req.user_address,
-                user_eph_pubkey: &game.user_eph_pubkey,
-                bot_address: &slot.bot_address,
-                bot_eph_pubkey: &slot.eph_pubkey,
-                stake_each: profile.stake_each,
-            })
-            .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(game = %game.id, "arena open failed, omitting: {e:#}");
-                continue;
-            }
-        };
-        // Seed the shared reservation: ANY instance's `arena.join` reads this to reconstruct party B
-        // and spawn the bot locally. The running bot is never stored — only this recipe.
-        state
-            .mp
-            .put_arena_reservation(
-                &slot.match_id,
-                crate::store::ArenaReservation {
-                    game: game.id.clone(),
-                    seat_a: req.user_address.clone(),
-                    seat_b: slot.bot_address.clone(),
-                    tunnel_id: tunnel_id.clone(),
-                    eph_secret_hex: slot.eph_secret_hex.clone(),
-                },
-            )
-            .await;
-        allocations.push(ArenaAllocation {
-            game: game.id.clone(),
-            match_id: slot.match_id,
-            tunnel_id,
-            bot_eph_pubkey: slot.eph_pubkey,
-            bot_address: slot.bot_address,
-            stake_each: profile.stake_each,
+        planned.push((
+            game.id.clone(),
+            game.user_eph_pubkey.clone(),
+            profile.stake_each,
+        ));
+    }
+    if planned.is_empty() {
+        return Json(ArenaAllocateResponse {
+            allocations: Vec::new(),
         });
+    }
+
+    // Design 1 batching: check out ONE seat-B address for the whole request — every tunnel shares
+    // party B (`deposit_party_b` asserts sender == party_b, and a PTB has one sender). Per-match
+    // identity stays distinct via each slot's ephemeral key (settlement authenticates by pubkey, not
+    // address). Mint one recipe (unique match id + ephemeral key) per game under that address.
+    let shared_bot = crate::fleet::colocated::checkout_bot_address(&state, "arena");
+    let slots: Vec<(crate::fleet::colocated::ArenaSlot, String, String, u64)> = planned
+        .into_iter()
+        .map(|(game, user_eph_pubkey, stake)| {
+            (
+                crate::fleet::colocated::reserve_arena_slot_on(shared_bot.clone()),
+                game,
+                user_eph_pubkey,
+                stake,
+            )
+        })
+        .collect();
+
+    // Open in batched PTBs (one sponsored tx per chunk). A whole-chunk abort falls back to per-game
+    // opens inside the opener, so a single unfundable/invalid game only drops itself.
+    let mut allocations = Vec::new();
+    for chunk in slots.chunks(ARENA_OPEN_BATCH_MAX) {
+        let reqs: Vec<crate::fleet::arena_opener::ArenaOpenRequest> = chunk
+            .iter()
+            .map(|(slot, game, user_eph_pubkey, stake)| {
+                crate::fleet::arena_opener::ArenaOpenRequest {
+                    game,
+                    user_address: &req.user_address,
+                    user_eph_pubkey,
+                    bot_address: &slot.bot_address,
+                    bot_eph_pubkey: &slot.eph_pubkey,
+                    stake_each: *stake,
+                }
+            })
+            .collect();
+        let results = state.arena_opener.open_and_fund_seat_b_many(reqs).await;
+        for ((slot, game, _user_eph_pubkey, stake), result) in chunk.iter().zip(results) {
+            let tunnel_id = match result {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(game = %game, "arena open failed, omitting: {e:#}");
+                    continue;
+                }
+            };
+            // Seed the shared reservation: ANY instance's `arena.join` reads this to reconstruct party
+            // B and spawn the bot locally. The running bot is never stored — only this recipe.
+            state
+                .mp
+                .put_arena_reservation(
+                    &slot.match_id,
+                    crate::store::ArenaReservation {
+                        game: game.clone(),
+                        seat_a: req.user_address.clone(),
+                        seat_b: slot.bot_address.clone(),
+                        tunnel_id: tunnel_id.clone(),
+                        eph_secret_hex: slot.eph_secret_hex.clone(),
+                    },
+                )
+                .await;
+            allocations.push(ArenaAllocation {
+                game: game.clone(),
+                match_id: slot.match_id.clone(),
+                tunnel_id,
+                bot_eph_pubkey: slot.eph_pubkey.clone(),
+                bot_address: slot.bot_address.clone(),
+                stake_each: *stake,
+            });
+        }
     }
     tracing::info!(user = %req.user_address, allocated = allocations.len(), "arena allocate");
     Json(ArenaAllocateResponse { allocations })
@@ -1474,5 +1514,69 @@ mod arena_tests {
             resp.0.allocations.is_empty(),
             "a game outside FLEET_COLOCATED_GAMES is not served"
         );
+    }
+
+    // The Design-1 batching invariant at the handler seam: every game in one allocate request shares
+    // ONE seat-B on-chain address (so their opens collapse into a single-sender PTB), while match id,
+    // tunnel, and the co-signing ephemeral pubkey stay DISTINCT per game. A regression that gave games
+    // distinct addresses would silently defeat batching (each open needs its own sender); one that
+    // shared the ephemeral key would break per-match co-signing.
+    #[tokio::test]
+    async fn allocate_shares_one_bot_address_but_keeps_per_match_identity_distinct() {
+        let games = ["blackjack", "caro", "tic_tac_toe"];
+        let state =
+            AppState::in_memory_with_arena_fleet(3, games.iter().map(|g| g.to_string()).collect());
+        let resp = arena_allocate(
+            State(state),
+            Json(ArenaAllocateRequest {
+                user_address: "0xuser".into(),
+                games: games.iter().map(|g| game_req(g)).collect(),
+            }),
+        )
+        .await;
+
+        let allocs = &resp.0.allocations;
+        assert_eq!(
+            allocs.len(),
+            3,
+            "all three served + profiled games allocate"
+        );
+
+        let uniq = |f: &dyn Fn(&ArenaAllocation) -> String| {
+            allocs
+                .iter()
+                .map(f)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        };
+        assert_eq!(
+            uniq(&|a| a.bot_address.clone()),
+            1,
+            "one shared seat-B address across the whole batch"
+        );
+        assert_eq!(
+            uniq(&|a| a.match_id.clone()),
+            3,
+            "distinct match id per game"
+        );
+        assert_eq!(
+            uniq(&|a| a.tunnel_id.clone()),
+            3,
+            "distinct tunnel per game"
+        );
+        assert_eq!(
+            uniq(&|a| a.bot_eph_pubkey.clone()),
+            3,
+            "distinct co-signing ephemeral pubkey per match"
+        );
+
+        for a in allocs {
+            let profile =
+                fleet_core::play_match::profile_for(&a.game).expect("served game has a profile");
+            assert_eq!(
+                a.stake_each, profile.stake_each,
+                "stake comes from the game profile"
+            );
+        }
     }
 }

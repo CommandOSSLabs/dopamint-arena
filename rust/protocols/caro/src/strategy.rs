@@ -7,6 +7,10 @@ use tunnel_harness::{MoveStrategy, MoveStrategyContext, Protocol, ProtocolError,
 pub enum CaroStrength {
     Strong,
     Weak,
+    /// The easiest tier: ignores threats entirely (never blocks the human, never builds a
+    /// coherent line) and plays a deterministic pseudo-random cell adjacent to existing stones.
+    /// A focused human reliably wins. Used by the arena so casual players beat the bot.
+    Easy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -52,11 +56,11 @@ impl CaroStrategy {
         let opp = if me == MARK_A { MARK_B } else { MARK_A };
         let radius = match self.strength {
             CaroStrength::Strong => 2,
-            CaroStrength::Weak => 1,
+            CaroStrength::Weak | CaroStrength::Easy => 1,
         };
         let defense_weight = match self.strength {
             CaroStrength::Strong => 0.95,
-            CaroStrength::Weak => 0.85,
+            CaroStrength::Weak | CaroStrength::Easy => 0.85,
         };
         let mut cells = candidates(&state.board, state.size, radius);
         if cells.is_empty() {
@@ -66,6 +70,18 @@ impl CaroStrategy {
                 .enumerate()
                 .filter_map(|(idx, &cell)| (cell == EMPTY).then_some(idx))
                 .collect();
+        }
+
+        if self.strength == CaroStrength::Easy {
+            // Skip all threat/offense scoring: pick a deterministic pseudo-random cell adjacent to
+            // existing stones. The bot stays engaged near the action but never blocks the human or
+            // builds a coherent line, so a focused human reliably wins. Idempotent — a pure
+            // function of the immutable seed + board — so a replayed state yields the same move.
+            if cells.is_empty() {
+                return None;
+            }
+            let idx = fnv_index(self.fast_seed, &state.board, cells.len());
+            return Some(cells[idx] as i64);
         }
 
         let mut best_cell = *cells.first()?;
@@ -267,9 +283,121 @@ fn derive_salt(seed: u64, moves_count: usize) -> Vec<u8> {
     salt.to_vec()
 }
 
+/// Deterministic FNV-1a fold of (seed, board bytes) into `[0, n)`. Drives the `Easy` tier's
+/// pseudo-random-but-idempotent cell pick; `n` must be non-zero.
+fn fnv_index(seed: u64, board: &[u8], n: usize) -> usize {
+    let mut h = seed ^ 0xcbf2_9ce4_8422_2325;
+    for &byte in board {
+        h = (h ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (h % n as u64) as usize
+}
+
 fn splitmix_next(state: u64) -> u64 {
     let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIZE: usize = 15;
+
+    fn at(row: usize, col: usize) -> usize {
+        row * SIZE + col
+    }
+
+    /// B-to-move board with the given stones placed; balances/accumulator are irrelevant to
+    /// cell selection.
+    fn board_with(stones: &[(usize, u8)]) -> CaroState {
+        let mut board = vec![EMPTY; SIZE * SIZE];
+        for &(idx, mark) in stones {
+            board[idx] = mark;
+        }
+        CaroState {
+            board,
+            size: SIZE,
+            turn: Seat::B,
+            winner: EMPTY,
+            last_move: -1,
+            moves_count: stones.len(),
+            balance_a: 0,
+            balance_b: 0,
+            stake: 0,
+            move_accumulator: [0u8; 32],
+        }
+    }
+
+    /// The behavioral contract the arena relies on: a competent bot defends a forced win, but the
+    /// `Easy` tier does not — so a human one move from five actually completes it. If `Easy` ever
+    /// starts blocking again (e.g. reverted to the `Weak` scoring path), this fails.
+    #[test]
+    fn easy_does_not_block_a_forced_win_but_weak_does() {
+        // A has four horizontally (row 7, cols 3..=6). B holds the low end (col 2), so the ONLY
+        // cell completing A's (winning) five is the open end at col 7.
+        let stones = [
+            (at(7, 3), MARK_A),
+            (at(7, 4), MARK_A),
+            (at(7, 5), MARK_A),
+            (at(7, 6), MARK_A),
+            (at(7, 2), MARK_B),
+        ];
+        let win_cell = at(7, 7) as i64;
+
+        let mut weak = CaroStrategy::with_seed(SIZE, CaroStrength::Weak, 0xB0B).unwrap();
+        assert_eq!(
+            weak.pick_cell(&board_with(&stones), Seat::B),
+            Some(win_cell),
+            "a competent bot must block the opponent's only winning cell",
+        );
+
+        let mut easy = CaroStrategy::with_seed(SIZE, CaroStrength::Easy, 0xB0B).unwrap();
+        assert_ne!(
+            easy.pick_cell(&board_with(&stones), Seat::B),
+            Some(win_cell),
+            "the easiest bot must not defend, so the human can complete their line",
+        );
+    }
+
+    /// Play a full game to a decision by alternating each seat's `pick_cell`, placing the stone and
+    /// checking the standard-caro win around it.
+    fn play_to_winner(a: &mut CaroStrategy, b: &mut CaroStrategy) -> u8 {
+        let mut state = board_with(&[]);
+        state.turn = Seat::A;
+        for _ in 0..(SIZE * SIZE) {
+            let seat = state.turn;
+            let strategy = if seat == Seat::A { &mut *a } else { &mut *b };
+            let Some(cell) = strategy.pick_cell(&state, seat) else {
+                break;
+            };
+            let idx = cell as usize;
+            state.board[idx] = mark_for(seat);
+            state.moves_count += 1;
+            let winner = crate::winner_around(&state.board, SIZE, idx);
+            if winner != EMPTY {
+                return winner;
+            }
+            state.turn = if seat == Seat::A { Seat::B } else { Seat::A };
+        }
+        DRAW
+    }
+
+    /// The arena's guarantee: the human (seat A, moving first) beats the `Easy` bot (seat B) every
+    /// time. Seeds are varied so this is not one lucky game. If `Easy` regains its defense/offense,
+    /// the competent side would be contested and this fails.
+    #[test]
+    fn easy_bot_reliably_loses_to_a_competent_opponent() {
+        for seed in [1u64, 42, 0xB0B, 7, 0xDEAD_BEEF] {
+            let mut human = CaroStrategy::with_seed(SIZE, CaroStrength::Strong, seed).unwrap();
+            let mut easy_bot = CaroStrategy::with_seed(SIZE, CaroStrength::Easy, seed).unwrap();
+            assert_eq!(
+                play_to_winner(&mut human, &mut easy_bot),
+                MARK_A,
+                "the competent seat-A player should beat the Easy bot (seed {seed:#x})",
+            );
+        }
+    }
 }
