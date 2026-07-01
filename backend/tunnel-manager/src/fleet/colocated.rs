@@ -2,7 +2,7 @@
 //! `arena.join`, **on the same instance as the user's WebSocket**, so every relayed frame stays
 //! in-process (no cross-instance hop). It is NOT spawned at `allocate` — allocate only writes a
 //! small shared reservation recipe (`{game, seat_b, tunnel_id, eph_secret}`) to the control store
-//! via [`reserve_arena_slot`]/`put_arena_reservation`, which ANY instance can read to reconstruct
+//! via [`reserve_arena_slot_on`]/`put_arena_reservation`, which ANY instance can read to reconstruct
 //! party B when the user actually shows up.
 //!
 //! **Still pure on-demand:** one short-lived task per real match, no warm pool. Because the spawn
@@ -46,14 +46,20 @@ pub struct ArenaSlot {
     pub eph_secret_hex: String,
 }
 
-/// Mint one arena match recipe (no spawn, no pool reservation). The caller (`arena_allocate`) uses
-/// `eph_pubkey`/`bot_address` to open+fund the tunnel and persists the full recipe via
-/// `put_arena_reservation`. The match id is a UUID (globally unique — it is a shared store key that
-/// any instance may claim, unlike the old per-instance `arena_N` counter which would collide).
+/// Test convenience: check out a fresh address AND mint a recipe in one call. Production goes through
+/// `checkout_bot_address` + `reserve_arena_slot_on` so a whole allocate batch shares one seat-B
+/// address (Design 1); this single-address-per-slot shape is only what the tests want.
+#[cfg(test)]
 pub fn reserve_arena_slot(state: &SharedState, game: &str) -> ArenaSlot {
-    let secret = random_secret();
-    let match_key = DurableSigner::from_secret(&secret);
-    let bot_address = match state.wallet_pool.as_ref().map(|p| p.checkout_address()) {
+    reserve_arena_slot_on(checkout_bot_address(state, game))
+}
+
+/// Check out one funded seat-B on-chain address (round-robin over the pool, or a distinct placeholder
+/// per call when no pool is configured). Split out so the batch opener can check out ONE address for a
+/// whole allocate request — Design 1 batching shares party B across a request's tunnels because
+/// `deposit_party_b` asserts `sender == party_b` and a single PTB has one sender.
+pub fn checkout_bot_address(state: &SharedState, game: &str) -> String {
+    match state.wallet_pool.as_ref().map(|p| p.checkout_address()) {
         Some(Ok(addr)) => addr,
         Some(Err(e)) => {
             tracing::warn!("wallet pool checkout failed, using placeholder: {e:#}");
@@ -66,7 +72,16 @@ pub fn reserve_arena_slot(state: &SharedState, game: &str) -> ArenaSlot {
             game,
             ONDEMAND_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         ),
-    };
+    }
+}
+
+/// Mint a match recipe on an ALREADY-CHOSEN seat-B address. Each call still gets its own match id +
+/// per-match ephemeral co-signing key (only the on-chain address is shared across a batch); the
+/// distinct ephemeral key is what keeps per-match identity — settlement authenticates by pubkey, not
+/// address, so N tunnels can share one party-B address safely.
+pub fn reserve_arena_slot_on(bot_address: String) -> ArenaSlot {
+    let secret = random_secret();
+    let match_key = DurableSigner::from_secret(&secret);
     ArenaSlot {
         match_id: format!("arena_{}", uuid::Uuid::new_v4().simple()),
         bot_address,
@@ -104,7 +119,10 @@ pub async fn join_and_spawn(
 
     let Some(secret) = secret_from_hex(&rec.eph_secret_hex) else {
         state.fleet.release_arena();
-        tracing::error!(match_id, "arena reservation carried an unreadable eph secret");
+        tracing::error!(
+            match_id,
+            "arena reservation carried an unreadable eph secret"
+        );
         return Err("unknown_arena_match");
     };
     let match_key = DurableSigner::from_secret(&secret);
@@ -137,7 +155,16 @@ pub async fn join_and_spawn(
             .to_text(),
         )
         .await;
-    state.bus.populate(&user_conn, match_id, &match_record).await;
+    state
+        .bus
+        .populate(&user_conn, match_id, &match_record)
+        .await;
+    tracing::info!(
+        match_id,
+        game = %rec.game,
+        tunnel = %rec.tunnel_id,
+        "co-located arena match started"
+    );
 
     // Spawn the one-shot play task. It drives to settlement, then frees its admission slot. The bot's
     // opponent is the joiner (party A) — `rec.seat_a`, which `claim_arena` verified equals `wallet`.
@@ -145,11 +172,11 @@ pub async fn join_and_spawn(
     let match_id = match_id.to_owned();
     tokio::spawn(async move {
         if let Err(e) = drive_arena_bot(
-            &st,
             &rec.game,
             &match_id,
             &rec.tunnel_id,
             &rec.seat_a,
+            rec.created_at_ms,
             match_key,
             conn,
         )
@@ -166,20 +193,32 @@ pub async fn join_and_spawn(
 /// (created at allocate); `RelayBridgedAnchor::open` resolves it with no chain call. There is no
 /// join wait or wake — the bot is spawned already paired with a live `MatchRecord`.
 async fn drive_arena_bot(
-    state: &SharedState,
     game: &str,
     match_id: &str,
     tunnel_id: &str,
     opponent_wallet: &str,
+    created_at_ms: u64,
     match_key: DurableSigner,
     conn: std::sync::Arc<BusRelayConnection>,
 ) -> anyhow::Result<()> {
     let transport = BusRelayTransport::new(conn.clone(), match_id.to_owned());
     let channel = MatchChannel::new(transport);
-    // The bot signs its settle half with `timestamp = created_at` (matching the FE half, which reads
-    // the same on-chain field). Fail the match if unreadable — a half the FE would reject.
-    let created_at_ms = state.arena_opener.read_created_at_ms(tunnel_id).await?;
-    let anchor = RelayBridgedAnchor::new(tunnel_id.to_owned(), conn, match_id.to_owned(), created_at_ms);
+    // `created_at` is captured at allocate and carried in the reservation — the bot does ZERO chain IO
+    // before its first move. A slow Sui RPC HERE previously left the bot spawned but silent (no hello,
+    // no move): the "bot never moves" bug. It is used only to sign the SETTLE timestamp; the FE reads
+    // the same on-chain field, so both halves commit to equal timestamp bytes.
+    tracing::info!(
+        match_id = %match_id,
+        game = %game,
+        created_at_ms,
+        "arena bot entering play (created_at from reservation, no chain IO)"
+    );
+    let anchor = RelayBridgedAnchor::new(
+        tunnel_id.to_owned(),
+        conn,
+        match_id.to_owned(),
+        created_at_ms,
+    );
     let moves = play_game(game, channel, anchor, match_key, opponent_wallet).await?;
     tracing::info!(
         match_id = %match_id,
@@ -297,6 +336,7 @@ mod tests {
                     seat_b: slot.bot_address.clone(),
                     tunnel_id: "0xdead".into(),
                     eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
             )
             .await;
@@ -328,6 +368,7 @@ mod tests {
                     seat_b: slot.bot_address.clone(),
                     tunnel_id: "0xdead".into(),
                     eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
             )
             .await;
@@ -373,6 +414,7 @@ mod tests {
                     seat_b: slot.bot_address.clone(),
                     tunnel_id: TUNNEL_ID.into(),
                     eph_secret_hex: slot.eph_secret_hex.clone(),
+                    created_at_ms: 0,
                 },
             )
             .await;

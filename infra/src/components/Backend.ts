@@ -137,7 +137,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           {
             name: "STREAMING_PAYMENT_PACKAGE_ID",
             value:
-              "0x5125f1e0b65ba5c27cc5eb130ee34133bf55ddc30322cf7099d748f4df23e7ea",
+              "0xd879bc156d7494d49b837222a8ebb348694a0685267129a76bdc1789c63c1edb",
           },
           // The sponsor only gas-funds MTPS faucet mints + staked tunnel opens whose coin
           // type matches this; without it config defaults to 0x2::sui::SUI and /v1/sponsor 422s.

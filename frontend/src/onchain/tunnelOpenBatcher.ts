@@ -49,8 +49,9 @@ export interface BatcherDeps {
 }
 
 /** Default PTB batch size. ~7 catalog games fit in one PTB; this caps a pathological flood under
- *  the PTB command/argument ceiling. Larger flushes chunk into ceil(N / MAX_BATCH) PTBs. */
-const DEFAULT_MAX_BATCH = 16;
+ *  the PTB command/argument ceiling (30 deposits ≈ 30 commands, ≫ under the ~1024 ceiling). Larger
+ *  flushes chunk into ceil(N / MAX_BATCH) PTBs. Matches the backend open-batch cap. */
+const DEFAULT_MAX_BATCH = 30;
 const DEFAULT_FLUSH_DELAY_MS = 30;
 
 type FundingMode = "balance" | "mtps-coin" | "sui";

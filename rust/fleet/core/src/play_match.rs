@@ -465,10 +465,11 @@ where
     };
     let protocol = CaroSeries::new(1, CARO_BOARD_SIZE, CARO.stake_each)
         .map_err(|e| anyhow!("caro series: {e:?}"))?;
-    // Weak = the easiest/most-random caro bot (depth-1 lookahead, 0.85 best-move prob vs Strong's
-    // depth-2/0.95) so a human opponent can actually win.
+    // Easy = the easiest caro bot: it ignores threats entirely (never blocks, never builds a line)
+    // and plays a pseudo-random adjacent cell, so a casual human reliably wins. `Weak`/`Strong`
+    // still defend and are too strong for a casual player at gomoku.
     let strategy =
-        CaroSeriesStrategy::with_seed(1, CARO_BOARD_SIZE, CaroStrength::Weak, fleet_seed(role))
+        CaroSeriesStrategy::with_seed(1, CARO_BOARD_SIZE, CaroStrength::Easy, fleet_seed(role))
             .map_err(|e| anyhow!("caro strategy: {e:?}"))?;
     play_match(
         protocol, strategy, &CARO, &info, channel, anchor, signer, recorder,

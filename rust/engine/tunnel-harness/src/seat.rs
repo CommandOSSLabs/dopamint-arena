@@ -197,13 +197,20 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         let next = self.protocol.apply_move(&self.state, &m.mv, by)?;
         let bals = self.protocol.balances(&next);
         if bals.a != m.party_a_balance || bals.b != m.party_b_balance {
-            return Err(HarnessError::Verification("frame balances mismatch".into()));
+            return Err(HarnessError::Verification(format!(
+                "frame balances mismatch: bot a={} b={} vs frame a={} b={} (nonce {})",
+                bals.a, bals.b, m.party_a_balance, m.party_b_balance, m.nonce
+            )));
         }
         let state_hash = blake2b256(&self.protocol.encode_state(&next));
         if state_hash != m.state_hash {
-            return Err(HarnessError::Verification(
-                "frame state_hash mismatch".into(),
-            ));
+            return Err(HarnessError::Verification(format!(
+                "frame state_hash mismatch: tunnel={} nonce={} bot={} vs frame={}",
+                self.tunnel_id,
+                m.nonce,
+                hex::encode(&state_hash[..8]),
+                hex::encode(&m.state_hash[..8]),
+            )));
         }
         let update = StateUpdate {
             tunnel_id: self.tunnel_id.clone(),
@@ -215,7 +222,16 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
         };
         let msg = serialize_state_update(&update);
         if !verify(&self.opponent_pk, &msg, &m.sig_proposer) {
-            return Err(HarnessError::Verification("proposer sig failed".into()));
+            return Err(HarnessError::Verification(format!(
+                "proposer sig failed: tunnel={} nonce={} ts={} bal a={} b={} opp_pk={} sh={}",
+                self.tunnel_id,
+                m.nonce,
+                m.timestamp,
+                bals.a,
+                bals.b,
+                hex::encode(&self.opponent_pk[..8]),
+                hex::encode(&state_hash[..8]),
+            )));
         }
         let sig_responder = self.signer.sign(&msg);
         self.state = next;

@@ -223,7 +223,7 @@ impl RelayTransport for BusRelayTransport {
     async fn send_payload(&self, payload: Vec<u8>) -> Result<(), FrameTransportError> {
         let payload = String::from_utf8(payload)
             .map_err(|e| FrameTransportError::Transport(format!("payload not UTF-8: {e}")))?;
-        tracing::trace!(match_id = %self.match_id, head = %&payload[..payload.len().min(70)], "bus tx (bot→peer)");
+        tracing::debug!(match_id = %self.match_id, head = %&payload[..payload.len().min(120)], "bus tx (bot→peer)");
         {
             let mut cache = self.cache.lock().await;
             crate::mp::ws::relay_to_other(
@@ -256,7 +256,7 @@ impl RelayTransport for BusRelayTransport {
             };
             match msg {
                 Some(ServerMsg::Relay { match_id, payload }) if match_id == self.match_id => {
-                    tracing::trace!(match_id = %self.match_id, head = %&payload[..payload.len().min(70)], "bus rx (peer→bot)");
+                    tracing::debug!(match_id = %self.match_id, head = %&payload[..payload.len().min(120)], "bus rx (peer→bot)");
                     return Ok(Some(payload.into_bytes()));
                 }
                 // Other-match frames shouldn't arrive (one match per virtual conn); ignore.

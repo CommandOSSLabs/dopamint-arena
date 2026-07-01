@@ -6,6 +6,9 @@ on:
     paths:
       - "backend/**"
       - "infra/**"
+      # The backend image compiles the fleet bot + game protocols from rust/ (Cargo path deps),
+      # so a rust/ change alters the binary and must redeploy.
+      - "rust/**"
       - ".github/workflows/deploy-backend.yml"
   workflow_dispatch:
     inputs:

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildCreateStreamTx,
   computeAvailable,
   computeLocked,
   computeUnlocked,
@@ -11,6 +12,8 @@ import {
   topUpAmountFor,
   type StreamFields,
 } from "./streamingPayment.ts";
+
+const COIN = "0xabc::mtps::MTPS";
 
 // 1000-unit stream over 100s (start=0, end=100_000ms), nothing withdrawn yet.
 const stream = (over: Partial<StreamFields> = {}): StreamFields => ({
@@ -71,4 +74,32 @@ test("status names map to their codes", () => {
   assert.equal(streamStatusName(StreamStatus.ACTIVE), "Active");
   assert.equal(streamStatusName(StreamStatus.COMPLETED), "Completed");
   assert.equal(streamStatusName(StreamStatus.CANCELLED), "Cancelled");
+});
+
+test("create stream stakes from sender address balance (ADR-0013)", () => {
+  const tx = buildCreateStreamTx({
+    stakeFromBalance: { amount: 100n, coinType: COIN },
+    totalAmount: 100n,
+    recipient: "0xb",
+    durationMs: 3_600_000n,
+  });
+  const data = tx.getData();
+
+  const withdrawal = data.inputs.find((i) => i.$kind === "FundsWithdrawal");
+  assert.ok(withdrawal, "the PTB carries a FundsWithdrawal input");
+  assert.equal(
+    (withdrawal as { FundsWithdrawal: { withdrawFrom: { $kind: string } } })
+      .FundsWithdrawal.withdrawFrom.$kind,
+    "Sender",
+  );
+
+  const hasRedeem = data.commands.some(
+    (c) => c.$kind === "MoveCall" && c.MoveCall.function === "redeem_funds",
+  );
+  assert.ok(hasRedeem, "escrow coin comes from coin::redeem_funds");
+
+  const hasCreate = data.commands.some(
+    (c) => c.$kind === "MoveCall" && c.MoveCall.function === "create_stream",
+  );
+  assert.ok(hasCreate, "the PTB calls create_stream");
 });

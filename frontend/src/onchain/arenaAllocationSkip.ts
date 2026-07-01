@@ -12,6 +12,22 @@
  *  distinct key doesn't arise here.) */
 const canonGameId = (id: string): string => id.replace(/[-_]/g, "");
 
+/** Resume keys of the matches that should suppress a fresh allocate: only genuinely IN-FLIGHT
+ *  (non-terminal) tunnels. A FINISHED match (terminal state, stamped at write time) must NOT
+ *  suppress — after a settle+reload the user wants a new game, and arenaAutoEnter has no protocol to
+ *  judge terminality itself, so it trusts the record's flag. Missing flag ⇒ treated as in-flight, so
+ *  a legacy record or a genuine mid-match resume is never accidentally double-allocated. Nulls
+ *  (absent records) are ignored. Pure so the terminal/legacy semantics are unit-tested directly. */
+export function resumingGameKeysOf(
+  records: ({ game: string; terminal?: boolean } | null)[],
+): string[] {
+  return records
+    .filter(
+      (r): r is { game: string; terminal?: boolean } => !!r && !r.terminal,
+    )
+    .map((r) => r.game);
+}
+
 /** Drop the arena ids whose game already has a resumable in-flight tunnel (its resume key present in
  *  `resumingGameKeys`). Pure so the id-form match — the underscore/kebab footgun — is unit-tested
  *  without a registry or localStorage. */
