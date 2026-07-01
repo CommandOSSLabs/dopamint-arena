@@ -11,7 +11,7 @@ import {
 } from "sui-tunnel-ts/protocol/blackjack";
 
 /** Chip denominations offered as bet buttons (filtered to <= the table max each round in the UI). */
-export const BET_OPTIONS = [1, 5, 25, 100] as const;
+export const BET_OPTIONS = [1, 2, 5, 10] as const;
 
 /** Build a `bet` move, clamped to [MIN_BET, maxBet(state)]. */
 export function bjBetMove(

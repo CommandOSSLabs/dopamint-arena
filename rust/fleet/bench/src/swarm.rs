@@ -6,9 +6,9 @@
 //! (143*N moves), which is the golden regression gate; `--duration` is
 //! the time-bounded throughput mode.
 
-use crate::cli::{FrameCodecKind, ScenarioMode};
-use crate::party_driver::SeatKit;
-use crate::protocols::play_match_for;
+use crate::cli::{AnchorMode, FrameCodecKind, ScenarioMode, TranscriptRecorderMode};
+use crate::party_driver::{SeatKit, SuiSponsoredBenchContext};
+use crate::protocols::{play_match_for, PlayMatchRequest};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -139,24 +139,31 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_simple(
     workers: usize,
     duration_secs: u64,
     matches: Option<u64>,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let t = Instant::now();
         let kit = SeatKit::new(&SEAT_A, &SEAT_B);
-        let r = play_match_for(
+        let r = play_match_for(PlayMatchRequest {
             protocol_id,
             codec,
-            scenario.card_seed(idx),
-            &kit,
-            &tunnel_id_for(idx),
-        );
+            card_seed: scenario.card_seed(idx),
+            kit: &kit,
+            tunnel_id: &tunnel_id_for(idx),
+            anchor_mode,
+            sui_context,
+            transcript_recorder,
+        });
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -173,12 +180,16 @@ pub fn run_simple(
 /// (fresh per-match key setup) is matched to loadbench. With
 /// `ScenarioMode::Golden`, cards derive from `round`, so totals stay
 /// 143*N moves / 75982*N bytes.
+#[allow(clippy::too_many_arguments)]
 pub fn run_fresh_keys(
     workers: usize,
     duration_secs: u64,
     matches: Option<u64>,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
@@ -188,13 +199,16 @@ pub fn run_fresh_keys(
         getrandom::getrandom(&mut secret_b).expect("os rng");
         let t = Instant::now();
         let kit = SeatKit::new(&secret_a, &secret_b);
-        let r = play_match_for(
+        let r = play_match_for(PlayMatchRequest {
             protocol_id,
             codec,
-            scenario.card_seed(idx),
-            &kit,
-            &tunnel_id_for(idx),
-        );
+            card_seed: scenario.card_seed(idx),
+            kit: &kit,
+            tunnel_id: &tunnel_id_for(idx),
+            anchor_mode,
+            sui_context,
+            transcript_recorder,
+        });
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -214,25 +228,32 @@ fn random_seat_kit() -> SeatKit {
 
 /// Steady-state fleet: create every match's signer material before the timed
 /// window, then run exactly that many matches from the pre-built pool.
+#[allow(clippy::too_many_arguments)]
 pub fn run_preinitialized_signers(
     workers: usize,
     duration_secs: u64,
     matches: u64,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
+    anchor_mode: AnchorMode,
+    sui_context: Option<&SuiSponsoredBenchContext>,
+    transcript_recorder: TranscriptRecorderMode,
     protocol_id: &'static str,
 ) -> SwarmOutcome {
     let kits: Vec<SeatKit> = (0..matches).map(|_| random_seat_kit()).collect();
     run_with(workers, duration_secs, Some(matches), |idx| {
         let t = Instant::now();
         let kit = &kits[idx as usize];
-        let r = play_match_for(
+        let r = play_match_for(PlayMatchRequest {
             protocol_id,
             codec,
-            scenario.card_seed(idx),
+            card_seed: scenario.card_seed(idx),
             kit,
-            &tunnel_id_for(idx),
-        );
+            tunnel_id: &tunnel_id_for(idx),
+            anchor_mode,
+            sui_context,
+            transcript_recorder,
+        });
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -245,6 +266,7 @@ pub fn run_preinitialized_signers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{AnchorMode, TranscriptRecorderMode};
     use tunnel_core::protocol_id::BLACKJACK_BET_V1;
 
     #[test]
@@ -257,6 +279,9 @@ mod tests {
             Some(6),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         assert_eq!(out.matches_claimed, 6);
@@ -273,6 +298,9 @@ mod tests {
             Some(8),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         let preinitialized = run_preinitialized_signers(
@@ -281,6 +309,9 @@ mod tests {
             8,
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         assert_eq!(preinitialized.moves, simple.moves);
@@ -304,12 +335,32 @@ mod tests {
             Some(5),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         assert_eq!(out.matches_claimed, 5);
         assert_eq!(out.tunnels_settled, 5);
         assert_eq!(out.moves, 143 * 5);
         assert_eq!(out.bytes, 75982 * 5);
+    }
+
+    #[test]
+    fn memory_anchor_mode_executes_matches() {
+        let out = run_simple(
+            1,
+            3600,
+            Some(2),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
+            BLACKJACK_BET_V1,
+        );
+        assert_eq!(out.tunnels_opened, 2);
+        assert_eq!(out.tunnels_settled, 2);
     }
 
     #[test]
@@ -321,6 +372,9 @@ mod tests {
             Some(20),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         assert_eq!(out.matches_claimed, 20);
@@ -337,6 +391,9 @@ mod tests {
             Some(24),
             ScenarioMode::Varied,
             FrameCodecKind::Bcs,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         assert_eq!(out.tunnels_settled, 24);
@@ -362,6 +419,9 @@ mod tests {
             Some(50),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         assert_eq!(out.moves, 143 * 50);
@@ -377,6 +437,9 @@ mod tests {
             Some(8),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         let bcs = run_simple(
@@ -385,6 +448,9 @@ mod tests {
             Some(8),
             ScenarioMode::Golden,
             FrameCodecKind::Bcs,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
         let postcard = run_simple(
@@ -393,6 +459,9 @@ mod tests {
             Some(8),
             ScenarioMode::Golden,
             FrameCodecKind::Postcard,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             BLACKJACK_BET_V1,
         );
 
@@ -411,6 +480,9 @@ mod tests {
             Some(3),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             tunnel_core::protocol_id::BLACKJACK_V2,
         );
         assert_eq!(out.matches_claimed, 3);
@@ -427,6 +499,9 @@ mod tests {
             Some(3),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            AnchorMode::Memory,
+            None,
+            TranscriptRecorderMode::None,
             tunnel_core::protocol_id::PAYMENTS_V1,
         );
         assert_eq!(out.matches_claimed, 3);

@@ -927,3 +927,42 @@ impl Protocol for BombItSeries {
         self.inner.sample_move(&state.inner, seat, rng)
     }
 }
+
+#[cfg(test)]
+mod wire_parity {
+    use super::*;
+
+    // The relayed move is JSON (the fleet's JsonFrameCodec), so the bot's `BombItMove` must serialize
+    // to the EXACT shape the FE `BombItProtocol` sends — seat key `a`/`b`, action as a lowercase
+    // string — or the human's tunnel rejects the frame. Pins that contract against an enum-rename or
+    // field-name regression (the same class of bug that silently broke poker's commit-reveal moves).
+    #[test]
+    fn move_json_matches_fe_bomb_it_wire() {
+        let a = BombItMove {
+            a: Some(BombItAction::North),
+            b: None,
+        };
+        assert_eq!(
+            serde_json::to_value(a).unwrap(),
+            serde_json::json!({ "a": "north" }),
+        );
+        let b = BombItMove {
+            a: None,
+            b: Some(BombItAction::Bomb),
+        };
+        assert_eq!(
+            serde_json::to_value(b).unwrap(),
+            serde_json::json!({ "b": "bomb" }),
+        );
+        // And the bot decodes the FE's exact bytes back to the same move.
+        let parsed: BombItMove =
+            serde_json::from_value(serde_json::json!({ "a": "stay" })).unwrap();
+        assert_eq!(
+            parsed,
+            BombItMove {
+                a: Some(BombItAction::Stay),
+                b: None,
+            },
+        );
+    }
+}

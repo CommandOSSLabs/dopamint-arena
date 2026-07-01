@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, Check, Wallet } from "lucide-react";
 import { ConnectModal, useCurrentAccount } from "@mysten/dapp-kit";
 import { isEnokiWallet } from "@mysten/enoki";
@@ -175,6 +175,7 @@ function PvpGame({
     auto,
     setAuto,
     reset,
+    endMatch,
   } = useBattleshipPvp(windowId);
   const account = useCurrentAccount();
 
@@ -205,9 +206,27 @@ function PvpGame({
     return () => clearTimeout(t);
   }, [status, auto, view?.myTurn, setAuto]);
 
+  // Back: publish our settlement half, then leave once it's on the wire (status → settled) or if it
+  // errors — a failed/stuck close must never trap the player. A timeout backstops an unreachable
+  // settle boundary. Pre-match (idle/matching/funding/error) there's nothing to settle, so just close.
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (!leaving) return;
+    if (status === "settled" || status === "error") {
+      onExit();
+      return;
+    }
+    const bail = window.setTimeout(onExit, 8000);
+    return () => window.clearTimeout(bail);
+  }, [leaving, status, onExit]);
   const back = () => {
-    reset();
-    onExit();
+    if (status === "playing" || status === "settling") {
+      setLeaving(true);
+      endMatch(); // publish our half; the leaving effect closes the window on "settled"
+    } else {
+      reset();
+      onExit();
+    }
   };
   let content: ReactNode;
   if (!account && !view) {
@@ -240,6 +259,9 @@ function PvpGame({
         view={view}
         statusLabel={settleLabel(status)}
         onFire={fire}
+        // End the match early without leaving the window: publish our half + show the settled screen
+        // (BattleView hides this once settled). Back instead closes the window — same publish path.
+        onSettle={endMatch}
         // "Find next match": after the match settles, reset to placement (stay in PvP)
         // so the next Find Match is one tap away — not back out to the arena.
         onPlayAgain={reset}

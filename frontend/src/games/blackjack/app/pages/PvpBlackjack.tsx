@@ -14,7 +14,7 @@ import {
 
 import { SketchDefs } from "@/games/blackjack/app/App";
 
-const MIN_BUYIN = 1000;
+const MIN_BUYIN = 100;
 const chipsToSui = (chips: bigint) =>
   (Number(chips) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 });
 
@@ -485,16 +485,13 @@ export default function PvpBlackjack() {
                               }
                               className={`qp-btn !py-2.5 !text-base font-black tabular-nums transition-colors disabled:opacity-40 ${selected ? "qp-btn--go" : ""}`}
                             >
-                              ${amt.toLocaleString()}
+                              {amt.toLocaleString()}
                             </button>
                           );
                         })}
                       </div>
                       {/* Custom buy-in */}
                       <div className="flex items-center gap-2">
-                        <span className="text-[var(--qp-ink)] text-sm font-bold">
-                          $
-                        </span>
                         <input
                           type="number"
                           inputMode="numeric"
@@ -514,7 +511,7 @@ export default function PvpBlackjack() {
                       </div>
                       {!isMtpsConfigured && (
                         <div className="text-[11px] text-[var(--qp-ink-soft)] text-center leading-relaxed">
-                          ${Number(g.stake).toLocaleString()} buy-in ≈{" "}
+                          {Number(g.stake).toLocaleString()} buy-in ≈{" "}
                           <span className="font-mono text-emerald-600 font-bold">
                             {chipsToSui(g.stake)} SUI
                           </span>{" "}
@@ -523,7 +520,7 @@ export default function PvpBlackjack() {
                       )}
                       {g.stake < BigInt(MIN_BUYIN) && (
                         <div className="text-[var(--qp-red)] text-[11px] text-center font-bold">
-                          minimum buy-in is ${MIN_BUYIN.toLocaleString()}
+                          minimum buy-in is {MIN_BUYIN.toLocaleString()}
                         </div>
                       )}
                     </div>

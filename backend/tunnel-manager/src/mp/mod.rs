@@ -19,6 +19,18 @@ pub type ConnId = Uuid;
 pub struct Waiting {
     pub wallet: Wallet,
     pub conn: ConnRef,
+    /// True for a fleet bot. Two bots are NEVER paired (a bot only ever plays a human); the
+    /// matchmaker skips a candidate when both sides are bots. Defaults false so existing
+    /// (human) clients and any pre-`is_bot` queue entries decode as humans.
+    #[serde(default)]
+    pub is_bot: bool,
+}
+
+/// The fleet invariant: a bot is NEVER paired with another bot — a bot only ever plays a human.
+/// The matchmaker consults this when picking a candidate. The Redis `JOIN_OR_PAIR`/`FALLBACK_PAIR`
+/// Lua mirrors this guard inline (`not (me_bot and w.is_bot)`); keep the two in sync.
+pub fn pairing_allowed(me_is_bot: bool, candidate_is_bot: bool) -> bool {
+    !(me_is_bot && candidate_is_bot)
 }
 
 /// A directed Challenge-by-wallet invite awaiting accept/decline.

@@ -16,6 +16,9 @@ export interface IamInputs {
   // ARN of the transcripts bucket the tunnel-manager task role may write (ADR-0023).
   // Omitted => no S3 policy is attached (e.g. a stack without S3 archival).
   taskRoleTranscriptsBucketArn?: pulumi.Input<string>;
+  // S3 bucket holding the wallet-pool blob (PR #124). The TASK role (the running container's
+  // identity, used by `S3WalletPoolStore::from_env`) gets `s3:GetObject` on it. Omitted => no grant.
+  walletPoolS3Bucket?: pulumi.Input<string>;
 }
 
 export function createIam(name: string, args: IamInputs): IamOutputs {
@@ -93,6 +96,26 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
             ],
           }),
         ),
+    });
+  }
+
+  // Wallet pool (PR #124): the running backend reads the pool blob from S3 via the task role's
+  // identity (default AWS credential chain). Scope to GetObject on exactly this bucket's objects.
+  if (args.walletPoolS3Bucket) {
+    new aws.iam.RolePolicy(`${name}-task-wallet-pool-s3`, {
+      role: taskRole.id,
+      policy: pulumi.output(args.walletPoolS3Bucket).apply((bucket) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ["s3:GetObject"],
+              Resource: [`arn:aws:s3:::${bucket}/*`],
+            },
+          ],
+        }),
+      ),
     });
   }
 

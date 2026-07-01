@@ -59,6 +59,22 @@ pub struct Config {
     pub s3_bucket: Option<String>,
     /// Optional key prefix (e.g. "prod/"). Default empty.
     pub s3_prefix: Option<String>,
+    /// Co-located fleet (ADR-0024): in-process bots per game, registered into the `BotPool` and
+    /// served over the relay bus instead of a `/v1/fleet` WebSocket. `0` (default) keeps the relay
+    /// inert; only an explicit `FLEET_COLOCATED_COUNT > 0` (+ `FLEET_COLOCATED_GAMES`) spawns them.
+    pub colocated_fleet_count: u32,
+    pub colocated_fleet_games: Vec<String>,
+    /// Funded seat-B wallet pool (PR #124). When `WALLET_POOL_ID` is set, on-demand arena bots draw
+    /// their on-chain address from the pool instead of the deterministic placeholder; the S3 bucket +
+    /// AWS creds are read straight from the environment by `S3WalletPoolStore::from_env`. Unset =>
+    /// placeholder identities (the default dev/Noop path).
+    pub wallet_pool_id: Option<String>,
+    /// Access value (passphrase) that unlocks the wallet pool. Required when `wallet_pool_id` is set.
+    pub wallet_pool_access_value: Option<String>,
+    /// Number of FUNDED members in the pool (`WALLET_POOL_FUNDED_COUNT`). The 1M pool is only partially
+    /// funded as a prefix `1..=N`; seat-B checkout round-robins inside it so a bot never draws an empty
+    /// wallet. Unset => the whole pool (with a warning). Raise it as more members are funded.
+    pub wallet_pool_funded_count: Option<u32>,
 }
 
 impl Config {
@@ -112,6 +128,25 @@ impl Config {
             ollama_model: opt("OLLAMA_MODEL"),
             s3_bucket: opt("S3_TRANSCRIPTS_BUCKET"),
             s3_prefix: opt("S3_TRANSCRIPTS_PREFIX"),
+            colocated_fleet_count: std::env::var("FLEET_COLOCATED_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            colocated_fleet_games: std::env::var("FLEET_COLOCATED_GAMES")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|g| !g.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            wallet_pool_id: opt("WALLET_POOL_ID"),
+            wallet_pool_access_value: opt("WALLET_POOL_ACCESS_VALUE"),
+            wallet_pool_funded_count: std::env::var("WALLET_POOL_FUNDED_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok()),
         })
     }
 
@@ -184,6 +219,25 @@ mod tests {
         fn drop(&mut self) {
             std::env::remove_var(self.0);
         }
+    }
+
+    // The co-located fleet is opt-in: with no env set it must parse as disabled (count 0, no
+    // games) so a default deploy stays inert; when set, count + comma-split games come through.
+    #[test]
+    fn from_env_colocated_fleet_defaults_off_and_parses_when_set() {
+        std::env::remove_var("FLEET_COLOCATED_COUNT");
+        std::env::remove_var("FLEET_COLOCATED_GAMES");
+        let off = Config::from_env().unwrap();
+        assert_eq!(off.colocated_fleet_count, 0, "default must be disabled");
+        assert!(off.colocated_fleet_games.is_empty());
+
+        let _count = EnvGuard("FLEET_COLOCATED_COUNT");
+        let _games = EnvGuard("FLEET_COLOCATED_GAMES");
+        std::env::set_var("FLEET_COLOCATED_COUNT", "3");
+        std::env::set_var("FLEET_COLOCATED_GAMES", "blackjack, caro");
+        let on = Config::from_env().unwrap();
+        assert_eq!(on.colocated_fleet_count, 3);
+        assert_eq!(on.colocated_fleet_games, vec!["blackjack", "caro"]);
     }
 
     // Faucet amounts/cooldown have sensible defaults so a deploy that only sets the AdminCap id

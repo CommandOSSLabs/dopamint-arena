@@ -15,10 +15,19 @@ export function QuantumPokerPvpWindow({
 }: GameWindowProps & { onExit?: () => void }) {
   const g = usePvpQuantumPoker();
 
-  // Back during a live hand bails out (auto-fold → settle this hand); leave once the close lands.
+  // Back bails out (auto-fold → publish our settlement half → leave). Exit once the half is published
+  // ("settled") OR if settle errors — a failed/stuck close must never trap the player. A timeout is the
+  // backstop when the hand can't reach a settle boundary (e.g. an unresponsive opponent), so Back always
+  // gets the user out; their half settles via the grace path if it never made the wire.
   const [leaving, setLeaving] = useState(false);
   useEffect(() => {
-    if (leaving && g.status === "settled") onExit?.();
+    if (!leaving) return;
+    if (g.status === "settled" || g.status === "error") {
+      onExit?.();
+      return;
+    }
+    const bail = window.setTimeout(() => onExit?.(), 8000);
+    return () => window.clearTimeout(bail);
   }, [leaving, g.status, onExit]);
 
   if (g.status === "idle") {
@@ -38,7 +47,7 @@ export function QuantumPokerPvpWindow({
             <button
               type="button"
               className="sketch-btn sketch-btn--go"
-              onClick={g.findMatch}
+              onClick={g.playArena}
             >
               Play
             </button>
@@ -66,7 +75,7 @@ export function QuantumPokerPvpWindow({
           <p className="sketch-note">
             {g.status === "matching"
               ? "Matching you with another player."
-              : "Funding both stakes on-chain."}
+              : "Funding your seat and dealing you in."}
           </p>
           {g.opponentWallet && (
             <p className="sketch-note mt-1 tabular-nums">

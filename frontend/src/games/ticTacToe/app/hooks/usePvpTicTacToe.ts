@@ -61,8 +61,23 @@ import {
   isMtpsAddressBalance,
   isMtpsConfigured,
 } from "@/onchain/mtps";
+import type { KeyPair } from "sui-tunnel-ts/core/crypto";
+import type { ArenaAllocation } from "@/onchain/arenaEnter";
+import {
+  consumeArenaEntry,
+  subscribeArena,
+} from "@/onchain/arenaAllocationStore";
 
 export type Variant = "ttt" | "caro";
+
+/** Backend arena/`profile_for` ids for the two variants this hook drives. Single source of truth for
+ *  the arena-store consumer (below) and each variant's `GameModule.arenaGameId`. */
+export const TIC_TAC_TOE_ARENA_GAME_ID = "tic_tac_toe";
+export const CARO_ARENA_GAME_ID = "caro";
+/** This hook instance's arena id, by variant. */
+function arenaGameIdFor(variant: Variant): string {
+  return variant === "caro" ? CARO_ARENA_GAME_ID : TIC_TAC_TOE_ARENA_GAME_ID;
+}
 
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
@@ -76,9 +91,9 @@ const MP_URL =
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 // Per-seat deposit and per-game stake, mode-scaled. In MTPS mode (production path) both are
-// 1 MTPS (9 decimals), so an abandoner forfeits exactly one deposit. In the SUI dev fallback
-// the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
-const MTPS_PER_SEAT = 1_000_000_000n;
+// 1 MTPS (0 decimals; ADR-0023), so an abandoner forfeits exactly one deposit. In the SUI dev
+// fallback the per-game stake (SUI_PER_SEAT = 1 MIST) is much smaller than the deposited bankroll.
+const MTPS_PER_SEAT = 1n;
 const SUI_PER_SEAT = 1n;
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
 // MTPS mode (ADR-0023): bankroll deposited per seat — 1 MTPS (0 decimals → whole token).
@@ -87,8 +102,10 @@ const MTPS_BANKROLL = 1n;
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
 const MAX_GAMES = 1;
-const MOVE_MS = 600; // auto move cadence
-const NEXT_MS = 800; // pause before auto-advancing to the next game
+// Flat-out auto pacing: propose the next move/advance on the next tick (a 0ms setTimeout still
+// defers, which breaks re-entrant propose and lets the confirmed-update sync run first).
+const AUTO_MOVE_MS = 0;
+const NEXT_MS = 150; // pause before auto-requeuing the next match (flat-out: just enough to glimpse)
 // Settle-half exchange: both seats send their half at the same instant, so a single relay drop
 // would hang the close. Resend this often until the peer's half lands, and give up after the
 // timeout so a truly lost peer recovers (auto re-queues) instead of stranding the table forever.
@@ -196,6 +213,9 @@ export function usePvpTicTacToe(
   );
 
   const [phase, setPhase] = useState<PvpPhase>("idle");
+  // Latest phase, readable inside stable callbacks (the arena-store subscriber) without stale closures.
+  const phaseRef = useRef<PvpPhase>("idle");
+  phaseRef.current = phase;
   const [error, setError] = useState<string | null>(null);
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<AnyState | null>(null);
@@ -306,9 +326,13 @@ export function usePvpTicTacToe(
         );
         const sendHalf = () =>
           channel.sendPeer({
-            t: "settle",
+            t: "settleHalf",
+            partyABalance: half.settlement.partyABalance.toString(),
+            partyBBalance: half.settlement.partyBBalance.toString(),
+            finalNonce: half.settlement.finalNonce.toString(),
+            timestamp: half.settlement.timestamp.toString(),
+            transcriptRoot: bytesToHex(root),
             sig: bytesToHex(half.sigSelf),
-            root: bytesToHex(root),
           });
         sendHalf();
         // Wait for the peer's half. Resend ours every SETTLE_RETRY_MS until it lands (a single
@@ -344,12 +368,10 @@ export function usePvpTicTacToe(
           half.sigSelf,
           other.sig,
         );
-        // The game's winner submits the cooperative close (X-win or draw → A; O-win → B). The
-        // payout is fixed by the co-signed balances regardless of who submits; this just decides
-        // which seat sends the backend tx so the winner closes out their own game.
-        const decided = t.state.inner.winner; // 1 = X (A) won, 2 = O (B) won, 3/0 = draw/none
-        const submitter: "A" | "B" = decided === 2 ? "B" : "A";
-        if (roleRef.current === submitter) {
+        // Single submitter = seat A — unified with every other game and the fleet bot, which
+        // co-signs the `settleHalf` and never submits the close itself. The payout is fixed by the
+        // co-signed balances regardless of which seat sends the backend tx.
+        if (roleRef.current === "A") {
           const closeDigest = await settleViaBackend({
             tunnelId: t.tunnelId,
             settlement: coSigned as any,
@@ -453,7 +475,7 @@ export function usePvpTicTacToe(
               } catch {
                 /* raced */
               }
-            }, 100);
+            }, AUTO_MOVE_MS);
         } else if (st.inner.turn === info.role && autoRef.current) {
           const cell = (() => {
             const empties = st.inner.board
@@ -467,7 +489,7 @@ export function usePvpTicTacToe(
             } catch {
               /* not my turn / in flight */
             }
-          }, 50);
+          }, AUTO_MOVE_MS);
         }
       };
       t.onConfirmed = (u) => {
@@ -613,9 +635,9 @@ export function usePvpTicTacToe(
             else bufferedHelloRef.current = pub;
           } else if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
-          else if (mm.t === "settle") {
+          else if (mm.t === "settleHalf") {
             const sig = hexToBytes(String(mm.sig));
-            const rt = hexToBytes(String(mm.root));
+            const rt = hexToBytes(String(mm.transcriptRoot));
             if (settleResolveRef.current)
               settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };
@@ -819,6 +841,156 @@ export function usePvpTicTacToe(
   );
   onMatchRef.current = onMatch;
 
+  // Arena entry (ADR-0028): join a pre-allocated match whose tunnel the fleet already created + funded
+  // seat B for. This seat (always A) deposits nothing (batched by the caller's `enterArena`) and the
+  // bot/auto plays it — only the relay + engine are wired over the live tunnel. No "ready" wait: the
+  // fleet bot enters its loop the instant its tunnel opens and the relay buffers our first frame.
+  // `arenaEph` is the SAME per-game key baked into the tunnel at allocate (a different key rejects every
+  // co-signature). Variant-aware: ttt and caro share this hook, picking protocol + moveCodec by variant.
+  const enterArenaMatch = useCallback(
+    (allocation: ArenaAllocation, arenaEph: KeyPair) => {
+      const w = walletRef.current;
+      if (!w.address) {
+        setError("connect a wallet first");
+        setPhase("error");
+        return;
+      }
+      const selfWallet = w.address;
+      setError(null);
+      setPhase("connecting");
+      stoppingRef.current = false;
+      bufferedHelloRef.current = null;
+      bufferedSettleRef.current = null;
+      helloResolveRef.current = null;
+      settleResolveRef.current = null;
+      openedResolveRef.current = null;
+      void (async () => {
+        try {
+          installResumePersistence();
+          evictExpiredRecords();
+          const mp = new MpClient(resolveMpWsUrl(MP_URL), selfWallet, arenaEph);
+          mpRef.current = mp;
+          await mp.connect();
+          // Join the ONE pre-allocated match (role A); the fleet bound the bot as seat B at allocate.
+          const m = await mp.joinMatch(allocation.matchId);
+          matchIdRef.current = m.matchId;
+          roleRef.current = m.role;
+          setRole(m.role);
+          const channel = mp.channel(m.matchId);
+          channelRef.current = channel;
+          channel.onPeer((mm: Exclude<PeerMessage, { t: "frame" }>) => {
+            if (mm.t === "hello") {
+              const pub = String(mm.ephemeralPubkey);
+              if (helloResolveRef.current) helloResolveRef.current(pub);
+              else bufferedHelloRef.current = pub;
+            } else if (mm.t === "settleHalf") {
+              const sig = hexToBytes(String(mm.sig));
+              const rt = hexToBytes(String(mm.transcriptRoot));
+              if (settleResolveRef.current)
+                settleResolveRef.current({ sig, root: rt });
+              else bufferedSettleRef.current = { sig, root: rt };
+            } else if (mm.t === "closed")
+              setDigests((d) => ({ ...d, close: String(mm.digest) }));
+            else if (mm.t === "stop") {
+              stoppingRef.current = true;
+              if (tunnelRef.current)
+                void finishSettle(tunnelRef.current, channel, m.matchId);
+            }
+          });
+          channel.sendPeer({
+            t: "hello",
+            ephemeralPubkey: bytesToHex(arenaEph.publicKey),
+          });
+          const oppPubHex =
+            bufferedHelloRef.current ??
+            (await new Promise<string>((res) => {
+              helloResolveRef.current = res;
+            }));
+          const oppPubkey = hexToBytes(oppPubHex);
+
+          // Seat A was deposited by the batched `enterArena` PTB and seat B by the fleet at allocate —
+          // the tunnel is live, so build the engine over the pre-created tunnelId (no funding here).
+          const obj = await client.getObject({
+            id: allocation.tunnelId,
+            options: { showContent: true },
+          });
+          const fields = (
+            obj.data?.content as
+              | { fields?: Record<string, unknown> }
+              | undefined
+          )?.fields;
+          createdAtRef.current = BigInt(
+            (fields?.created_at as string | undefined) ?? 0,
+          );
+          const bankroll = BigInt(allocation.stakeEach);
+
+          const backend = core.defaultBackend();
+          const t = new core.DistributedTunnel<AnyState, CellMove>(
+            proto,
+            {
+              tunnelId: allocation.tunnelId,
+              self: core.makeEndpoint(
+                backend,
+                selfWallet,
+                {
+                  publicKey: arenaEph.publicKey,
+                  scheme: 0,
+                  secretKey: arenaEph.secretKey,
+                },
+                true,
+              ),
+              opponent: core.makeEndpoint(
+                backend,
+                m.opponentWallet,
+                { publicKey: oppPubkey, scheme: 0 },
+                false,
+              ),
+              selfParty: m.role,
+              moveCodec:
+                variant === "caro"
+                  ? (caroMoveCodec as never)
+                  : (tttMoveCodec as never),
+            },
+            channel.transport,
+            { a: bankroll, b: bankroll },
+          );
+          transcriptRef.current = new proof.Transcript(allocation.tunnelId);
+          activateTttSession(mp, channel, t, {
+            matchId: m.matchId,
+            role: m.role,
+            opponentWallet: m.opponentWallet,
+            opponentPubkeyHex: oppPubHex,
+            selfEphemeralSecretHex: bytesToHex(arenaEph.secretKey),
+          });
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        }
+      })();
+    },
+    [client, proto, variant, finishSettle, activateTttSession],
+  );
+  const enterArenaMatchRef = useRef(enterArenaMatch);
+  enterArenaMatchRef.current = enterArenaMatch;
+
+  // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this variant's seat A
+  // in the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
+  // auto-enter — the window comes alive without a "Find match" click. Only from idle; `clearArenaEntry`
+  // consumes it. Keyed by the variant's arena id (ttt vs caro), so the right window claims the right entry.
+  const arenaEnteredRef = useRef(false);
+  useEffect(() => {
+    const arenaId = arenaGameIdFor(variant);
+    const tryEnter = () =>
+      consumeArenaEntry(
+        arenaId,
+        arenaEnteredRef,
+        () => phaseRef.current === "idle",
+        enterArenaMatchRef.current,
+      );
+    tryEnter();
+    return subscribeArena(tryEnter);
+  }, [variant]);
+
   const play = useCallback((cell: number) => {
     const t = tunnelRef.current;
     if (!t) return;
@@ -876,7 +1048,7 @@ export function usePvpTicTacToe(
             } catch {
               /* ignore */
             }
-          }, 100);
+          }, AUTO_MOVE_MS);
       } else if (st.inner.turn === roleRef.current) {
         const cell = (() => {
           const empties = st.inner.board
@@ -890,7 +1062,7 @@ export function usePvpTicTacToe(
           } catch {
             /* ignore */
           }
-        }, 50);
+        }, AUTO_MOVE_MS);
       }
     },
     [proto, variant],
@@ -944,6 +1116,34 @@ export function usePvpTicTacToe(
   );
 
   const leave = useCallback(() => {
+    // Back: publish our settlement half before tearing down, so leaving SETTLES (the staying seat /
+    // 1h grace path submits the close) instead of stranding the staked tunnel. Sync + best-effort, so
+    // the half is on the wire before the transport closes; no live/unsettled match ⇒ just teardown.
+    const t = tunnelRef.current;
+    const ch = channelRef.current;
+    if (t && ch && !settledRef.current) {
+      try {
+        const root = transcriptRef.current
+          ? transcriptRef.current.root()
+          : new Uint8Array(32);
+        const half = t.buildSettlementHalfWithRoot(
+          createdAtRef.current,
+          root,
+          0n,
+        );
+        ch.sendPeer({
+          t: "settleHalf",
+          partyABalance: half.settlement.partyABalance.toString(),
+          partyBBalance: half.settlement.partyBBalance.toString(),
+          finalNonce: half.settlement.finalNonce.toString(),
+          timestamp: half.settlement.timestamp.toString(),
+          transcriptRoot: bytesToHex(root),
+          sig: bytesToHex(half.sigSelf),
+        });
+      } catch (e) {
+        console.error("[ttt pvp] leave publish failed:", e);
+      }
+    }
     teardownMatch(false);
     setPhase("idle");
   }, [teardownMatch]);
