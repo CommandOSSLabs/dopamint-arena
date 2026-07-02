@@ -287,6 +287,9 @@ async fn main() -> anyhow::Result<()> {
         faucet_cooldown_secs: config.faucet_cooldown_secs,
         faucet_max_per_window: config.faucet_max_per_window,
         faucet_admin_token: config.faucet_admin_token.clone(),
+        sponsor_sender_max_per_window: config.sponsor_sender_max_per_window,
+        sponsor_sender_window_secs: config.sponsor_sender_window_secs,
+        sponsor_global_daily_limit: config.sponsor_global_daily_limit,
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());

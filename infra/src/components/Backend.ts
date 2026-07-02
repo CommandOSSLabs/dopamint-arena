@@ -38,6 +38,10 @@ export interface BackendArgs {
   ollamaImageTag?: pulumi.Input<string>;
   // Comma-separated list of origins allowed by the CORS layer. Omitted => permissive CORS.
   corsAllowedOrigins?: pulumi.Input<string>;
+  // Public sponsor guardrails. Valid sponsorships are capped before Enoki/settler gas is requested.
+  sponsorSenderWindowSecs?: pulumi.Input<number>;
+  sponsorSenderMaxPerWindow?: pulumi.Input<number>;
+  sponsorGlobalDailyLimit?: pulumi.Input<number>;
   // S3 bucket for transcript archival. Injected as S3_TRANSCRIPTS_BUCKET plaintext env.
   // Omitted => archival disabled.
   s3TranscriptsBucket?: pulumi.Input<string>;
@@ -79,9 +83,21 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       pulumi.output(args.cacheEndpoint),
     ])
     .apply(([pubsub, cache]) => ({ pubsub, cache }));
-  const s3Cfg = pulumi
-    .all([pulumi.output(args.s3TranscriptsBucket ?? undefined)])
-    .apply(([bucket]) => ({ bucket }));
+  const runtimeCfg = pulumi
+    .all([
+      pulumi.output(args.s3TranscriptsBucket ?? undefined),
+      pulumi.output(args.sponsorSenderWindowSecs ?? 60),
+      pulumi.output(args.sponsorSenderMaxPerWindow ?? 120),
+      pulumi.output(args.sponsorGlobalDailyLimit ?? 100_000),
+    ])
+    .apply(
+      ([bucket, senderWindowSecs, senderMaxPerWindow, globalDailyLimit]) => ({
+        bucket,
+        senderWindowSecs,
+        senderMaxPerWindow,
+        globalDailyLimit,
+      }),
+    );
 
   return pulumi
     .all([
@@ -92,7 +108,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       secretArns,
       corsAllowedOrigins,
       ollama,
-      s3Cfg,
+      runtimeCfg,
     ])
     .apply(
       ([
@@ -103,7 +119,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
         secretArns,
         corsAllowedOrigins,
         ollama,
-        s3Cfg,
+        runtimeCfg,
       ]) => {
         const {
           enabled: ollamaEnabled,
@@ -162,12 +178,24 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             name: "WALRUS_AGGREGATOR_URL",
             value: "https://aggregator.walrus-testnet.walrus.space",
           },
-          ...(s3Cfg.bucket
+          ...(runtimeCfg.bucket
             ? [
-                { name: "S3_TRANSCRIPTS_BUCKET", value: s3Cfg.bucket },
+                { name: "S3_TRANSCRIPTS_BUCKET", value: runtimeCfg.bucket },
                 { name: "AWS_REGION", value: aws.config.region ?? "us-east-1" },
               ]
             : []),
+          {
+            name: "SPONSOR_SENDER_WINDOW_SECS",
+            value: String(runtimeCfg.senderWindowSecs),
+          },
+          {
+            name: "SPONSOR_SENDER_MAX_PER_WINDOW",
+            value: String(runtimeCfg.senderMaxPerWindow),
+          },
+          {
+            name: "SPONSOR_GLOBAL_DAILY_LIMIT",
+            value: String(runtimeCfg.globalDailyLimit),
+          },
           ...(corsAllowedOrigins
             ? [
                 {
