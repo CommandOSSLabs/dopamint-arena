@@ -43,7 +43,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import { allocateArenaGameForPlay } from "../../onchain/arenaPlay";
+import { runArenaPlay } from "../../onchain/arenaPlay";
 import {
   consumeArenaEntry,
   subscribeArena,
@@ -971,31 +971,25 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       selectStakeCoin: sponsored.selectStakeCoin,
       ensureStakeBalance: sponsored.ensureStakeBalance,
     };
-    (async () => {
-      try {
+    // Reserve a bot + pre-created tunnel for THIS game and deposit seat A (one wallet popup). The
+    // returned key is the per-game ephemeral baked into the tunnel at allocate; the SAME key
+    // co-signs every move via `enterArenaMatch` (a different key rejects sigs).
+    void runArenaPlay({
+      arenaGameId: ARENA_GAME_ID,
+      wallet,
+      stake,
+      label: "quantumPoker",
+      stakePerGame: POKER_BUYIN,
+      setBusy: () => {
         setError(null);
         setStatus("funding");
-        // Reserve a bot + pre-created tunnel for THIS game and deposit seat A (one wallet popup). The
-        // returned key is the per-game ephemeral baked into the tunnel at allocate; the SAME key
-        // co-signs every move via `enterArenaMatch` (a different key rejects sigs).
-        const entry = await allocateArenaGameForPlay({
-          arenaGameId: ARENA_GAME_ID,
-          wallet,
-          stake,
-          label: "quantumPoker",
-          stakePerGame: POKER_BUYIN,
-        });
-        if (!entry) {
-          setError("no opponent available — try again in a moment");
-          setStatus("error");
-          return;
-        }
-        enterArenaMatch(entry.allocation, entry.keypair);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+      },
+      setError: (msg) => {
+        setError(msg);
         setStatus("error");
-      }
-    })();
+      },
+      enter: enterArenaMatch,
+    });
   }, [account, signAndExecute, sponsored, enterArenaMatch]);
 
   // Cold-load entry: on mount (once the wallet is known), rebuild any persisted in-flight poker

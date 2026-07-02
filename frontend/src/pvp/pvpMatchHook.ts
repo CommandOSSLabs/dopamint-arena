@@ -49,7 +49,7 @@ import {
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
 import type { ArenaAllocation } from "@/onchain/arenaEnter";
-import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
+import { runArenaPlay } from "@/onchain/arenaPlay";
 import {
   consumeArenaEntry,
   subscribeArena,
@@ -772,9 +772,9 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   /**
    * On-demand arena entry: the "Play" trigger for an arena-wired game whose window the connect-time
    * batch did NOT allocate (opened mid-session, or its entry was consumed/finished). Reserves one bot
-   * for THIS game + deposits seat A in a single wallet popup (`allocateArenaGameForPlay`), then hands
-   * off to `enterArenaMatch` — the same path the store-consumer auto-enter uses. Sets `funding` first
-   * so the window shows progress instead of a dead lobby. No-op if the game isn't arena-wired.
+   * for THIS game + deposits seat A in a single wallet popup (`runArenaPlay`), then hands off to
+   * `enterArenaMatch` — the same path the store-consumer auto-enter uses. Sets `funding` first so the
+   * window shows progress instead of a dead lobby. No-op if the game isn't arena-wired.
    */
   playArena = () => {
     const deps = this.deps;
@@ -790,36 +790,31 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     installResumePersistence();
     evictExpiredRecords();
 
-    void (async () => {
-      try {
+    const stake: StakeStrategy = {
+      sponsoredSignExec: deps.sponsoredSignExec as never,
+      walletSignExec: deps.signExec as never,
+      prepareStake: deps.prepareStake,
+      selectStakeCoin: deps.selectStakeCoin,
+      ensureStakeBalance: deps.ensureStakeBalance,
+    };
+    void runArenaPlay({
+      arenaGameId,
+      wallet,
+      stake,
+      label: this.spec.game,
+      stakePerGame: this.spec.stake,
+      setBusy: () => {
         this.error = null;
         this.status = "funding";
         this.emit();
-        const stake: StakeStrategy = {
-          sponsoredSignExec: deps.sponsoredSignExec as never,
-          walletSignExec: deps.signExec as never,
-          prepareStake: deps.prepareStake,
-          selectStakeCoin: deps.selectStakeCoin,
-          ensureStakeBalance: deps.ensureStakeBalance,
-        };
-        const entry = await allocateArenaGameForPlay({
-          arenaGameId,
-          wallet,
-          stake,
-          label: this.spec.game,
-          stakePerGame: this.spec.stake,
-        });
-        if (!entry) {
-          this.error = "no opponent available — try again in a moment";
-          this.status = "error";
-          this.emit();
-          return;
-        }
-        this.enterArenaMatch(entry.allocation, entry.keypair);
-      } catch (e) {
-        this.fail(e);
-      }
-    })();
+      },
+      setError: (msg) => {
+        this.error = msg;
+        this.status = "error";
+        this.emit();
+      },
+      enter: this.enterArenaMatch,
+    });
   };
 
   setIntent = (intent: Intent) => {

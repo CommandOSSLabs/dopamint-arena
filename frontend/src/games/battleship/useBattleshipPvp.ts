@@ -52,7 +52,7 @@ import {
 } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
 import type { ArenaAllocation } from "@/onchain/arenaEnter";
-import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
+import { runArenaPlay } from "@/onchain/arenaPlay";
 import {
   consumeArenaEntry,
   subscribeArena,
@@ -810,36 +810,32 @@ class PvpSession {
     installResumePersistence();
     evictExpiredRecords();
 
-    void (async () => {
-      try {
+    const stake: StakeStrategy = {
+      sponsoredSignExec: deps.sponsoredSignExec as never,
+      walletSignExec: deps.signExec as never,
+      prepareStake: deps.prepareStake,
+      selectStakeCoin: deps.selectStakeCoin,
+      ensureStakeBalance: deps.ensureStakeBalance,
+    };
+    void runArenaPlay({
+      arenaGameId: BATTLESHIP_ARENA_GAME_ID,
+      wallet,
+      stake,
+      label: "battleship",
+      stakePerGame: STAKE_BALANCE,
+      setBusy: () => {
         this.error = null;
         this.status = "funding";
         this.emit();
-        const stake: StakeStrategy = {
-          sponsoredSignExec: deps.sponsoredSignExec as never,
-          walletSignExec: deps.signExec as never,
-          prepareStake: deps.prepareStake,
-          selectStakeCoin: deps.selectStakeCoin,
-          ensureStakeBalance: deps.ensureStakeBalance,
-        };
-        const entry = await allocateArenaGameForPlay({
-          arenaGameId: BATTLESHIP_ARENA_GAME_ID,
-          wallet,
-          stake,
-          label: "battleship",
-          stakePerGame: STAKE_BALANCE,
-        });
-        if (!entry) {
-          this.error = "no opponent available — try again in a moment";
-          this.status = "error";
-          this.emit();
-          return;
-        }
-        this.enterArenaMatch(entry.allocation, entry.keypair, placements);
-      } catch (e) {
-        this.fail(e);
-      }
-    })();
+      },
+      setError: (msg) => {
+        this.error = msg;
+        this.status = "error";
+        this.emit();
+      },
+      enter: (allocation, keypair) =>
+        this.enterArenaMatch(allocation, keypair, placements),
+    });
   };
 
   fire = (cell: number) => {

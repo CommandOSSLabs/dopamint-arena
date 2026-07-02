@@ -59,3 +59,40 @@ export async function allocateArenaGameForPlay(opts: {
   const allocation = allocations.find((a) => a.game === opts.arenaGameId);
   return allocation ? { allocation, keypair: eph } : null;
 }
+
+/** Shared `playArena` recipe: move the caller into its busy state, allocate via
+ *  `allocateArenaGameForPlay`, surface "no opponent" or thrown errors through the caller's own
+ *  error state, and otherwise hand the live allocation off to the caller's `enterArenaMatch`. Every
+ *  arena game's on-demand Play trigger is this same shape — this is the single place it lives so a
+ *  game only supplies its wallet-guard, `StakeStrategy`, and state-transition closures. */
+export async function runArenaPlay(opts: {
+  arenaGameId: string;
+  wallet: string;
+  stake: StakeStrategy;
+  label: string;
+  stakePerGame?: bigint;
+  /** Move the hook into its "funding/allocating" busy state (+ emit). */
+  setBusy: () => void;
+  /** Surface an error message (+ move to the error state). */
+  setError: (msg: string) => void;
+  /** Wire the live allocation into the match (each hook's enterArenaMatch). */
+  enter: (allocation: ArenaAllocation, keypair: KeyPair) => void;
+}): Promise<void> {
+  opts.setBusy();
+  try {
+    const entry = await allocateArenaGameForPlay({
+      arenaGameId: opts.arenaGameId,
+      wallet: opts.wallet,
+      stake: opts.stake,
+      label: opts.label,
+      stakePerGame: opts.stakePerGame,
+    });
+    if (!entry) {
+      opts.setError("no opponent available — try again in a moment");
+      return;
+    }
+    opts.enter(entry.allocation, entry.keypair);
+  } catch (e) {
+    opts.setError(e instanceof Error ? e.message : String(e));
+  }
+}

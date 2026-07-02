@@ -62,7 +62,7 @@ import {
   consumeArenaEntry,
   subscribeArena,
 } from "@/onchain/arenaAllocationStore";
-import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
+import { runArenaPlay } from "@/onchain/arenaPlay";
 import type { StakeStrategy } from "@/onchain/stakeTunnel";
 
 /** Backend arena/`profile_for` id (= the FE registry id; single token, same both ways). Single source
@@ -991,39 +991,35 @@ export function usePvpBlackjack(): PvpView {
         setPhase("error");
         return;
       }
-      setError(null);
-      setPhase("funding");
-      try {
-        const signExec = async (
-          tx: Parameters<typeof signAndExecute>[0]["transaction"],
-        ) => {
-          const r = await signAndExecute({ transaction: tx });
-          return { digest: r.digest };
-        };
-        const stakeStrategy: StakeStrategy = {
-          sponsoredSignExec: sponsored.signExec,
-          walletSignExec: signExec as never,
-          prepareStake: sponsored.prepareStake,
-          selectStakeCoin: sponsored.selectStakeCoin,
-          ensureStakeBalance: sponsored.ensureStakeBalance,
-        };
-        const entry = await allocateArenaGameForPlay({
-          arenaGameId: BLACKJACK_ARENA_GAME_ID,
-          wallet: walletAddress,
-          stake: stakeStrategy,
-          label: "blackjack",
-          stakePerGame: stake,
-        });
-        if (!entry) {
-          setError("no opponent available — try again in a moment");
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
+        const r = await signAndExecute({ transaction: tx });
+        return { digest: r.digest };
+      };
+      const stakeStrategy: StakeStrategy = {
+        sponsoredSignExec: sponsored.signExec,
+        walletSignExec: signExec as never,
+        prepareStake: sponsored.prepareStake,
+        selectStakeCoin: sponsored.selectStakeCoin,
+        ensureStakeBalance: sponsored.ensureStakeBalance,
+      };
+      await runArenaPlay({
+        arenaGameId: BLACKJACK_ARENA_GAME_ID,
+        wallet: walletAddress,
+        stake: stakeStrategy,
+        label: "blackjack",
+        stakePerGame: stake,
+        setBusy: () => {
+          setError(null);
+          setPhase("funding");
+        },
+        setError: (msg) => {
+          setError(msg);
           setPhase("error");
-          return;
-        }
-        enterArenaMatch(entry.allocation, entry.keypair);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-      }
+        },
+        enter: enterArenaMatch,
+      });
     })();
   }, [walletAddress, signAndExecute, sponsored, stake, enterArenaMatch]);
 

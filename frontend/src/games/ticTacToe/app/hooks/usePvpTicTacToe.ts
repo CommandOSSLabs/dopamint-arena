@@ -67,7 +67,7 @@ import {
   consumeArenaEntry,
   subscribeArena,
 } from "@/onchain/arenaAllocationStore";
-import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
+import { runArenaPlay } from "@/onchain/arenaPlay";
 import type { StakeStrategy } from "@/onchain/stakeTunnel";
 
 export type Variant = "ttt" | "caro";
@@ -989,37 +989,33 @@ export function usePvpTicTacToe(
         setPhase("error");
         return;
       }
-      setError(null);
-      setPhase("funding");
-      try {
-        const walletSignExec = async (tx: never) => {
-          const digest = await walletRef.current.executeTransaction({ tx });
-          return { digest };
-        };
-        const stakeStrategy: StakeStrategy = {
-          sponsoredSignExec: sponsoredRef.current.signExec,
-          walletSignExec: walletSignExec as never,
-          prepareStake: sponsoredRef.current.prepareStake,
-          selectStakeCoin: sponsoredRef.current.selectStakeCoin,
-          ensureStakeBalance: sponsoredRef.current.ensureStakeBalance,
-        };
-        const entry = await allocateArenaGameForPlay({
-          arenaGameId: arenaGameIdFor(variant),
-          wallet: w.address,
-          stake: stakeStrategy,
-          label: variant,
-          stakePerGame: scaledStake,
-        });
-        if (!entry) {
-          setError("no opponent available — try again in a moment");
+      const walletSignExec = async (tx: never) => {
+        const digest = await walletRef.current.executeTransaction({ tx });
+        return { digest };
+      };
+      const stakeStrategy: StakeStrategy = {
+        sponsoredSignExec: sponsoredRef.current.signExec,
+        walletSignExec: walletSignExec as never,
+        prepareStake: sponsoredRef.current.prepareStake,
+        selectStakeCoin: sponsoredRef.current.selectStakeCoin,
+        ensureStakeBalance: sponsoredRef.current.ensureStakeBalance,
+      };
+      await runArenaPlay({
+        arenaGameId: arenaGameIdFor(variant),
+        wallet: w.address,
+        stake: stakeStrategy,
+        label: variant,
+        stakePerGame: scaledStake,
+        setBusy: () => {
+          setError(null);
+          setPhase("funding");
+        },
+        setError: (msg) => {
+          setError(msg);
           setPhase("error");
-          return;
-        }
-        enterArenaMatch(entry.allocation, entry.keypair);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-      }
+        },
+        enter: enterArenaMatch,
+      });
     })();
   }, [variant, scaledStake, enterArenaMatch]);
 
