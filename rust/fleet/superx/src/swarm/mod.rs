@@ -7,7 +7,7 @@ pub mod cli;
 pub mod protocol;
 pub mod gates;
 pub mod anchor;
-// pub mod settle_manager;
+pub mod settle_manager;
 // pub mod pipeline;
 pub mod resources;
 pub mod cgroup;
