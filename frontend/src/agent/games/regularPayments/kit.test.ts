@@ -1,13 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
-  PaymentsProtocol,
   type PaymentsState,
   type PaymentMove,
 } from "sui-tunnel-ts/protocol/payments";
-import { createRegularPaymentsKit } from "./kit";
+import { createRegularPaymentsKit, isCatalogPaymentMove } from "./kit";
 import type { ProtocolContext } from "sui-tunnel-ts/protocol/Protocol";
-import { defaultStateHash } from "@/agent/stateHash";
+import { PRODUCTS } from "@/games/regularPayments/utils/catalog";
+import { DEPOSIT_BUDGET } from "@/games/regularPayments/utils/constants";
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -21,19 +21,18 @@ function mulberry32(seed: number): () => number {
 describe("regularPayments kit", () => {
   const ctx: ProtocolContext = {
     tunnelId: "rp-1",
-    initialBalances: { a: 100n, b: 100n },
+    initialBalances: { a: DEPOSIT_BUDGET, b: 1n },
   };
 
-  const MICRO = 5n; // fixed micro amount for these tests
-
   it("uses the payments.v1 protocol domain and correct id", () => {
-    const kit = createRegularPaymentsKit(MICRO);
+    const kit = createRegularPaymentsKit();
     assert.strictEqual(kit.id, "regular-payments");
     assert.strictEqual(kit.protocol.name, "payments.v1");
+    assert.strictEqual(kit.defaultStake, DEPOSIT_BUDGET);
   });
 
-  it("payer bot (A) proposes the fixed micro payment when it has balance", () => {
-    const kit = createRegularPaymentsKit(MICRO);
+  it("shopper bot (A) proposes a catalog-priced purchase when it has budget", () => {
+    const kit = createRegularPaymentsKit();
     const state = kit.protocol.initialState(ctx);
     const botA = kit.createBot("A", { rngForSeat: () => mulberry32(1) });
     const botB = kit.createBot("B", { rngForSeat: () => mulberry32(2) });
@@ -41,19 +40,24 @@ describe("regularPayments kit", () => {
     const moveA = botA.plan(state);
     const moveB = botB.plan(state);
 
-    assert.deepStrictEqual(moveA, { from: "A", amount: MICRO });
+    assert.ok(moveA);
+    assert.strictEqual(moveA.from, "A");
+    assert.ok(
+      PRODUCTS.some((p) => p.priceMtps === moveA.amount),
+      "amount must match a catalog price",
+    );
     assert.strictEqual(moveB, null);
   });
 
-  it("shop bot (B) never proposes (unidirectional micro-payments flow)", () => {
-    const kit = createRegularPaymentsKit(MICRO);
+  it("shop bot (B) never initiates purchases", () => {
+    const kit = createRegularPaymentsKit();
     const state = kit.protocol.initialState(ctx);
     const botB = kit.createBot("B", { rngForSeat: () => mulberry32(7) });
     assert.strictEqual(botB.plan(state), null);
   });
 
-  it("drives multiple fixed micro-payments with conserved balances and monotonic count", () => {
-    const kit = createRegularPaymentsKit(MICRO);
+  it("drives multiple catalog picks with conserved balances", () => {
+    const kit = createRegularPaymentsKit();
     const botA = kit.createBot("A", { rngForSeat: () => mulberry32(1) });
     const botB = kit.createBot("B", { rngForSeat: () => mulberry32(2) });
 
@@ -62,11 +66,9 @@ describe("regularPayments kit", () => {
 
     for (let i = 0; i < steps; i++) {
       const move = botA.plan(state);
-      assert.ok(move, `expected payer move at step ${i}`);
+      assert.ok(move, `expected shopper move at step ${i}`);
       assert.strictEqual(move.from, "A");
-      assert.strictEqual(move.amount, MICRO);
-
-      // Shop never proposes
+      assert.ok(isCatalogPaymentMove(state, move));
       assert.strictEqual(botB.plan(state), null);
 
       const next = kit.protocol.applyMove(state, move, "A");
@@ -84,30 +86,36 @@ describe("regularPayments kit", () => {
     assert.strictEqual(state.count, BigInt(steps));
   });
 
-  it("plan is deterministic and idempotent on the same state", () => {
-    const kit = createRegularPaymentsKit(MICRO);
+  it("plan is deterministic for the same rng seed and state", () => {
+    const kit = createRegularPaymentsKit();
     const state = kit.protocol.initialState(ctx);
-    const botA = kit.createBot("A", { rngForSeat: () => mulberry32(42) });
+    const mkBot = () =>
+      kit.createBot("A", { rngForSeat: () => mulberry32(42) });
 
-    const m1 = botA.plan(state);
-    const m2 = botA.plan(state);
-    const m3 = botA.plan(state);
-
-    assert.deepStrictEqual(m1, m2);
-    assert.deepStrictEqual(m1, m3);
+    assert.deepStrictEqual(mkBot().plan(state), mkBot().plan(state));
   });
 
-  it("stops proposing when payer has insufficient balance", () => {
-    const kit = createRegularPaymentsKit(50n);
-    // Force a state where A has less than the payment amount
+  it("stops proposing when shopper cannot afford any catalog item", () => {
+    const kit = createRegularPaymentsKit();
     const lowState: PaymentsState = {
-      balanceA: 10n,
-      balanceB: 90n,
-      total: 100n,
+      balanceA: 0n,
+      balanceB: DEPOSIT_BUDGET,
+      total: DEPOSIT_BUDGET,
       count: 0n,
     };
 
     const botA = kit.createBot("A", { rngForSeat: () => mulberry32(1) });
     assert.strictEqual(botA.plan(lowState), null);
+  });
+
+  it("isCatalogPaymentMove rejects non-catalog amounts", () => {
+    const state: PaymentsState = {
+      balanceA: DEPOSIT_BUDGET,
+      balanceB: 1n,
+      total: DEPOSIT_BUDGET + 1n,
+      count: 0n,
+    };
+    const bad: PaymentMove = { from: "A", amount: 999n };
+    assert.strictEqual(isCatalogPaymentMove(state, bad), false);
   });
 });
