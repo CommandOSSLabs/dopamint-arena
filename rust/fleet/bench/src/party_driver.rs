@@ -6,6 +6,7 @@
 use crate::cli::{AnchorMode, SuiSponsoredAnchorOpts};
 use crate::heartbeat::HeartbeatConfig;
 use crate::pre_open_gate::PreOpenGate;
+use crate::settle_wave_gate::SettleWaveGate;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sui_tunnel_anchor::{
@@ -341,6 +342,7 @@ struct BenchAnchor {
     /// Present only in warm-up mode: parks between open and play until the
     /// initial fleet is open. In churn mode this stays `None`.
     pre_open_gate: Option<Arc<PreOpenGate>>,
+    settle_gate: Option<Arc<SettleWaveGate>>,
 }
 
 impl BenchAnchor {
@@ -350,6 +352,7 @@ impl BenchAnchor {
         submitter: Option<BenchSubmitter>,
         seat: Seat,
         pre_open_gate: Option<Arc<PreOpenGate>>,
+        settle_gate: Option<Arc<SettleWaveGate>>,
     ) -> Self {
         Self {
             inner,
@@ -357,6 +360,7 @@ impl BenchAnchor {
             submitter,
             seat,
             pre_open_gate,
+            settle_gate,
         }
     }
 
@@ -474,9 +478,16 @@ impl BenchSubmitter {
         seat: Seat,
         inner: &BenchAnchorInner,
         request: TunnelSettleRequest,
+        settle_gate: Option<Arc<SettleWaveGate>>,
     ) -> SettleResult {
-        self.settle_as_seat_with_pair_timeout(seat, inner, request, Some(BENCH_PAIR_TIMEOUT))
-            .await
+        self.settle_as_seat_with_pair_timeout(
+            seat,
+            inner,
+            request,
+            settle_gate,
+            Some(BENCH_PAIR_TIMEOUT),
+        )
+        .await
     }
 
     async fn settle_as_seat_with_pair_timeout(
@@ -484,6 +495,7 @@ impl BenchSubmitter {
         seat: Seat,
         inner: &BenchAnchorInner,
         request: TunnelSettleRequest,
+        settle_gate: Option<Arc<SettleWaveGate>>,
         pair_timeout: Option<Duration>,
     ) -> SettleResult {
         let receiver = {
@@ -504,7 +516,10 @@ impl BenchSubmitter {
         };
 
         if seat == Seat::A {
-            if let Err(error) = self.submit_settle_when_ready(inner, pair_timeout).await {
+            if let Err(error) = self
+                .submit_settle_when_ready(inner, settle_gate, pair_timeout)
+                .await
+            {
                 let result = Err(error);
                 self.complete_settle(&result);
             }
@@ -518,6 +533,7 @@ impl BenchSubmitter {
     async fn submit_settle_when_ready(
         &self,
         inner: &BenchAnchorInner,
+        settle_gate: Option<Arc<SettleWaveGate>>,
         pair_timeout: Option<Duration>,
     ) -> Result<(), TunnelAnchorError> {
         loop {
@@ -544,6 +560,9 @@ impl BenchSubmitter {
                 continue;
             };
 
+            if let Some(gate) = &settle_gate {
+                gate.admit().await;
+            }
             let (result_a, result_b) =
                 tokio::join!(inner.settle(request_a), inner.settle(request_b));
             let result = result_a.or(result_b);
@@ -780,9 +799,14 @@ impl TunnelAnchor for BenchAnchor {
         let started = Instant::now();
         let result = if let Some(submitter) = &self.submitter {
             submitter
-                .settle_as_seat(self.seat, &self.inner, request)
+                .settle_as_seat(self.seat, &self.inner, request, self.settle_gate.clone())
                 .await
         } else {
+            if self.seat == Seat::A {
+                if let Some(gate) = &self.settle_gate {
+                    gate.admit().await;
+                }
+            }
             match &self.inner {
                 BenchAnchorInner::Memory(a) => a.settle(request).await,
                 BenchAnchorInner::Sui(a) => a.settle(request).await,
@@ -946,6 +970,7 @@ where
     let submitter = matches!(anchor_mode, AnchorMode::SuiSponsored).then(BenchSubmitter::new);
     let submitter_for_supervisor = submitter.clone();
     let pre_open_gate = crate::protocols::current_request_pre_open_gate();
+    let settle_gate = crate::protocols::current_request_settle_gate();
     let anchor_a = InstrumentedAnchor::new(
         BenchAnchor::new(
             inner_anchor.clone(),
@@ -953,6 +978,7 @@ where
             submitter.clone(),
             Seat::A,
             pre_open_gate.clone(),
+            settle_gate.clone(),
         ),
         CollectingSink::with_capacity(2),
     );
@@ -963,6 +989,7 @@ where
             submitter,
             Seat::B,
             pre_open_gate,
+            settle_gate,
         ),
         CollectingSink::with_capacity(2),
     );
@@ -1719,6 +1746,7 @@ mod tests {
             Some(BenchSubmitter::new()),
             Seat::B,
             Some(PreOpenGate::new(1)),
+            None,
         );
 
         assert_eq!(anchor.open_pair_timeout(), None);
@@ -1769,13 +1797,17 @@ mod tests {
         let b = {
             let submitter = submitter.clone();
             let inner = inner.clone();
-            tokio::spawn(async move { submitter.settle_as_seat(Seat::B, &inner, request_b).await })
+            tokio::spawn(async move {
+                submitter
+                    .settle_as_seat(Seat::B, &inner, request_b, None)
+                    .await
+            })
         };
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(!b.is_finished(), "seat B must wait for seat A submitter");
 
         let settled_a = submitter
-            .settle_as_seat(Seat::A, &inner, request_a)
+            .settle_as_seat(Seat::A, &inner, request_a, None)
             .await
             .expect("seat A settle");
         let settled_b = b.await.expect("seat B join").expect("seat B settle");
@@ -1835,7 +1867,11 @@ mod tests {
         let a = {
             let submitter = submitter.clone();
             let inner = inner.clone();
-            tokio::spawn(async move { submitter.settle_as_seat(Seat::A, &inner, request_a).await })
+            tokio::spawn(async move {
+                submitter
+                    .settle_as_seat(Seat::A, &inner, request_a, None)
+                    .await
+            })
         };
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
@@ -1849,7 +1885,7 @@ mod tests {
         );
 
         let settled_b = submitter
-            .settle_as_seat(Seat::B, &inner, request_b)
+            .settle_as_seat(Seat::B, &inner, request_b, None)
             .await
             .expect("seat B settle");
         let settled_a = a.await.expect("seat A join").expect("seat A settle");
@@ -1897,6 +1933,7 @@ mod tests {
                     transcript_root: None,
                     transcript_entries: Vec::new(),
                 },
+                None,
                 Some(Duration::from_millis(5)),
             )
             .await;
@@ -1952,6 +1989,7 @@ mod tests {
                             transcript_root: None,
                             transcript_entries: Vec::new(),
                         },
+                        None,
                         Some(Duration::from_secs(60)),
                     )
                     .await

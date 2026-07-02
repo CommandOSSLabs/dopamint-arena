@@ -3,15 +3,15 @@
 //! as the serving fleet, and completed lifecycles are replaced until the global
 //! duration stops new launches or the move limit stops move production.
 
-use crate::cli::{
-    AnchorMode, BenchMode, CohortConfig, FrameCodecKind, MoveTarget, ScenarioMode,
-};
+use crate::cli::{AnchorMode, BenchMode, CohortConfig, FrameCodecKind, MoveTarget, ScenarioMode};
 use crate::party_driver::{
     SeatKit, StageWindowRecorder, SuiSponsoredBenchContext, TunnelTelemetry,
 };
 use crate::pre_open_gate::PreOpenGate;
 use crate::protocols::{play_tunnel_for, PlayTunnelRequest};
+use crate::settle_wave_gate::SettleWaveGate;
 use crate::stats::{summarize, Distribution};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sui_tunnel_anchor::{
     AnchorCostSnapshot, SuiPtbExecution, SuiPtbFlushReason, SuiPtbMetricsSnapshot,
@@ -301,7 +301,8 @@ async fn run_one_tunnel(
     kit_source: SeatKitSource,
     run_control: Option<DriverRunControl>,
     stage_windows: Option<StageWindowRecorder>,
-    pre_open_gate: Option<std::sync::Arc<PreOpenGate>>,
+    pre_open_gate: Option<Arc<PreOpenGate>>,
+    settle_gate: Option<Arc<SettleWaveGate>>,
 ) -> TunnelSample {
     // Resolve seat keys inside the task so `Fresh` keygen parallelizes across the
     // worker pool rather than serializing on the refill coordinator.
@@ -315,22 +316,25 @@ async fn run_one_tunnel(
         ?codec,
         "tunnel task start"
     );
-    let r = crate::protocols::scope_pre_open_gate(
-        pre_open_gate,
-        play_tunnel_for(PlayTunnelRequest {
-            protocol_id,
-            codec,
-            card_seed: scenario.card_seed(tunnel_index),
-            run_control,
-            kit: &kit,
-            tunnel_id: &tunnel_id,
-            initial_balance,
-            max_moves_per_tunnel,
-            anchor_mode,
-            sui_context: sui_context.as_ref(),
-            telemetry,
-            stage_windows,
-        }),
+    let r = crate::protocols::scope_settle_gate(
+        settle_gate,
+        crate::protocols::scope_pre_open_gate(
+            pre_open_gate,
+            play_tunnel_for(PlayTunnelRequest {
+                protocol_id,
+                codec,
+                card_seed: scenario.card_seed(tunnel_index),
+                run_control,
+                kit: &kit,
+                tunnel_id: &tunnel_id,
+                initial_balance,
+                max_moves_per_tunnel,
+                anchor_mode,
+                sui_context: sui_context.as_ref(),
+                telemetry,
+                stage_windows,
+            }),
+        ),
     )
     .await;
     tracing::debug!(
@@ -539,6 +543,9 @@ pub fn run_lifecycle_pipeline(
         BenchMode::Warmup => Some(PreOpenGate::new(pool as u64)),
         BenchMode::Churn => None,
     };
+    let settle_gate = cohorts
+        .settle_cohort
+        .map(|cohort| SettleWaveGate::new(cohort, cohorts.settle_spacing));
     let preinit_kits: Vec<SeatKit> = if preinitialize {
         (0..pool).map(|_| random_seat_kit()).collect()
     } else {
@@ -601,6 +608,7 @@ pub fn run_lifecycle_pipeline(
                 Some(run_control_for_tasks.clone()),
                 Some(stage_windows_for_tasks.clone()),
                 pre_open_gate.clone(),
+                settle_gate.clone(),
             ));
         };
 
@@ -1252,6 +1260,46 @@ mod tests {
     }
 
     #[test]
+    fn warmup_settle_cohort_spaces_settle_submissions() {
+        let out = run_lifecycle_pipeline(
+            2,
+            1,
+            None,
+            8,
+            ScenarioMode::Varied,
+            FrameCodecKind::Postcard,
+            AnchorMode::Memory,
+            None,
+            tunnel_core::protocol_id::PAYMENTS_V1,
+            200,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+                heartbeat: None,
+            },
+            true,
+            BenchMode::Warmup,
+            120,
+            CohortConfig {
+                open_cohort: None,
+                open_spacing: Duration::ZERO,
+                settle_cohort: Some(4),
+                settle_spacing: Duration::from_millis(100),
+            },
+        );
+
+        assert_eq!(out.bench_mode, "warmup");
+        assert_eq!(out.tunnels_opened, 8);
+        assert_eq!(out.tunnels_settled, 8);
+        assert_eq!(out.tunnels_aborted, 0);
+        assert!(
+            out.settle_active_elapsed_ms >= 75,
+            "settle cohort spacing should delay settlement, got {}ms",
+            out.settle_active_elapsed_ms
+        );
+    }
+
+    #[test]
     fn varied_mode_settles_when_move_control_stops() {
         let samples = std::thread::Builder::new()
             .name("fleet-varied-mode-test".into())
@@ -1283,6 +1331,7 @@ mod tests {
                                 },
                                 SeatKitSource::Preinitialized(Box::new(random_seat_kit())),
                                 Some(run_control),
+                                None,
                                 None,
                                 None,
                             )

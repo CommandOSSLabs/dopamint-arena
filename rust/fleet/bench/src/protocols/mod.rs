@@ -4,6 +4,7 @@ use crate::party_driver::SeatKit;
 use crate::party_driver::{StageWindowRecorder, TunnelTelemetry};
 use crate::party_driver::{SuiSponsoredBenchContext, TunnelOutcome};
 use crate::pre_open_gate::PreOpenGate;
+use crate::settle_wave_gate::SettleWaveGate;
 use std::future::Future;
 use std::sync::Arc;
 use tunnel_core::protocol_id::{
@@ -52,6 +53,7 @@ tokio::task_local! {
     static REQUEST_RUN_CONTROL: Option<DriverRunControl>;
     static REQUEST_STAGE_WINDOWS: Option<StageWindowRecorder>;
     static REQUEST_PRE_OPEN_GATE: Option<Arc<PreOpenGate>>;
+    static REQUEST_SETTLE_GATE: Option<Arc<SettleWaveGate>>;
     static REQUEST_INITIAL_BALANCE: u64;
     static REQUEST_MAX_MOVES_PER_TUNNEL: u64;
 }
@@ -68,6 +70,10 @@ pub(crate) fn current_request_pre_open_gate() -> Option<Arc<PreOpenGate>> {
     REQUEST_PRE_OPEN_GATE.try_with(Clone::clone).ok().flatten()
 }
 
+pub(crate) fn current_request_settle_gate() -> Option<Arc<SettleWaveGate>> {
+    REQUEST_SETTLE_GATE.try_with(Clone::clone).ok().flatten()
+}
+
 pub(crate) async fn scope_pre_open_gate<F, T>(
     pre_open_gate: Option<Arc<PreOpenGate>>,
     future: F,
@@ -76,6 +82,16 @@ where
     F: Future<Output = T>,
 {
     REQUEST_PRE_OPEN_GATE.scope(pre_open_gate, future).await
+}
+
+pub(crate) async fn scope_settle_gate<F, T>(
+    settle_gate: Option<Arc<SettleWaveGate>>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    REQUEST_SETTLE_GATE.scope(settle_gate, future).await
 }
 
 pub(crate) fn current_initial_balance() -> u64 {
