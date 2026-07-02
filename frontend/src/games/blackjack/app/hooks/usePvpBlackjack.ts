@@ -866,8 +866,9 @@ export function usePvpBlackjack(): PvpView {
       stoppingRef.current = false;
       setRounds([]);
       autoKickedRef.current = false;
-      autoRef.current = defaultAuto("blackjack");
-      setAutoState(autoRef.current);
+      // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
+      autoRef.current = true;
+      setAutoState(true);
       bufferedSettleRef.current = null;
       bufferedHelloRef.current = null;
       openedResolveRef.current = null;
@@ -1035,7 +1036,8 @@ export function usePvpBlackjack(): PvpView {
     if (t.displayState !== t.state) return; // a move already awaits the peer's ACK
     if (
       roleRef.current !== getPlayerParty(t.state.round) ||
-      t.state.phase !== "player"
+      t.state.phase !== "player" ||
+      t.displayState !== t.state // a proposal is already awaiting its ACK (e.g. a re-seated resume move)
     )
       return;
     try {
@@ -1058,7 +1060,8 @@ export function usePvpBlackjack(): PvpView {
       if (
         roleRef.current !== getPlayerParty(t.state.round + 1n) ||
         t.state.phase !== "round_over" ||
-        proto.isTerminal(t.state)
+        proto.isTerminal(t.state) ||
+        t.displayState !== t.state // a proposal is already awaiting its ACK
       )
         return;
       lastBetRef.current = amount; // remember it so auto reuses this stake next round

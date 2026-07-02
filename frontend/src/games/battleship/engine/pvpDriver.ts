@@ -14,6 +14,32 @@ import { proveCell } from "./merkle";
 
 type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
 
+/**
+ * Whether `role` may propose a `shoot` at `cell` right now. Gates on the CONFIRMED `state` (its turn,
+ * no shot awaiting a reveal, the game live, the cell unfired) AND on `hasPending`: a proposal already
+ * awaiting its ACK. The pending guard is load-bearing — the confirmed state lags an in-flight
+ * proposal, so a re-seated pending shoot after cold-load resume reads as "A's turn, nothing pending",
+ * and gating on the state alone would propose a second shoot and throw "a proposal is already awaiting
+ * ACK". Callers pass `hasPending` as `tunnel.displayState !== tunnel.state`.
+ */
+export function canFireShot(
+  state: BattleshipState,
+  role: Party,
+  cell: number,
+  hasPending: boolean,
+): boolean {
+  if (hasPending) return false;
+  if (
+    state.phase !== "playing" ||
+    state.pendingShot ||
+    state.turn !== role ||
+    state.winner !== 0
+  )
+    return false;
+  const atOpponent = role === "A" ? state.shotsAtB : state.shotsAtA;
+  return !atOpponent.some((s) => s.cell === cell);
+}
+
 /** The truthful reveal for a cell of this seat's own fleet, with its Merkle proof. */
 export function revealMove(secret: FleetSecret, cell: number): BattleshipMove {
   return {

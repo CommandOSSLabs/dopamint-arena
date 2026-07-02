@@ -175,6 +175,10 @@ impl Protocol for WorldCanvasCell {
         state.count >= self.cap
     }
 
+    fn can_gracefully_close(&self, _state: &CellCanvasState) -> bool {
+        true
+    }
+
     fn sample_move(
         &self,
         state: &CellCanvasState,
@@ -373,6 +377,10 @@ impl Protocol for WorldCanvasStroke {
         state.updates >= WORLD_CANVAS_UPDATE_CAP
     }
 
+    fn can_gracefully_close(&self, _state: &StrokeCanvasState) -> bool {
+        true
+    }
+
     fn sample_move(
         &self,
         state: &StrokeCanvasState,
@@ -442,5 +450,24 @@ mod wire_parity {
     #[test]
     fn genesis_domain_matches_fe_protocol_domain() {
         assert_eq!(STROKE_DOMAIN, b"sui_tunnel::proto::world_canvas.stroke.v1");
+    }
+
+    #[test]
+    fn ordinary_canvas_states_are_gracefully_closeable() {
+        let ctx = TunnelContext {
+            tunnel_id: "0xcanvas".into(),
+            initial: Balances { a: 10, b: 10 },
+            seat: Seat::A,
+        };
+        let cell = WorldCanvasCell::default();
+        let stroke = WorldCanvasStroke;
+
+        let cell_state = cell.initial_state(&ctx);
+        let stroke_state = stroke.initial_state(&ctx);
+
+        assert!(cell.can_gracefully_close(&cell_state));
+        assert!(!cell.is_terminal(&cell_state));
+        assert!(stroke.can_gracefully_close(&stroke_state));
+        assert!(!stroke.is_terminal(&stroke_state));
     }
 }

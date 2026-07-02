@@ -1,6 +1,6 @@
 use tunnel_cross::{
-    dest_of, hazards_at, is_lethal, lane_kind, Cross, CrossDir, CrossLaneKind, CrossMove,
-    CrossState, COLUMN_COUNT, SPAWN_COL, TICK_CAP, WIN_LANE,
+    dest_of, hazards_at, is_lethal, lane_kind, settle_share, Cross, CrossDir, CrossLaneKind,
+    CrossMove, CrossState, COLUMN_COUNT, SPAWN_COL, TICK_CAP, WIN_LANE,
 };
 use tunnel_harness::{Balances, Protocol, Seat, TunnelContext};
 
@@ -146,4 +146,83 @@ fn tick_cap_is_terminal_push_floor() {
     let mut state = protocol.initial_state(&ctx());
     state.tick = TICK_CAP;
     assert!(protocol.is_terminal(&state));
+}
+
+// Settle-fairness: the cash-out invariant (mirrors the TS `settleShare` tests for parity).
+
+#[test]
+fn settle_share_splits_evenly_at_equal_progress() {
+    assert_eq!(settle_share(200, 0, 0, WIN_LANE), 100);
+    assert_eq!(settle_share(200, 300, 300, WIN_LANE), 100);
+    assert_eq!(settle_share(200, WIN_LANE, WIN_LANE, WIN_LANE), 100);
+}
+
+#[test]
+fn settle_share_pays_full_pot_to_a_full_distance_lead() {
+    assert_eq!(settle_share(200, WIN_LANE, 0, WIN_LANE), 200);
+    assert_eq!(settle_share(200, 0, WIN_LANE, WIN_LANE), 0);
+}
+
+#[test]
+fn settle_share_clamps_a_lead_beyond_the_distance() {
+    assert_eq!(settle_share(200, WIN_LANE * 3, 0, WIN_LANE), 200);
+    assert_eq!(settle_share(200, 0, WIN_LANE * 3, WIN_LANE), 0);
+}
+
+#[test]
+fn settle_share_stays_within_bounds() {
+    for (x, y) in [(0, 0), (WIN_LANE, 0), (0, WIN_LANE), (123, 456)] {
+        assert!(settle_share(200, x, y, WIN_LANE) <= 200);
+    }
+}
+
+#[test]
+fn settle_share_rises_with_the_leaders_progress() {
+    let mut prev = 0u64;
+    let mut score_a = 0i64;
+    while score_a <= WIN_LANE {
+        let s = settle_share(200, score_a, 100, WIN_LANE);
+        assert!(s >= prev);
+        prev = s;
+        score_a += 60;
+    }
+}
+
+#[test]
+fn settle_share_never_gives_the_leader_less_than_half() {
+    assert!(settle_share(200, 400, 100, WIN_LANE) >= 100);
+    assert!(settle_share(200, 100, 400, WIN_LANE) <= 100);
+}
+
+#[test]
+fn settle_share_barely_moves_for_a_one_lane_lead() {
+    // The discarded raw-ratio model gave A the whole pot for a 1-vs-0 lead; guard it.
+    assert_eq!(settle_share(200, 1, 0, WIN_LANE), 100);
+}
+
+#[test]
+fn abandoned_mid_race_settles_by_progress_not_frozen_split() {
+    let protocol = Cross;
+    // A far ahead (grass lane 402), B behind (grass lane 102); both stay, still racing.
+    let mut mid_race = protocol.initial_state(&ctx()); // total 200
+    mid_race.tick = 10;
+    mid_race.players[0].lane = 402;
+    mid_race.players[0].score = 402;
+    mid_race.players[1].lane = 102;
+    mid_race.players[1].score = 102;
+    let next = protocol
+        .apply_move(
+            &mid_race,
+            &CrossMove {
+                dir_a: None,
+                dir_b: None,
+            },
+            Seat::A,
+        )
+        .unwrap();
+    assert_eq!(next.winner, None); // still mid-race, no winner yet
+    let bal = protocol.balances(&next);
+    assert_eq!(bal.sum(), 200); // conservation holds by construction
+    assert_eq!(bal.a, settle_share(200, 402, 102, WIN_LANE)); // leader's fair progress share
+    assert!(bal.a > bal.b);
 }

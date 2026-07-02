@@ -31,7 +31,7 @@ pub mod move_strategy;
 pub use move_strategy::{random::RandomMoveStrategy, MoveStrategy};
 
 pub mod party_driver;
-pub use party_driver::{DriverOutcome, PartyDriver, SeatParts};
+pub use party_driver::{DriverOutcome, DriverRunControl, PartyDriver, SeatParts};
 
 pub mod observer;
 pub use observer::{DriverObserver, DriverStart, MoveCommitted};
@@ -39,8 +39,8 @@ pub use observer::{DriverObserver, DriverStart, MoveCommitted};
 pub mod transcript;
 pub use transcript::{
     BcsTranscriptCodec, InMemoryTranscriptRecorder, JsonTranscriptCodec, NullTranscriptRecorder,
-    PostcardTranscriptCodec, Transcript, TranscriptCodec, TranscriptEntry, TranscriptError,
-    TranscriptRecorder,
+    PostcardTranscriptCodec, RootOnlyTranscriptRecorder, Transcript, TranscriptCodec,
+    TranscriptEntry, TranscriptError, TranscriptRecorder,
 };
 
 pub mod anchor;

@@ -890,3 +890,80 @@ test("seatPending does not send; resendPending re-emits the byte-identical MOVE 
     "seatPending+resendPending == propose frame"
   );
 });
+
+test("resume replay: bot's [ACK n+1, MOVE n+2] converges a browser holding its pending", () => {
+  // Co-located-bot resume: A proposed n+1 and reloaded before receiving anything; the bot (B) had
+  // ACKed n+1 then proposed n+2. On resume the bot replays BOTH frames in order. With A's pending
+  // restored (the onProposed-persistence fix), the replayed ACK matches A's pending and the MOVE then
+  // applies — A catches up to n+2 with no "unexpected ACK" / "nonce gap" throw. This is the two-gap
+  // the single-last-frame resend could never bridge.
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const manA = makeManual();
+  const manB = makeManual();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const dtA = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.aSelf, opponent: e.aOpp, selfParty: "A" },
+    manA.transport,
+    BAL
+  );
+  const dtB = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.bSelf, opponent: e.bOpp, selfParty: "B" },
+    manB.transport,
+    BAL
+  );
+
+  dtA.propose(1, 100n); // manA.sent = [Move(1)]; A holds pending @1, nonce still 0
+  manB.deliver(manA.sent[0]); // B applies A's move → manB.sent = [Ack(1)], B @1, turn B
+  dtB.propose(1, 200n); // manB.sent = [Ack(1), Move(2)]; B holds pending @2
+  assert.equal(dtA.nonce, 0n, "A never received the bot's frames (reloaded mid-round-trip)");
+  assert.equal(manB.sent.length, 2, "bot's unacked tail is exactly [ACK(1), MOVE(2)]");
+
+  // Bot replays its recent frames, oldest→newest.
+  manA.deliver(manB.sent[0]); // Ack(1): matches A's restored pending → A @1
+  manA.deliver(manB.sent[1]); // Move(2): now exactly nonce+1 → A applies → A @2
+  assert.equal(dtA.nonce, 2n, "browser caught up to the bot across the two-frame gap");
+
+  // A's ACK(2) closes the loop back to the bot.
+  manB.deliver(manA.sent[manA.sent.length - 1]);
+  assert.equal(dtB.nonce, 2n, "both seats converged");
+});
+
+test("replayed ACK with no restored pending throws (why the proposer's pending must be persisted)", () => {
+  // Build a valid ACK(1), then deliver it to a FRESH A that never restored a pending. onAck can't
+  // match it and throws — the hazard the onProposed-persistence fix avoids by ensuring a resumed
+  // proposer always restores WITH its pending.
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const manA = makeManual();
+  const manB = makeManual();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const dtA = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.aSelf, opponent: e.aOpp, selfParty: "A" },
+    manA.transport,
+    BAL
+  );
+  const dtB = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.bSelf, opponent: e.bOpp, selfParty: "B" },
+    manB.transport,
+    BAL
+  );
+  dtA.propose(1, 100n);
+  manB.deliver(manA.sent[0]); // manB.sent = [Ack(1)]
+  const ack1 = manB.sent[0];
+
+  const manA2 = makeManual();
+  const eA2 = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const dtA2 = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: eA2.aSelf, opponent: eA2.aOpp, selfParty: "A" },
+    manA2.transport,
+    BAL
+  );
+  void dtA2;
+  assert.throws(() => manA2.deliver(ack1), /unexpected ACK/);
+});

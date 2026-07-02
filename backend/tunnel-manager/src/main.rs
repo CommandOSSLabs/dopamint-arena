@@ -10,11 +10,15 @@ mod mp;
 mod ollama;
 mod routes;
 mod s3;
+mod settle_batch;
+mod settle_queue;
+mod settle_worker;
 mod state;
 mod stats;
 mod stats_counter;
 mod store;
 mod sui;
+mod sui_rpc;
 mod wallet;
 mod walrus;
 
@@ -24,8 +28,6 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::broadcast;
-use tower::limit::GlobalConcurrencyLimitLayer;
-use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
@@ -53,11 +55,17 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let bind_addr = config.bind_addr.clone();
 
-    // Shared via Arc: the arena opener has the settler sponsor each bot open's gas (ADR-0028), so the
-    // settler instance — and its single `sponsor_nonce` — is the one gas payer behind opens, faucet,
+    // One governed RPC client for all fullnode traffic (settler + arena opener): a single
+    // process-wide throttle + retry/backoff against the one rate-limited node. The settler is shared
+    // via Arc so the opener can have it sponsor each bot open's gas (ADR-0028) and the settle-worker
+    // pool can hold it as a BatchSettler — one settler (one `sponsor_nonce`) behind opens, faucet,
     // `/settle`, and user sponsors.
-    let settler = Arc::new(sui::SuiSettler::new(
+    let governed_rpc = sui_rpc::GovernedRpc::new(
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
+        config.rpc_limits(),
+    );
+    let settler = Arc::new(sui::SuiSettler::new(
+        governed_rpc.clone(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
         config.agent_allowance_package_id.as_deref(),
@@ -121,6 +129,32 @@ async fn main() -> anyhow::Result<()> {
                 None
             }
         };
+
+    // Streaming transcript chunk writer (same bucket as `archiver`): the bot streams the co-signed
+    // transcript to S3 in chunks *during play*. `chunk_writer` seals the manifest at `finish()`;
+    // `chunk_upload_tx` feeds the per-instance bounded uploader (byte-budget backpressure). Both
+    // `None` when S3 is unconfigured.
+    let chunk_writer: Option<std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>> =
+        match config.s3_bucket.clone() {
+            Some(bucket) => {
+                let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&aws_cfg);
+                let prefix = config.s3_prefix.clone().unwrap_or_default();
+                Some(std::sync::Arc::new(
+                    transcript_store::S3TranscriptStore::new(client, bucket, prefix),
+                ))
+            }
+            None => None,
+        };
+    // Keep the uploader (not just its sender) so a clean SIGTERM roll can drain its queue before
+    // exit: a settled match's early 1 MB chunks pass through here, and dropping them would leave
+    // that transcript short. Drained after `serve` returns (below).
+    let uploader = chunk_writer
+        .clone()
+        .map(transcript_stream::TranscriptUploader::spawn);
+    let chunk_upload_tx = uploader.as_ref().map(|u| u.sender());
 
     let instance_id = config
         .instance_id
@@ -206,15 +240,37 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Durable settle queue (ADR-0029): `/settle` enqueues here and returns 202; the worker pool
+    // below drains it into batched PTBs. Redis Streams when a cache cluster is configured (durable,
+    // multi-instance), else in-memory (single-instance dev) — same seam, handler unchanged.
+    let settle_queue: Arc<dyn settle_queue::SettleQueue> =
+        if let Some(cache_url) = config.redis_cache_url.clone() {
+            let pool = store::redis::connect(&cache_url).await?;
+            Arc::new(
+                settle_queue::RedisSettleQueue::new(
+                    pool,
+                    "settle:queue".to_owned(),
+                    "settle-workers".to_owned(),
+                    86_400, // body archive TTL (1d): generous retry window for Walrus upload
+                )
+                .await?,
+            )
+        } else {
+            Arc::new(settle_queue::InMemorySettleQueue::default())
+        };
+
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
         bus,
         settler,
+        settle_queue,
         enoki,
         walrus,
         archiver,
         s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
+        chunk_writer,
+        chunk_upload_tx,
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
@@ -234,6 +290,47 @@ async fn main() -> anyhow::Result<()> {
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
+
+    // Settle-worker pool (ADR-0029): N workers drain the settle queue, each coalescing a claim
+    // into ONE batched `close_cooperative_with_root` PTB through the governed RPC. The worker count
+    // + batch size are the tuning knobs for living under the fullnode's rate ceiling.
+    let settle_workers: usize = std::env::var("SETTLE_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(4);
+    let settle_batch_max: usize = std::env::var("SETTLE_BATCH_MAX")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(128);
+    let settle_flush_ms: u64 = std::env::var("SETTLE_BATCH_FLUSH_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+    for i in 0..settle_workers {
+        let deps = settle_worker::SettleWorkerDeps {
+            queue: state.settle_queue.clone(),
+            settler: state.settler.clone(),
+            control: state.control.clone(),
+            walrus: state.walrus.clone(),
+            bus: state.bus.clone(),
+            archiver: state.archiver.clone(),
+            s3_prefix: state.s3_prefix.clone(),
+        };
+        tokio::spawn(settle_worker::run_settle_worker(
+            deps,
+            format!("settle-{i}"),
+            settle_batch_max,
+            settle_flush_ms,
+        ));
+    }
+    tracing::info!(
+        workers = settle_workers,
+        batch_max = settle_batch_max,
+        flush_ms = settle_flush_ms,
+        "settle-worker pool started"
+    );
     // Co-located fleet (ADR-0027): bots are spawned on demand by `arena_allocate`
     // (`reserve_or_spawn`), bounded by `arena_fleet_count`/`arena_fleet_games` on `AppState` — no
     // startup pre-spawn. Inert unless `FLEET_COLOCATED_COUNT > 0`.
@@ -258,16 +355,10 @@ async fn main() -> anyhow::Result<()> {
         // ≈ 25 MB sits well inside this).
         .route(
             "/v1/tunnels/:tunnel_id/settle",
-            // One ServiceBuilder (not two chained `.layer()`s, which leaves axum's error type
-            // ambiguous). First-added layer is outermost: the concurrency limit gates BEFORE the
-            // body is read, so worst-case memory is (limit × body cap), not (in-flight × cap).
-            post(routes::settle).layer(
-                ServiceBuilder::new()
-                    .layer(GlobalConcurrencyLimitLayer::new(
-                        config.settle_max_concurrency,
-                    ))
-                    .layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
-            ),
+            // No concurrency limit (ADR-0029): ingest is O(1) (validate + enqueue), so a fleet
+            // burst is absorbed as queue depth, not bounded here. The worker pool + governed RPC are
+            // the real load bounds. Body cap stays so an oversized transcript can't exhaust memory.
+            post(routes::settle).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
         .route("/v1/sponsor", post(routes::sponsor))
         // MTPS faucet (ADR-0023): the public route is per-address rate limited; the internal route
@@ -298,6 +389,11 @@ async fn main() -> anyhow::Result<()> {
     // Graceful shutdown completed: push the last sub-second of counted moves so a clean
     // rollout doesn't drop them (the 1 Hz flusher is gone with the runtime by now).
     flush_actions(&flush_state).await;
+    // Then flush any transcript chunks still queued for S3, so a match that settled just before the
+    // roll isn't left with missing chunks. Still-playing matches' tails are best-effort here.
+    if let Some(uploader) = uploader {
+        uploader.shutdown().await;
+    }
     Ok(())
 }
 

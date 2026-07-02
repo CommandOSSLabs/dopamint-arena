@@ -98,6 +98,10 @@ impl Protocol for Payments {
         s.max_transfers > 0 && s.count >= s.max_transfers
     }
 
+    fn can_gracefully_close(&self, _s: &PayState) -> bool {
+        true
+    }
+
     fn sample_move(
         &self,
         s: &PayState,
@@ -159,5 +163,19 @@ mod tests {
                 Seat::A,
             )
             .is_err());
+    }
+
+    #[test]
+    fn ordinary_payment_state_is_gracefully_closeable() {
+        let p = Payments { max_transfers: 2 };
+        let ctx = TunnelContext {
+            tunnel_id: "0xab".into(),
+            initial: Balances { a: 100, b: 100 },
+            seat: Seat::A,
+        };
+        let state = p.initial_state(&ctx);
+
+        assert!(p.can_gracefully_close(&state));
+        assert!(!p.is_terminal(&state));
     }
 }

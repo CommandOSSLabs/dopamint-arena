@@ -26,16 +26,33 @@ test("settlementsUrl trims a trailing slash on the base", () => {
 
 // The explorer proxies raw Walrus bytes; settle blobs are binary (first byte 0x01), so the
 // transcript fetch must NOT JSON-parse — it returns the bytes verbatim for the verifier.
-test("getTranscript returns raw bytes for binary blobs (no JSON parse)", async () => {
+test("getTranscript returns raw bytes and defaults format to 'body' (legacy Walrus)", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = (async () =>
     new Response(new Uint8Array([0x01, 0x00, 0x01]).buffer, {
       status: 200,
     })) as typeof fetch;
   try {
-    const bytes = await getTranscript("DiG");
-    assert.ok(bytes instanceof Uint8Array);
-    assert.equal(bytes![0], 0x01);
+    const res = await getTranscript("DiG");
+    assert.ok(res!.bytes instanceof Uint8Array);
+    assert.equal(res!.bytes[0], 0x01);
+    // No x-transcript-format header => a whole settle body (the verifier decodes header + entries).
+    assert.equal(res!.format, "body");
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
+test("getTranscript reports format 'entries' when the api serves chunks", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(new Uint8Array([0x00, 0x02]).buffer, {
+      status: 200,
+      headers: { "x-transcript-format": "entries" },
+    })) as typeof fetch;
+  try {
+    const res = await getTranscript("DiG");
+    assert.equal(res!.format, "entries");
   } finally {
     globalThis.fetch = orig;
   }
