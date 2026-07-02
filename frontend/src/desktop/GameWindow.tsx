@@ -12,6 +12,12 @@ import type { GridDragHandleProps } from "@/components/ui/grid-layout";
 import type { Workspace } from "../games/types";
 import { CATEGORY_STYLE } from "./categoryStyle";
 
+/** Pre-render band (IntersectionObserver `rootMargin`) outside the viewport: a window within this
+ *  distance of being revealed keeps painting, so it's already live the instant it scrolls into view —
+ *  no catch-up frame. ~one game-window tall: big enough to hide the reveal, small enough that far-off
+ *  windows in a many-window "All view" still virtualize (the whole point of ADR-0030). */
+const RENDER_PRERENDER_MARGIN = "600px";
+
 /** Small header action; stops pointer-down so it doesn't start a window drag. */
 function HeaderButton({
   label,
@@ -97,7 +103,10 @@ export function GameWindow({
         for (const e of entries)
           engineClient.setWindowVisible(domId, e.isIntersecting);
       },
-      { threshold: 0 },
+      // Pre-render a band just outside the viewport (`rootMargin`) so a window is already LIVE by the
+      // time it scrolls into view — no visible catch-up frame when the user reveals it. Only windows
+      // well off-screen stay virtualized; `threshold: 0` still resumes on the first exposed pixel.
+      { threshold: 0, rootMargin: RENDER_PRERENDER_MARGIN },
     );
     obs.observe(el);
     return () => {
@@ -118,8 +127,9 @@ export function GameWindow({
         className,
       )}
     >
-      {/* Thin category identity bar along the top edge (square window, so it reads as a clean strip). */}
-      {cat && <div className={cn("h-0.5 w-full shrink-0", cat.bar)} />}
+      {/* The title bar carries the category identity as one cohesive band: a soft accent wash, a
+          soft accent underline, and the title in the accent color — echoing the workspace-tab chip.
+          Body stays neutral for readability. */}
       <header
         {...dragHandleProps}
         className={cn(
@@ -131,7 +141,7 @@ export function GameWindow({
       >
         <span className="flex max-w-[60%] items-center gap-1.5">
           {icon}
-          <span className="truncate">{title}</span>
+          <span className={cn("truncate", cat?.text)}>{title}</span>
         </span>
 
         <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/window:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
