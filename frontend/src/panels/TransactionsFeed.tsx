@@ -7,13 +7,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { list } from "@/games/registry";
 import { suivisionAccountUrl, suivisionTxUrl } from "@/lib/suivision";
 import type { TxnRow } from "./types";
-import { HashLink, StatusIcon } from "./atoms";
+import { HashLink } from "./atoms";
 
 /**
  * Tabbed transaction table shared by the on-chain and local feeds. An "All" tab
  * plus one tab per game filters by game id. With `onchain`, each row shows
- * DIGEST + ADDRESS columns linked to SuiVision; without it (local activity that
- * hasn't settled on-chain), those two columns are dropped.
+ * DIGEST + ADDRESS (SuiVision) + PROOF (our explorer); without it (local activity
+ * not yet settled), those three are dropped. The viewer's own rows are accented (`mine`).
  */
 export function TransactionsFeed({
   title,
@@ -33,7 +33,7 @@ export function TransactionsFeed({
   // per-game tab it's redundant (the tab already names the game), so it's hidden.
   const showGame = tab === "all";
   const gameNames = new Map(list().map((g) => [g.id, g.name]));
-  const colCount = (onchain ? 5 : 3) + (showGame ? 1 : 0);
+  const colCount = (onchain ? 5 : 2) + (showGame ? 1 : 0);
 
   return (
     <Panel className={className}>
@@ -77,7 +77,6 @@ export function TransactionsFeed({
                 )}
                 <th className="px-2.5 py-1.5 font-medium">TIME</th>
                 <th className="px-2.5 py-1.5 font-medium">TYPE</th>
-                <th className="px-2.5 py-1.5 font-medium">STATUS</th>
               </tr>
             </thead>
             <tbody>
@@ -95,8 +94,10 @@ export function TransactionsFeed({
                   <tr
                     key={t.id}
                     className={
-                      "border-t border-border/60" +
-                      (t.mine ? " bg-primary/10" : "")
+                      "border-t border-border/60 border-l-2 " +
+                      (t.mine
+                        ? "border-l-primary bg-primary/10"
+                        : "border-l-transparent")
                     }
                   >
                     {onchain && (
@@ -149,9 +150,6 @@ export function TransactionsFeed({
                       {t.time}
                     </td>
                     <td className="px-2.5 py-1.5">{t.type}</td>
-                    <td className="px-2.5 py-1.5">
-                      <StatusIcon status={t.status} />
-                    </td>
                   </tr>
                 ))
               )}
