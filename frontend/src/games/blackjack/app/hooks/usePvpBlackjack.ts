@@ -42,7 +42,9 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  keypairFromSecretHex,
 } from "@/pvp/resume";
+import { buildForfeitHalf } from "@/pvp/forfeit";
 import {
   BlackjackProtocol,
   actorFor,
@@ -154,9 +156,10 @@ export interface PvpView {
   hit: () => void;
   stand: () => void;
   bet: (amount: number) => void; // player places the next round's bet (deals the round)
-  stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  /** Concede the live match: forced-half close, opponent takes the whole pot. See `forfeit` below. */
+  forfeit: () => void;
 }
 
 export function usePvpBlackjack(): PvpView {
@@ -219,6 +222,9 @@ export function usePvpBlackjack(): PvpView {
   const bufferedHelloRef = useRef<string | null>(null);
 
   const transcriptRef = useRef<proof.Transcript | null>(null);
+  // This match's per-game ephemeral signing key, rebuilt from `info.selfEphemeralSecretHex` in
+  // `activateSession` (live and resumed alike) — `forfeit()` needs it to co-sign the forced half.
+  const ephRef = useRef<KeyPair | null>(null);
 
   const refreshBalance = useCallback(async () => {
     try {
@@ -393,6 +399,7 @@ export function usePvpBlackjack(): PvpView {
     ) => {
       tunnelRef.current = t;
       channelRef.current = channel;
+      ephRef.current = keypairFromSecretHex(info.selfEphemeralSecretHex);
       // Per-round log: record the player's (party A) result's updates.
       let lastLoggedRound = 0;
       // Initialize from the live checkpoint so the first delta is correct for both the live
@@ -1085,17 +1092,6 @@ export function usePvpBlackjack(): PvpView {
     [proto],
   );
 
-  // Stop & settle the tunnel from a round boundary (either seat). Co-signed; the dealer closes.
-  const stop = useCallback(() => {
-    const t = tunnelRef.current;
-    const channel = channelRef.current;
-    if (!t || !channel) return;
-    if (t.state.phase !== "round_over") return; // settle cleanly between rounds
-    stoppingRef.current = true;
-    channel.sendPeer({ t: "stop" });
-    void finishSettle(t, channel, matchIdRef.current);
-  }, [finishSettle]);
-
   const setAuto = useCallback(
     (on: boolean) => {
       autoRef.current = on;
@@ -1212,6 +1208,7 @@ export function usePvpBlackjack(): PvpView {
     mpRef.current = null;
     channelRef.current = null;
     tunnelRef.current = null;
+    ephRef.current = null;
     setPhase("idle");
     setState(null);
     setRole(null);
@@ -1231,6 +1228,96 @@ export function usePvpBlackjack(): PvpView {
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
   }, []);
+
+  // Forfeit the live match: concede the whole pot to the opponent. Builds the forced (0,total)
+  // half (`buildForfeitHalf`), sends a `forfeit` peer frame (NOT `settleHalf`, so a natural-terminal
+  // co-sign never mistakes it for the ordinary close), awaits the bot's co-signed `settleHalf` reply
+  // on the SAME buffered-inbox path `finishSettle` uses, combines, and submits exactly like
+  // `finishSettle`. Off a live tunnel it falls back to `leave`; a failed submit falls back to it too.
+  const forfeit = useCallback(() => {
+    const t = tunnelRef.current;
+    const channel = channelRef.current;
+    const eph = ephRef.current;
+    if (
+      !t ||
+      !channel ||
+      !eph ||
+      settledRef.current ||
+      (phase !== "playing" && phase !== "settling")
+    ) {
+      leave();
+      return;
+    }
+    settledRef.current = true;
+    setPhase("settling");
+    void (async () => {
+      try {
+        const { a, b } = t.protocol.balances(t.state);
+        const total = a + b;
+        const root = transcriptRef.current
+          ? transcriptRef.current.root()
+          : new Uint8Array(32);
+        const { settlement, sig } = buildForfeitHalf({
+          tunnelId: t.tunnelId,
+          total,
+          wallet: walletAddress,
+          eph,
+          timestamp: createdAtRef.current,
+          transcriptRoot: root,
+        });
+        channel.sendPeer({
+          t: "forfeit",
+          partyABalance: settlement.partyABalance.toString(),
+          partyBBalance: settlement.partyBBalance.toString(),
+          finalNonce: settlement.finalNonce.toString(),
+          timestamp: settlement.timestamp.toString(),
+          transcriptRoot: bytesToHex(root),
+          sig: bytesToHex(sig),
+        });
+        const other =
+          bufferedSettleRef.current ??
+          (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
+            settleResolveRef.current = res;
+          }));
+        if (bytesToHex(other.root) !== bytesToHex(root)) {
+          throw new Error("Transcript root mismatch between parties");
+        }
+        const coSigned = t.combineSettlementWithRoot(
+          settlement,
+          sig,
+          other.sig,
+        );
+        // Single submitter = seat A, unified with `finishSettle` and the fleet bot (which co-signs
+        // the `settleHalf` and never submits).
+        if (roleRef.current === "A") {
+          const closeDigest = await settleViaBackend({
+            tunnelId: t.tunnelId,
+            settlement: coSigned as any,
+            transcript: transcriptRef.current
+              ? transcriptRef.current.rawEntries()
+              : [],
+            label: "blackjack",
+            fallbackClose: async () => {
+              const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+              const res = await (isMtpsConfigured ? submitSponsored : submit)(
+                buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+              );
+              return res.digest;
+            },
+          });
+          if (closeDigest) {
+            setDigests((d) => ({ ...d, close: closeDigest }));
+            channel.sendPeer({ t: "closed", digest: closeDigest });
+          }
+        }
+        clearResumeRecord(t.tunnelId);
+        setPhase("done");
+      } catch (e) {
+        console.warn("[blackjack pvp] forfeit failed; leaving", e);
+        leave();
+      }
+    })();
+  }, [phase, walletAddress, submit, submitSponsored, leave]);
 
   // Find a new match after a settle, reusing the SAME socket (the relay runs many matches per
   // connection): release the settled match and re-quickMatch in place — keeping Auto on so the
@@ -1373,8 +1460,8 @@ export function usePvpBlackjack(): PvpView {
     hit,
     stand,
     bet,
-    stop,
     setAuto,
     leave,
+    forfeit,
   };
 }

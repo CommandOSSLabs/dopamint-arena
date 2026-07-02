@@ -11,6 +11,7 @@ import {
   CHIP_DEALER_HOME,
   CHIP_PLAYER_HOME,
 } from "@/games/blackjack/app/components/app/chips";
+import { ForfeitDialog } from "@/pvp/ForfeitDialog";
 
 import { SketchDefs } from "@/games/blackjack/app/App";
 
@@ -51,6 +52,10 @@ export default function PvpBlackjack() {
   const funded = isMtpsConfigured || g.walletBalance > 20_000_000n;
   const playing =
     g.phase === "playing" || g.phase === "settling" || g.phase === "done";
+  // In-match Back asks first — forfeiting hands the whole pot to the opponent. Gated on being
+  // live so a natural terminal ("done") can't leave the dialog offering a now-stale Forfeit option.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isLiveMatch = g.phase === "playing" || g.phase === "settling";
   const myBal = g.myBalance;
   const oppBal = g.oppBalance;
   const finalResult = myBal > oppBal ? "win" : myBal < oppBal ? "lose" : "push";
@@ -250,7 +255,13 @@ export default function PvpBlackjack() {
         <div className="bj-felt w-full h-full relative">
           {playing && (
             <button
-              onClick={() => g.leave()}
+              onClick={() => {
+                if (isLiveMatch) {
+                  setConfirmOpen(true);
+                  return;
+                }
+                g.leave();
+              }}
               className="qp-btn !px-4 !py-2 !absolute !top-4 !left-4 z-30 !text-sm font-semibold cursor-pointer"
               title="Back"
             >
@@ -632,12 +643,6 @@ export default function PvpBlackjack() {
                     Player is betting…
                   </span>
                 )}
-                <button
-                  onClick={g.stop}
-                  className="qp-btn qp-btn--stop !px-6 !py-3.5 !text-base font-black uppercase"
-                >
-                  Stop &amp; settle
-                </button>
               </>
             )}
             {g.phase === "done" && (
@@ -675,6 +680,16 @@ export default function PvpBlackjack() {
           </div>
         </div>
       )}
+
+      <ForfeitDialog
+        open={isLiveMatch && confirmOpen}
+        stake={`${g.stake} MTPS`}
+        onKeepPlaying={() => setConfirmOpen(false)}
+        onForfeit={() => {
+          setConfirmOpen(false);
+          g.forfeit();
+        }}
+      />
     </div>
   );
 }
