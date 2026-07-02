@@ -69,6 +69,7 @@ import {
   readResumeRecord,
   listActiveTunnels,
   keypairFromSecretHex,
+  clearResumeRecord,
 } from "@/pvp/resume";
 
 export type PvpStatus =
@@ -457,6 +458,10 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           dt.tunnelId,
           coSignedToSettleBody(co, transcript.rawEntries()),
         );
+        // The tunnel is closed on-chain — drop its resume record so a reload never restores this
+        // forfeited match. Unlike a natural terminal, the forced settlement never advances `dt.state`
+        // to a terminal state, so the lazy terminal-stamp eviction in resumeSession can't catch it.
+        clearResumeRecord(dt.tunnelId);
       } catch (e) {
         console.warn(`[${this.spec.game}] forfeit submit failed; leaving`, e);
       } finally {
