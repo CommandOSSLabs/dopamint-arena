@@ -74,6 +74,13 @@ impl SettleManager {
         self.settlement_mode
     }
 
+    /// Seats deposited so far. The pipeline polls this to detect the settle
+    /// barrier release (all `2 * expected_tunnels` seats parked) so it can time
+    /// the play/settle phase boundary without reaching into the drain loop.
+    pub async fn deposited(&self) -> u64 {
+        self.state.lock().await.deposited
+    }
+
     /// Deposit one seat's half and park until the barrier releases and this
     /// tunnel's pair is submitted. Both seats observe the same shared result.
     pub async fn submit(&self, seat: Seat, request: TunnelSettleRequest) -> SettleResult {
