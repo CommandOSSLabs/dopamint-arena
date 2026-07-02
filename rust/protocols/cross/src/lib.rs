@@ -275,6 +275,18 @@ fn greedy_dir(state: &CrossState, index: usize, rng: &mut dyn FnMut() -> f64) ->
     None
 }
 
+/// Party A's settle-if-halted-here share of `total`, from both chickens' furthest-lane
+/// `score`s. The lead (`score_a - score_b`) maps linearly to the split as a fraction of the
+/// full race `distance`: level => 50/50; a full-distance lead => winner-take-all; clamped
+/// between. Monotone in `score_a` (and decreasing in `score_b`), so a chicken that stops
+/// advancing only watches its share erode as the opponent moves — stalling is strictly
+/// self-harming. u128 math keeps the floor identical to the TS `settleShare` bigint (byte
+/// parity); pair with `balance_b = total - settle_share(..)` so the pot is conserved exactly.
+pub fn settle_share(total: u64, score_a: i64, score_b: i64, distance: i64) -> u64 {
+    let lead = (score_a - score_b).clamp(-distance, distance);
+    ((total as u128 * (distance + lead) as u128) / (2 * distance) as u128) as u64
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Cross;
 
@@ -397,19 +409,17 @@ impl Protocol for Cross {
             }
         }
 
-        let mut balance_a = state.balance_a;
-        let mut balance_b = state.balance_b;
-        match winner {
-            Some(Seat::A) => {
-                balance_a = state.total;
-                balance_b = 0;
+        // Winner-take-all at a real finish; otherwise every co-signed state already carries the
+        // fair split-if-halted-here (by progress), so an abandoned race settles fairly and no
+        // trailing chicken can stall for a refund-draw. Mirrors the TS `applyMove`.
+        let (balance_a, balance_b) = match winner {
+            Some(Seat::A) => (state.total, 0),
+            Some(Seat::B) => (0, state.total),
+            None => {
+                let a = settle_share(state.total, players[0].score, players[1].score, WIN_LANE);
+                (a, state.total - a)
             }
-            Some(Seat::B) => {
-                balance_a = 0;
-                balance_b = state.total;
-            }
-            None => {}
-        }
+        };
 
         Ok(CrossState {
             tick,
@@ -558,6 +568,10 @@ impl Protocol for CrossSeries {
 
     fn is_terminal(&self, state: &Self::State) -> bool {
         self.inner.is_terminal(&state.inner) && !self.can_fund_next_game(state)
+    }
+
+    fn can_gracefully_close(&self, state: &Self::State) -> bool {
+        self.inner.is_terminal(&state.inner)
     }
 
     fn sample_move(

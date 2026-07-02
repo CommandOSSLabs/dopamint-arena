@@ -10,7 +10,6 @@ import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
-import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import {
   expectedQuantumPokerRevealSlots,
   QuantumPokerProtocol,
@@ -27,6 +26,7 @@ import {
   type Role,
 } from "../../pvp/mpClient";
 import { defaultAuto, rememberAuto } from "../../pvp/autoPreference";
+import { coSignCloseFromPeerRoot } from "../../pvp/settleClose";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
@@ -291,7 +291,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // kit bot built once per match.
   const autoRef = useRef(defaultAuto(GAME_ID));
   const autoBotRef = useRef<PokerSeatBot | null>(null);
-  const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
   const detachResumeRef = useRef<(() => void) | null>(null);
   // Early-end: once either seat asks to settle, stop dealing new hands and close at the next clean
@@ -329,7 +328,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     autoRef.current = defaultAuto(GAME_ID);
     autoBotRef.current = null;
     setAutoState(autoRef.current);
-    transcriptRef.current = null;
     channelRef.current = null;
     endRef.current = false;
     foldOutRef.current = false;
@@ -502,8 +500,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       >[0]["reads"];
       const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
       const proto = new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE);
-      const transcript = new Transcript(dt.tunnelId);
-      transcriptRef.current = transcript;
 
       dtRef.current = dt;
       driverRef.current = new QuantumPokerSeatDriver(info.role);
@@ -525,13 +521,11 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         void settle(
           dt,
           info.role,
-          channel,
           waitPeer,
           reads,
           signExec,
           sponsored.signExec,
           dt.tunnelId,
-          transcript,
           getControlPlaneClient(),
           coinType,
           publishOnly,
@@ -583,8 +577,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       let prevHandPhase = dt.state.phase;
       let prevHandBalance =
         info.role === "A" ? dt.state.balanceA : dt.state.balanceB;
-      dt.onConfirmed = (u) => {
-        transcript.append(u);
+      dt.onConfirmed = () => {
         sync();
         if (dt.state.phase === "hand_over" && prevHandPhase !== "hand_over") {
           const selfBalance =
@@ -838,6 +831,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const wallet = account.address;
       installResumePersistence();
       evictExpiredRecords();
+      // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
+      autoRef.current = true;
+      setAutoState(true);
       const signExec = async (
         tx: Parameters<typeof signAndExecute>[0]["transaction"],
       ) => {
@@ -1215,16 +1211,14 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   };
 }
 
-/** Exchange root-anchored settlement halves over the relay, asserting both seats anchored the
- *  SAME transcript root, then seat A submits the close via the backend /settle (the settler
- *  anchors the root + archives the transcript to Walrus). Both seats must anchor the same root or
- *  close_cooperative_with_root rebuilds different bytes and on-chain verify fails — so the root is
- *  exchanged and asserted equal before either side trusts the combine. Fallback: wallet-submitted
- *  close_cooperative_with_root when the backend is down. Mirrors the Tic-Tac-Toe lane. */
+/** Wait for the co-located bot's settlement half, sign seat A's half over the root the bot supplied,
+ *  then submit the close via the backend /settle (header-only body; the bot's canonical transcript is
+ *  archived to S3). The FE keeps NO transcript — every arena match is human-vs-bot, so the bot owns the
+ *  root and funds ride on the co-signed balances, not the root (see `coSignCloseFromPeerRoot`).
+ *  Fallback: wallet-submitted close_cooperative_with_root when the backend is down. */
 async function settle(
   dt: PokerTunnel,
   role: Role,
-  channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
@@ -1232,37 +1226,23 @@ async function settle(
   // 0 SUI and a wallet-signed close would throw and strand the staked MTPS.
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
-  transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
-  // Leaver: publish our signed half and return without waiting on the on-chain close.
+  // Leaver: the FE has no half to publish (the bot owns the transcript and only settles at its own
+  // terminal), so just return — the bot's terminal / on-chain grace is the settlement floor.
   publishOnly: boolean,
   // Submit the close even as seat B — set when the peer bailed out and we're the staying seat.
   peerLeft: boolean,
 ): Promise<void> {
-  const createdAt = await readCreatedAt(reads, tunnelId);
-  const root = transcript.root();
-  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
-  channel.sendPeer({
-    t: "settleHalf",
-    partyABalance: half.settlement.partyABalance.toString(),
-    partyBBalance: half.settlement.partyBBalance.toString(),
-    finalNonce: half.settlement.finalNonce.toString(),
-    timestamp: half.settlement.timestamp.toString(),
-    transcriptRoot: toHex(root),
-    sig: toHex(half.sigSelf),
-  });
-  // Leaver: our signed half is on the wire — the staying seat collects it, combines, and submits.
   if (publishOnly) return;
+  const createdAt = await readCreatedAt(reads, tunnelId);
   const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
     "settleHalf",
   );
-  if (other.transcriptRoot !== toHex(root)) {
-    throw new Error("settlement transcript-root mismatch between parties");
-  }
-  const co = dt.combineSettlementWithRoot(
-    half.settlement,
-    half.sigSelf,
+  const co = coSignCloseFromPeerRoot(
+    dt,
+    createdAt,
+    fromHex(other.transcriptRoot),
     fromHex(other.sig),
   );
   // Single submitter: the seat that stays when a peer bailed out, else seat A by convention.
@@ -1272,10 +1252,7 @@ async function settle(
   // the close returns the staked MTPS to the wallet and the next open consumes wallet coins, so
   // running them concurrently equivocates those coins ("object … unavailable for consumption").
   try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleBody(co, transcript.rawEntries()),
-    );
+    await cp.settle(tunnelId, coSignedToSettleBody(co, []));
   } catch (e) {
     console.error(
       "[quantum-poker] backend settle failed; falling back to wallet close:",

@@ -15,6 +15,7 @@ tunnel-telemetry = { path = "../../engine/telemetry" }
 tunnel-core = { path = "../../engine/tunnel-core" }
 tunnel-harness = { path = "../../engine/tunnel-harness" }
 sui-tunnel-anchor = { path = "../../engine/sui-tunnel-anchor" }
+fleet-serve = { path = "../serve" }
 tunnel-api-credits = { path = "../../protocols/api-credits" }
 tunnel-battleship = { path = "../../protocols/battleship" }
 tunnel-blackjack = { path = "../../protocols/blackjack" }
@@ -32,6 +33,10 @@ getrandom.workspace = true
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 hex.workspace = true
+serde_json = { workspace = true }
+wiremock = "0.6"

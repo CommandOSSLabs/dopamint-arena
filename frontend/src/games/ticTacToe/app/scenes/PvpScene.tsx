@@ -45,13 +45,7 @@ function statusText(g: ReturnType<typeof usePvpTicTacToe>): string {
   return "Opponent's turn…";
 }
 
-export function PvpScene({
-  onBack,
-  isPortrait = false,
-}: {
-  onBack: () => void;
-  isPortrait?: boolean;
-}) {
+export function PvpScene({ isPortrait = false }: { isPortrait?: boolean }) {
   // Default to Caro (15×15) — the headline variant for this window; the 3×3 classic is a toggle.
   const [variant, setVariant] = useState<Variant>("caro");
   const [boardSize, setBoardSize] = useState(15);
@@ -65,28 +59,19 @@ export function PvpScene({
   const funded = isMtpsConfigured || g.balance > 10_000_000n;
   const locked = g.phase !== "idle" && g.phase !== "error";
 
-  const leave = () => {
-    g.leave();
-    onBack();
-  };
+  // "Leave" during a match settles our half and drops back to THIS window's lobby (like "Cancel
+  // Search"): `g.leave()` sends the settlement half, tears the match down, and returns phase to
+  // "idle" (the lobby). It never closes the window — that's the title-bar ✕'s job.
+  const returnToLobby = () => g.leave();
 
   // ---- Lobby / matchmaking (fills the window; sizes scale with the window via cqw) ----------
   if (!playing) {
     return (
       <div className="w-full h-full overflow-y-auto flex flex-col items-center justify-center p-4">
         <section className="qp-panel qp-stroke @container w-[95%] max-w-2xl my-auto p-6 md:p-10 flex flex-col items-center gap-5 text-center mx-auto">
-          <div className="w-full flex items-center justify-between">
-            <button
-              onClick={leave}
-              className="text-sm font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors flex items-center gap-1 uppercase tracking-widest"
-            >
-              <span className="material-symbols-outlined text-lg">
-                arrow_back
-              </span>
-              Return
-            </button>
+          <div className="w-full flex items-center justify-center">
             <span className="qp-eyebrow !text-sm md:!text-base">
-              PvP Matchmaking
+              PvP Tic-Tac-Toe
             </span>
           </div>
 
@@ -289,7 +274,10 @@ export function PvpScene({
         </div>
         <div className="w-full max-w-[480px] flex flex-col items-center gap-2 border-t-2 border-[var(--qp-ink-soft)] pt-2">
           <div className="flex items-stretch gap-3 w-full">
-            <button onClick={leave} className="qp-btn ttt-ctl-btn flex-1">
+            <button
+              onClick={returnToLobby}
+              className="qp-btn ttt-ctl-btn flex-1"
+            >
               ← Leave
             </button>
             {autoToggle}
@@ -306,7 +294,7 @@ export function PvpScene({
     <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
       {/* Left pane: leave, auto, match-flow actions, status. */}
       <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
-        <button onClick={leave} className="qp-btn ttt-ctl-btn w-full">
+        <button onClick={returnToLobby} className="qp-btn ttt-ctl-btn w-full">
           ← Leave
         </button>
         {autoToggle}

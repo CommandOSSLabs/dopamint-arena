@@ -4,10 +4,15 @@ import gsap from "gsap";
 
 import { Panel, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { cn } from "@/lib/utils";
-import { getTranscript, type SettlementRow } from "@/backend/explorerClient";
+import {
+  getTranscript,
+  type SettlementRow,
+  type TranscriptFetch,
+} from "@/backend/explorerClient";
 import { partiesFromTunnelObject } from "@/backend/tunnelParties";
 import {
   verifyTranscript,
+  verifyTranscriptEntries,
   type TranscriptVerification,
 } from "../../../sui-tunnel-ts/src/proof/transcript";
 import { checksOf, verdictOf, type Verdict } from "./verifyModel";
@@ -26,10 +31,10 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
     let alive = true;
     (async () => {
       try {
-        // 1) transcript bytes via the api's Walrus proxy (404 => anchored-but-unverifiable).
-        let record: Uint8Array | null;
+        // 1) transcript bytes + wire format via the explorer api (404 => anchored-but-unverifiable).
+        let fetched: TranscriptFetch | null;
         try {
-          record = await getTranscript(row.txDigest);
+          fetched = await getTranscript(row.txDigest);
         } catch {
           if (alive) {
             setHasTranscript(false);
@@ -37,7 +42,7 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
           }
           return;
         }
-        if (record == null) {
+        if (fetched == null) {
           if (alive) {
             setHasTranscript(false);
             setPhase("done");
@@ -60,12 +65,18 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
         // 4) re-derive the verdict in-browser. Balances are exact decimal-string MIST (BigInt).
         const lockedTotal =
           BigInt(row.partyABalance ?? 0) + BigInt(row.partyBBalance ?? 0);
-        const v = verifyTranscript(record, {
+        const params = {
           partyA: parties.partyA,
           partyB: parties.partyB,
           onchainRoot,
           lockedTotal,
-        });
+        };
+        // Entries-only chunks carry no header root, so the on-chain row is the sole root of trust;
+        // a whole settle body also cross-checks its own header root. Same four checks either way.
+        const v =
+          fetched.format === "entries"
+            ? verifyTranscriptEntries(fetched.bytes, params)
+            : verifyTranscript(fetched.bytes, params);
         if (alive) {
           setResult(v);
           setPhase("done");

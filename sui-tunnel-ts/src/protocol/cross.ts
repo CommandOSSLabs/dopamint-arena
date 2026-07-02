@@ -7,10 +7,12 @@
  * (seed, laneIndex, tick), so both parties — and an on-chain disputer replaying
  * encodeState — agree on every collision with no trusted server.
  *
- * Party A and Party B are two bot chickens (self-play). Both stake S; the locked
- * total is 2S. Balances stay (S, S) for the whole race and flip to (2S, 0) / (0, 2S)
- * only on the winning tick — so the invariant balanceA + balanceB === total holds for
- * every reachable state (required by OffchainTunnel.step).
+ * Party A and Party B are two chickens racing for a pot of 2S (each stakes S). A real
+ * finish is winner-take-all: first to cross WIN_LANE takes (2S, 0) / (0, 2S). Every OTHER
+ * reachable state carries the fair settle-if-halted-here split by progress (see
+ * `settleShare`), so an abandoned race settles by how far each chicken got — a trailing
+ * chicken can't stall for a refund-draw. balanceA + balanceB === total always holds
+ * (required by OffchainTunnel.step), since balanceB = total - balanceA.
  *
  * PvP fairness: the seed is a deterministic function of the Sui-assigned tunnelId, NOT a
  * commit-reveal. Safe here because the hazard field is PUBLIC and identical for both seats —
@@ -298,6 +300,31 @@ function greedyDir(
 }
 
 // ============================================
+// SETTLEMENT — the cash-out invariant
+// ============================================
+
+/**
+ * Party A's settle-if-halted-here share of `total`, from both chickens' furthest-lane
+ * `score`s. The lead (scoreA - scoreB) maps linearly to the split as a fraction of the
+ * full race `distance`: level ⇒ 50/50; a full-distance lead ⇒ winner-take-all; clamped
+ * between. Monotone in scoreA (and decreasing in scoreB), so a chicken that stops
+ * advancing only watches its share erode as the opponent moves — stalling is strictly
+ * self-harming, never a way to force a refund-draw. Uses `score` (never current `lane`)
+ * so a respawn can't lower a locked claim (strategyproof). Pair with
+ * `balanceB = total - settleShare(...)` so the pot is conserved exactly despite flooring.
+ * Mirrored byte-for-byte by the Rust `settle_share` in `rust/protocols/cross`.
+ */
+export function settleShare(
+  total: bigint,
+  scoreA: number,
+  scoreB: number,
+  distance: number = WIN_LANE
+): bigint {
+  const lead = Math.max(-distance, Math.min(distance, scoreA - scoreB));
+  return (total * BigInt(distance + lead)) / BigInt(2 * distance);
+}
+
+// ============================================
 // PROTOCOL
 // ============================================
 
@@ -349,14 +376,20 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
       else winner = null; // push at the cap
     }
 
-    let balanceA = state.balanceA;
-    let balanceB = state.balanceB;
+    // Winner-take-all at a real finish; otherwise every co-signed state already carries
+    // the fair split-if-halted-here (by progress), so an abandoned race settles fairly and
+    // no trailing chicken can stall for a refund-draw.
+    let balanceA: bigint;
+    let balanceB: bigint;
     if (winner === "A") {
       balanceA = state.total;
       balanceB = 0n;
     } else if (winner === "B") {
       balanceA = 0n;
       balanceB = state.total;
+    } else {
+      balanceA = settleShare(state.total, players[0].score, players[1].score);
+      balanceB = state.total - balanceA;
     }
     return { ...state, tick, players, winner, balanceA, balanceB };
   }

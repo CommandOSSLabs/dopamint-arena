@@ -2787,6 +2787,7 @@ dependencies = [
  "http 1.4.2",
  "move-core-types",
  "reqwest",
+ "rustls 0.23.41",
  "serde",
  "serde_json",
  "shared",
@@ -2797,6 +2798,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "transcript-store",
  "url",
 ]
 
@@ -3038,8 +3040,12 @@ name = "fleet-bench"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "fleet-serve",
  "getrandom 0.2.17",
  "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
  "sui-tunnel-anchor",
  "sysinfo",
  "tokio",
@@ -3059,6 +3065,7 @@ dependencies = [
  "tunnel-telemetry",
  "tunnel-tic-tac-toe",
  "tunnel-world-canvas",
+ "wiremock",
 ]
 
 [[package]]
@@ -8358,6 +8365,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "transcript-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-smithy-runtime",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "transcript-stream"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "tokio",
+ "tracing",
+ "transcript-store",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8537,6 +8571,8 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "transcript-store",
+ "transcript-stream",
  "tunnel-core",
  "tunnel-harness",
  "uuid",

@@ -1,9 +1,24 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
 use crate::party_driver::{SeatKit, TunnelOutcome};
-use tunnel_chat::{Chat, ChatStrategy};
+use tunnel_chat::{Chat, ChatMove, ChatState};
+use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
+
+struct AlternatingChatStrategy;
+
+impl MoveStrategy<Chat> for AlternatingChatStrategy {
+    async fn plan_move(
+        &mut self,
+        state: &ChatState,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<ChatMove> {
+        let next_seat = state.last_sender.map(Seat::other).unwrap_or(Seat::A);
+        (seat == next_seat).then(|| ChatMove::plain(format!("msg{}", state.message_count)))
+    }
+}
 
 pub(crate) async fn play(
     codec: FrameCodecKind,
@@ -15,18 +30,19 @@ pub(crate) async fn play(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         Chat,
-        ChatStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
-        ChatStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
+        AlternatingChatStrategy,
+        AlternatingChatStrategy,
         codec,
         anchor_mode,
         sui_context,
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

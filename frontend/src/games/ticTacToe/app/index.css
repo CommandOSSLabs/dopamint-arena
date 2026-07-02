@@ -198,15 +198,18 @@
    `.ttt-root` (container-type: size = the window), so panes track the window width.
    Buttons scale the same way so labels never overflow a narrow pane. */
 .ttt-root.qp-sketch .ttt-pane {
-  width: clamp(92px, 20cqw, 210px);
-  padding: clamp(6px, 1.5cqw, 14px);
-  gap: clamp(8px, 2cqw, 16px);
+  flex: 1 1 0;
+  min-width: 80px;
+  max-width: clamp(80px, 18cqw, 180px);
+  padding: clamp(4px, 1cqw, 14px);
+  gap: clamp(4px, 1cqw, 16px);
 }
 .ttt-root.qp-sketch .ttt-ctl-btn {
-  font-size: clamp(11px, 2.7cqw, 16px);
-  padding: clamp(7px, 1.7cqw, 12px) clamp(6px, 1.4cqw, 14px);
-  line-height: 1;
-  white-space: nowrap;
+  font-size: clamp(10px, 2.2cqw, 16px);
+  padding: clamp(4px, 1cqw, 12px) clamp(4px, 1cqw, 14px);
+  line-height: 1.1;
+  white-space: wrap;
+  text-align: center;
 }
 
 /* Board stays a perfect square at any scale: the centre area is its own size container, and the
@@ -214,6 +217,8 @@
    the aspect, so it grows/shrinks square whether the window is wide or tall. */
 .ttt-root.qp-sketch .ttt-board-area {
   container-type: size;
+  min-height: 0;
+  min-width: 0;
 }
 .ttt-root.qp-sketch .ttt-board-square {
   width: min(100cqw, 100cqh);

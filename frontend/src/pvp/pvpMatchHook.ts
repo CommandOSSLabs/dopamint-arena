@@ -23,7 +23,6 @@ import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
-import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
@@ -33,6 +32,8 @@ import {
   type Role,
 } from "@/pvp/mpClient";
 import { proposePlan } from "@/pvp/proposePlan";
+import { resumeWatchdogShouldArm } from "@/pvp/resumeWatchdog";
+import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
@@ -68,6 +69,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  clearResumeRecord,
 } from "@/pvp/resume";
 
 export type PvpStatus =
@@ -195,6 +197,12 @@ function turn(nonce: bigint): Role {
   return nonce % 2n === 0n ? "A" : "B";
 }
 
+/** How long a resume waits for the peer to advance before giving up. Only armed when we're actually
+ *  waiting on the peer (pending move / their turn); a co-located bot that's alive replies in ms, so a
+ *  quiet window this long means it's gone (exited past grace, or cross-instance where our resync can't
+ *  reach it). We then drop the record and reset to idle rather than sit frozen in "playing" forever. */
+const RESUME_WATCHDOG_MS = 10_000;
+
 /**
  * A PvP match's whole session — matchmaking socket, tunnel, bot timer — kept OUT of React so a
  * minimized or reflowed window stays CONNECTED in the background instead of dropping the opponent.
@@ -216,6 +224,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   private dt: DistributedTunnel<State, Move> | null = null;
   private detachResume: (() => void) | null = null;
   private proposeTimer: ReturnType<typeof setTimeout> | null = null;
+  private resumeWatchdog: ReturnType<typeof setTimeout> | null = null;
   private intent: Intent;
   /** Set per live match to `settle(publishOnly)`; lets `leave()` publish a half outside `onConfirmed`. */
   private settleNow: ((publishOnly: boolean) => void) | null = null;
@@ -338,6 +347,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       clearTimeout(this.proposeTimer);
       this.proposeTimer = null;
     }
+    this.clearResumeWatchdog();
     this.detachResume?.();
     this.detachResume = null;
     this.mp?.close();
@@ -376,6 +386,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       clearTimeout(this.proposeTimer);
       this.proposeTimer = null;
     }
+    this.clearResumeWatchdog();
     this.detachResume?.();
     this.detachResume = null;
     this.mp?.close();
@@ -416,11 +427,11 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       typeof openAndFundSharedTunnel
     >[0]["reads"];
     const proto = this.spec.makeProtocol();
-    const transcript = new Transcript(dt.tunnelId);
     let settling = false;
-    // One cooperative close, guarded to fire once. A natural terminal does the full half-exchange +
-    // submit; `publishOnly` (leaver/Back) publishes our half and returns to the lobby. Stored on
-    // `settleNow` so `leave()` can drive the publish-only path from outside this closure.
+    // One cooperative close, guarded to fire once. A natural terminal waits for the bot's settle half
+    // and submits over the bot's root; `publishOnly` (leaver/Back) has nothing to publish — the bot
+    // owns the transcript and settles at its own terminal — so it just returns to the lobby. Stored on
+    // `settleNow` so `leave()` can drive it from outside this closure.
     const triggerSettle = (publishOnly: boolean) => {
       if (settling) return;
       settling = true;
@@ -429,13 +440,11 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       void settle(
         dt,
         info.role,
-        channel,
         waitPeer,
         reads,
         signExec as never,
         sponsoredSignExec as never,
         dt.tunnelId,
-        transcript,
         getControlPlaneClient(),
         this.spec.game,
         coinType,
@@ -455,8 +464,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       );
     };
     this.settleNow = triggerSettle;
-    dt.onConfirmed = (u) => {
-      transcript.append(u);
+    dt.onConfirmed = () => {
       this.sync();
       this.maybePropose();
       if (proto.isTerminal(dt.state)) triggerSettle(false);
@@ -540,17 +548,56 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
         });
         await mp.connect(); // opening handshake carries resume{matchId}
+        // A restored in-flight move is re-delivered by attachResume's resume handler (shared by all
+        // hooks), so no explicit resendPending is needed here.
         try {
           this.maybePropose(); // kick a due move
         } catch {
           /* a move is already in flight — the resync handshake converges it */
         }
         this.sync();
+        this.armResumeWatchdog(tunnel);
       } catch (e) {
         this.fail(e);
       }
     })();
   };
+
+  /** After a resume, guard against a peer that never answers (bot exited past its grace, or a
+   *  cross-instance reconnect where our resync can't reach it). Arm ONLY when we're waiting on the
+   *  peer — a re-sent pending, or it's their turn; a clean same-turn resume already succeeded, so
+   *  arming there would tear down a healthy match. Disarm on the first confirmed frame (the peer is
+   *  alive and replying). On timeout, drop the record and reset to idle so a fresh match can allocate
+   *  — never eagerly dispute, which could attack a still-live channel; the old tunnel's stake is
+   *  reclaimed by the existing on-chain grace. */
+  private armResumeWatchdog(tunnel: DistributedTunnel<State, Move>) {
+    const snap = tunnel.snapshot();
+    const waitingOnPeer = resumeWatchdogShouldArm(
+      snap.pending !== null,
+      turn(tunnel.nonce) !== this.role,
+    );
+    if (!waitingOnPeer) return;
+    this.clearResumeWatchdog();
+    const prevConfirmed = tunnel.onConfirmed;
+    tunnel.onConfirmed = (u) => {
+      this.clearResumeWatchdog();
+      tunnel.onConfirmed = prevConfirmed;
+      prevConfirmed?.(u);
+    };
+    const tunnelId = tunnel.tunnelId;
+    this.resumeWatchdog = setTimeout(() => {
+      this.resumeWatchdog = null;
+      clearResumeRecord(tunnelId);
+      this.reset();
+    }, RESUME_WATCHDOG_MS);
+  }
+
+  private clearResumeWatchdog() {
+    if (this.resumeWatchdog !== null) {
+      clearTimeout(this.resumeWatchdog);
+      this.resumeWatchdog = null;
+    }
+  }
 
   findMatch = () => {
     const deps = this.deps;
@@ -696,6 +743,9 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     const wallet = deps.account.address;
     installResumePersistence();
     evictExpiredRecords();
+    // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take
+    // over. Forced ON per entry (like battleship), regardless of the session's last toggle.
+    this.auto = true;
 
     void (async () => {
       try {
@@ -882,16 +932,15 @@ export function createPvpMatchHook<
 }
 
 /**
- * Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
- * backend /settle (the settler anchors the transcript root + archives to Walrus). Both seats must
- * anchor the SAME root or close_cooperative_with_root rebuilds different bytes and on-chain verify
- * fails — so the root is exchanged and asserted equal before either side trusts the combine.
+ * Wait for the co-located bot's settlement half, sign seat A's half over the root the bot supplied,
+ * and submit the close via the backend /settle (header-only body; the bot's canonical transcript is
+ * archived to S3). The FE keeps NO transcript — every arena match is human-vs-bot, so the bot owns the
+ * root and funds ride on the co-signed balances, not the root (see `coSignCloseFromPeerRoot`).
  * Fallback: wallet-submitted close_cooperative_with_root (backend down).
  */
 async function settle<State, Move>(
   dt: DistributedTunnel<State, Move>,
   role: Role,
-  channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
@@ -899,45 +948,27 @@ async function settle<State, Move>(
   // staked MTPS — the fallback close must use the sponsored signer there.
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
-  transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
   game: string,
   coinType: string | undefined,
-  // Leaver (Back): publish our signed half and return WITHOUT waiting on the peer or submitting. The
-  // staying seat collects this half and submits, or the 1h grace path closes — so leaving never blocks
-  // on an opponent who won't co-sign an early end (e.g. the fleet bot, which only settles at terminal).
+  // Leaver (Back): the FE has no half to publish (the bot owns the transcript and only settles at its
+  // own terminal), so just return to the lobby — the bot's terminal / on-chain grace is the floor.
   publishOnly = false,
 ): Promise<void> {
-  const createdAt = await readCreatedAt(reads, tunnelId);
-  const root = transcript.root();
-  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
-  channel.sendPeer({
-    t: "settleHalf",
-    partyABalance: half.settlement.partyABalance.toString(),
-    partyBBalance: half.settlement.partyBBalance.toString(),
-    finalNonce: half.settlement.finalNonce.toString(),
-    timestamp: half.settlement.timestamp.toString(),
-    transcriptRoot: toHex(root),
-    sig: toHex(half.sigSelf),
-  });
   if (publishOnly) return;
+  const createdAt = await readCreatedAt(reads, tunnelId);
   const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
     "settleHalf",
   );
-  if (other.transcriptRoot !== toHex(root)) {
-    throw new Error("settlement transcript-root mismatch between parties");
-  }
-  const co = dt.combineSettlementWithRoot(
-    half.settlement,
-    half.sigSelf,
+  const co = coSignCloseFromPeerRoot(
+    dt,
+    createdAt,
+    fromHex(other.transcriptRoot),
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
   try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleBody(co, transcript.rawEntries()),
-    );
+    await cp.settle(tunnelId, coSignedToSettleBody(co, []));
   } catch (e) {
     console.error(
       `[${game}] backend settle failed; falling back to wallet close:`,

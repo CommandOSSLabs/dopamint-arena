@@ -12,9 +12,13 @@ pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
-    /// Shared with the arena opener, which has the settler sponsor each bot open's gas (ADR-0028):
-    /// one settler instance (and one `sponsor_nonce`) backs opens, faucet, `/settle`, and sponsors.
+    /// Shared (`Arc`): the arena opener has the settler sponsor each bot open's gas (ADR-0028) and
+    /// the async settle-worker pool holds it as a `BatchSettler` — one settler instance (and one
+    /// `sponsor_nonce`) backs opens, faucet, `/settle`, and user sponsors.
     pub settler: std::sync::Arc<crate::sui::SuiSettler>,
+    /// Durable settle queue (ADR-0029): `/settle` enqueues here and returns 202; the worker pool
+    /// drains it, coalescing many closes into one PTB.
+    pub settle_queue: std::sync::Arc<dyn crate::settle_queue::SettleQueue>,
     /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
     /// `settler` as the fallback. `None` = settler-only.
     pub enoki: Option<crate::enoki::EnokiClient>,
@@ -24,6 +28,12 @@ pub struct AppState {
     pub archiver: Option<Arc<dyn TranscriptArchiver>>,
     /// S3 object-key prefix for transcript archival (e.g. "prod/"). Empty when unset.
     pub s3_prefix: String,
+    /// S3 transcript *chunk* writer — the streaming counterpart to `archiver` (same bucket). Used on
+    /// the recorder's `finish()` path (tail chunk + manifest seal). `None` = no S3.
+    pub chunk_writer: Option<Arc<dyn transcript_store::TranscriptChunkWriter>>,
+    /// Sender into the per-instance bounded transcript uploader — the byte-budget that keeps
+    /// streaming RAM-safe under S3 slowdown (producers block when it's full). `None` = no S3.
+    pub chunk_upload_tx: Option<tokio::sync::mpsc::Sender<transcript_stream::ChunkUpload>>,
     #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
     pub ollama: crate::ollama::OllamaClient,
     /// Latest aggregate snapshot is computed once per tick and fanned out here to
@@ -93,10 +103,13 @@ impl AppState {
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
             settler: Arc::new(crate::sui::SuiSettler::noop()),
+            settle_queue: Arc::new(crate::settle_queue::InMemorySettleQueue::default()),
             enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             archiver: None,
             s3_prefix: "".into(),
+            chunk_writer: None,
+            chunk_upload_tx: None,
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
                 "qwen2.5:1.5b".into(),
@@ -118,18 +131,6 @@ impl AppState {
             faucet_max_per_window: 5,
             faucet_admin_token: None,
         })
-    }
-
-    /// Test builder that wires a recording S3 archiver. Settler stays noop;
-    /// Redis/Postgres/S3 unused otherwise.
-    pub fn with_fake_archiver(
-        archiver: std::sync::Arc<dyn crate::s3::TranscriptArchiver>,
-    ) -> SharedState {
-        let mut s = Self::in_memory_for_test();
-        let inner = std::sync::Arc::get_mut(&mut s).expect("unique test arc");
-        inner.archiver = Some(archiver);
-        inner.s3_prefix = "".into();
-        s
     }
 }
 

@@ -67,6 +67,37 @@ export function encodeSettleBody(b: SettleBody): Uint8Array {
   return concatBytes(parts);
 }
 
+/** One co-signed entry as it appears on the wire: length-prefixed message + both 64-byte sigs. */
+export type SettleEntry = { message: Uint8Array; sigA: Uint8Array; sigB: Uint8Array };
+
+/**
+ * Decode a header-less run of length-prefixed co-signed entries — the exact bytes the bot streams
+ * to S3 chunks and the explorer reassembles. Same per-entry layout as {@link encodeSettleBody}'s
+ * entries (u16-BE msgLen ‖ message ‖ 64B sigA ‖ 64B sigB), but with NO 229-byte settle header:
+ * root and balances come from the on-chain settlement row, not from these bytes. Throws if the
+ * bytes don't align to whole entries (a truncated chunk reassembly).
+ */
+export function decodeSettleEntries(bytes: Uint8Array): SettleEntry[] {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const entries: SettleEntry[] = [];
+  let off = 0;
+  while (off < bytes.length) {
+    if (off + 2 > bytes.length) throw new Error("truncated entry length prefix");
+    const msgLen = dv.getUint16(off, false);
+    off += 2;
+    // message + sigA(64) + sigB(64) must all be present.
+    if (off + msgLen + 128 > bytes.length) throw new Error("truncated entry body");
+    const message = bytes.slice(off, off + msgLen);
+    off += msgLen;
+    const sigA = bytes.slice(off, off + 64);
+    off += 64;
+    const sigB = bytes.slice(off, off + 64);
+    off += 64;
+    entries.push({ message, sigA, sigB });
+  }
+  return entries;
+}
+
 export function decodeSettleBody(bytes: Uint8Array): SettleBody {
   if (bytes.length < HEADER_LEN) throw new Error("settle body too short");
   if (bytes[0] !== SETTLE_BODY_VERSION)
