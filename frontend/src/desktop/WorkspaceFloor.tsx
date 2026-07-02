@@ -146,6 +146,7 @@ export function WorkspaceFloor({
             title={mod.name}
             icon={<GameTpsBadge gameId={gameOf(item.id)} />}
             domId={item.id}
+            category={ws}
             dragHandleProps={
               fl ? floatDragProps(item.id) : handle.dragHandleProps
             }

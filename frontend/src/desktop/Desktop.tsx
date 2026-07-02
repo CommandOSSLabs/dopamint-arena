@@ -3,7 +3,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-import { ArrowRight, ChevronDown, Eye, Plus, X } from "lucide-react";
+import { ChevronDown, Eye, Plus, X } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 
 import "../games"; // register all game modules (side-effect import)
@@ -51,7 +51,7 @@ import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
 import { GameContent } from "./GameContent";
 import { GameTpsBadge } from "./GameTpsBadge";
-import { OverviewFloor, type OverviewGroup } from "./OverviewFloor";
+import { OverviewFloor, type OverviewColumn } from "./OverviewFloor";
 import { WorkspaceFloor } from "./WorkspaceFloor";
 import { MobileFloor } from "./MobileFloor";
 import { MobileAddSheet } from "./MobileAddSheet";
@@ -378,16 +378,43 @@ export function ArenaView() {
     ...Object.keys(hiddens[ws]),
     ...Object.values(floatings[ws]).map((f) => f.item.id),
   ];
-  const overviewGroups: OverviewGroup[] = [
-    { ws: "games", label: "Game", ids: idsFor("games"), onClose: closeGames },
-    {
-      ws: "payment",
-      label: "Payment",
-      ids: idsFor("payment"),
-      onClose: closePayment,
-    },
-    { ws: "chat", label: "Chat", ids: idsFor("chat"), onClose: closeChat },
-  ];
+  // The "All" floor's per-category closers, keyed by workspace. Stable (the useCallbacks above),
+  // so each overview tile's GameContent memo holds across re-renders.
+  const overviewClosers: Record<Workspace, (id: string) => void> = {
+    games: closeGames,
+    payment: closePayment,
+    chat: closeChat,
+  };
+  // Build the "All" floor's three category columns. With `balance`, a busy category's overflow
+  // (its bottom tiles) spills into the shortest columns until heights differ by at most one — so
+  // 5 games / 1 payment / 1 chat evens out to ~3 / 2 / 2. Off (phone, where columns stack into one
+  // scroll anyway), each column holds only its own category.
+  const buildOverviewColumns = (balance: boolean): OverviewColumn[] => {
+    const cols: OverviewColumn[] = OVERVIEW_GROUPS.map((g) => {
+      const ids = idsFor(g.ws);
+      return {
+        ws: g.ws,
+        label: g.label,
+        count: ids.length,
+        items: ids.map((id) => ({ id, ws: g.ws })),
+      };
+    });
+    if (balance) {
+      const total = cols.reduce((n, c) => n + c.items.length, 0);
+      for (let guard = 0; guard < total; guard++) {
+        let tall = cols[0];
+        let short = cols[0];
+        for (const c of cols) {
+          if (c.items.length > tall.items.length) tall = c;
+          if (c.items.length < short.items.length) short = c;
+        }
+        if (tall.items.length - short.items.length <= 1) break;
+        const moved = tall.items.pop();
+        if (moved) short.items.push(moved);
+      }
+    }
+    return cols;
+  };
 
   // Minimize → fly into the dock, hide off the floor (keeping geometry), re-tile.
   const hideInWorkspace = (ws: Workspace, id: string) => {
@@ -820,24 +847,6 @@ export function ArenaView() {
       .filter((e) => e.hidden);
   };
 
-  // A window's owning workspace (each instance lives in exactly one floor's stores),
-  // so the combined "All" dock can route show/close to the right floor.
-  const workspaceOf = (id: string): Workspace | undefined =>
-    OVERVIEW_GROUPS.map((g) => g.ws).find(
-      (ws) =>
-        layouts[ws].some((w) => w.id === id) ||
-        !!hiddens[ws][id] ||
-        !!floatings[ws][id],
-    );
-  const showAnyWindow = (id: string) => {
-    const ws = workspaceOf(id);
-    if (ws) showInWorkspace(ws, id);
-  };
-  const closeAnyWindow = (id: string) => {
-    const ws = workspaceOf(id);
-    if (ws) closeInWorkspace(ws, id);
-  };
-
   // The floor's tools now live in the workspace tab bar (top), so the floor stays clear.
   const workspaceTabs = (
     <WorkspaceTabs
@@ -902,57 +911,16 @@ export function ArenaView() {
     </div>
   );
 
-  // The "All" floor: every workspace's real floor at once, each under a group heading,
-  // sharing one minimized-window dock. It's the same GridLayout the normal floor uses
-  // (drag/resize/minimize/maximize per group) — only grouped. Rendered exclusively (the
-  // per-workspace floor is unmounted here), so a game mounts once even though its real
-  // window id is reused across views.
+  // The "All" floor: every workspace's windows at once as three balanced, color-coded category
+  // columns (see OverviewFloor). Static tiles, so no minimized-window dock. Rendered exclusively
+  // (the per-workspace floor is unmounted here), so a game mounts once even though its real window
+  // id is reused across views.
   const overviewArea = (
-    <div className="relative h-full">
-      <div data-floor className="bg-dot-grid h-full overflow-y-auto p-2">
-        <div className="flex flex-col gap-4">
-          {OVERVIEW_GROUPS.map(({ ws, label }) => {
-            const count = idsFor(ws).length;
-            return (
-              <section key={ws}>
-                <header className="flex items-center px-0.5 pb-1.5">
-                  <button
-                    type="button"
-                    onClick={() => goToSection(ws)}
-                    className="group inline-flex items-center gap-1.5 text-sm font-semibold text-foreground/70 transition-colors hover:text-foreground"
-                  >
-                    {label}
-                    <span className="rounded bg-secondary px-1 text-[10px] font-medium text-muted-foreground">
-                      {count}
-                    </span>
-                    <ArrowRight className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                  </button>
-                </header>
-                {count === 0 ? (
-                  <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                    Nothing open in {label}
-                  </div>
-                ) : (
-                  <WorkspaceFloor
-                    ws={ws}
-                    layout={layouts[ws]}
-                    hidden={hiddens[ws]}
-                    floating={floatings[ws]}
-                    {...floorHandlers}
-                  />
-                )}
-              </section>
-            );
-          })}
-        </div>
-      </div>
-      <MacDock
-        entries={OVERVIEW_GROUPS.flatMap((g) => hiddenEntriesFor(g.ws))}
-        side={macDockSide}
-        onShow={showAnyWindow}
-        onClose={closeAnyWindow}
-      />
-    </div>
+    <OverviewFloor
+      columns={buildOverviewColumns(true)}
+      closers={overviewClosers}
+      onOpenWorkspace={goToSection}
+    />
   );
 
   const activeFloor = section === "all" ? overviewArea : floorArea;
@@ -1053,9 +1021,12 @@ export function ArenaView() {
           <MobileLive />
         </main>
       ) : section === "all" ? (
+        // Phone "All": the three category columns collapse to one scroll, so keep each column to its
+        // own category (no cross-fill — filling only matters when columns sit side by side).
         <main className="h-full min-h-0">
           <OverviewFloor
-            groups={overviewGroups}
+            columns={buildOverviewColumns(false)}
+            closers={overviewClosers}
             onOpenWorkspace={goToSection}
           />
         </main>

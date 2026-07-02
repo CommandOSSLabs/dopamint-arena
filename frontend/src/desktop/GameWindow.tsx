@@ -9,6 +9,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { GridDragHandleProps } from "@/components/ui/grid-layout";
+import type { Workspace } from "../games/types";
+import { CATEGORY_STYLE } from "./categoryStyle";
 
 /** Small header action; stops pointer-down so it doesn't start a window drag. */
 function HeaderButton({
@@ -55,6 +57,7 @@ export function GameWindow({
   title,
   icon,
   domId,
+  category,
   dragHandleProps,
   isActive = false,
   onMinimize,
@@ -68,6 +71,9 @@ export function GameWindow({
   icon?: ReactNode;
   /** Marks the root with `data-window` so the parent can read its rect (minimize flight). */
   domId?: string;
+  /** The game's workspace, for the category identity tint (top accent bar + faint header wash).
+   *  Omitted ⇒ neutral chrome. */
+  category?: Workspace;
   dragHandleProps?: GridDragHandleProps;
   isActive?: boolean;
   onMinimize?: () => void;
@@ -77,6 +83,7 @@ export function GameWindow({
   className?: string;
   children: ReactNode;
 }) {
+  const cat = category ? CATEGORY_STYLE[category] : null;
   // Render virtualization (ADR-0030): report on-screen/off-screen to the engine so an off-screen
   // window (hidden workspace `display:none`, minimized, or scrolled away — all collapse to a single
   // IntersectionObserver signal) keeps its match running in the worker but stops painting. `domId`
@@ -111,10 +118,13 @@ export function GameWindow({
         className,
       )}
     >
+      {/* Thin category identity bar along the top edge (square window, so it reads as a clean strip). */}
+      {cat && <div className={cn("h-0.5 w-full shrink-0", cat.bar)} />}
       <header
         {...dragHandleProps}
         className={cn(
-          "relative flex h-9 shrink-0 items-center justify-center border-b border-border bg-secondary/40 px-2 text-xs font-semibold text-foreground",
+          "relative flex h-9 shrink-0 items-center justify-center border-b border-border px-2 text-xs font-semibold text-foreground",
+          cat ? cat.tint : "bg-secondary/40",
           dragHandleProps &&
             "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
         )}

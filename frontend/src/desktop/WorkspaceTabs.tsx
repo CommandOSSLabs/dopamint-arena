@@ -39,23 +39,51 @@ type DockSide = "bottom" | "right";
  * "All" floor those controls act on every group at once (see `toolTargets` in
  * Desktop.tsx); on a single workspace they act on just that floor.
  */
+// Per-tab category identity color (see categoryStyle / --cat-* tokens): a solid fill when active,
+// a colored icon when idle. Class strings are LITERAL so Tailwind's scanner emits them.
 const WORKSPACE_TABS: {
   section: MobileSection;
   label: string;
   icon: LucideIcon;
+  solid: string;
+  text: string;
 }[] = [
   // The aggregate "All" floor — every workspace's live windows at once — is the default
   // landing (the bare `/` with no `section` param). Its floor tools act on all groups.
-  { section: "all", label: "All", icon: LayoutDashboard },
-  { section: "games", label: "Game", icon: Gamepad2 },
-  { section: "payment", label: "Payment", icon: Wallet },
-  { section: "chat", label: "Chat", icon: MessagesSquare },
+  {
+    section: "all",
+    label: "All",
+    icon: LayoutDashboard,
+    solid: "bg-cat-all",
+    text: "text-cat-all",
+  },
+  {
+    section: "games",
+    label: "Game",
+    icon: Gamepad2,
+    solid: "bg-cat-game",
+    text: "text-cat-game",
+  },
+  {
+    section: "payment",
+    label: "Payment",
+    icon: Wallet,
+    solid: "bg-cat-payment",
+    text: "text-cat-payment",
+  },
+  {
+    section: "chat",
+    label: "Chat",
+    icon: MessagesSquare,
+    solid: "bg-cat-chat",
+    text: "text-cat-chat",
+  },
 ];
 
-const tab =
-  "inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent px-3 py-2.5 text-sm font-semibold text-foreground/60 transition-colors hover:bg-secondary hover:text-foreground";
-const tabActive =
-  "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground";
+const tabBase =
+  "inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent px-3 py-2.5 text-sm font-semibold transition-colors";
+const tabIdle = "text-foreground/60 hover:bg-secondary hover:text-foreground";
+const tabActive = "text-primary-foreground shadow-sm";
 
 /** A row action in the layout-tools menu. */
 function ToolItem({
@@ -115,14 +143,20 @@ export function WorkspaceTabs({
       <nav className="grid flex-1 grid-cols-4 gap-1">
         {WORKSPACE_TABS.map((t) => {
           const Icon = t.icon;
+          const isActive = active === t.section;
           return (
             <Link
               key={t.section}
               to="/"
               search={t.section === "all" ? {} : { section: t.section }}
-              className={cn(tab, active === t.section && tabActive)}
+              className={cn(
+                tabBase,
+                isActive ? cn(t.solid, tabActive) : tabIdle,
+              )}
             >
-              <Icon className="size-4" />
+              {/* Idle tabs keep the category color on the icon so the whole bar reads as colored;
+                  the active tab is a solid category pill with cream text (icon inherits it). */}
+              <Icon className={cn("size-4", !isActive && t.text)} />
               {t.label}
             </Link>
           );

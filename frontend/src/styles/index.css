@@ -24,6 +24,15 @@
   --wal-blue: #2e69df;
   --wal-mint: #138a5c;
   --wal-lime: #5e6b00;
+
+  /* ---- category identity colors (workspace) ----
+     Constant across themes (defined only here, never in .dark) so solid fills keep cream-text
+     contrast in both. Drawn from the aurora accents — pink / mint / blue — with brand violet for
+     the aggregate "All". Used by the workspace tabs and per-window tints. */
+  --cat-game: #c23bb0;
+  --cat-payment: #138a5c;
+  --cat-chat: #2e69df;
+  --cat-all: #613dff;
   --wal-grad-memory: linear-gradient(
     96deg,
     #613dff 0%,
@@ -183,6 +192,12 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  /* Category identity colors → `bg-cat-game`, `text-cat-payment`, `bg-cat-chat/8`, … */
+  --color-cat-game: var(--cat-game);
+  --color-cat-payment: var(--cat-payment);
+  --color-cat-chat: var(--cat-chat);
+  --color-cat-all: var(--cat-all);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
