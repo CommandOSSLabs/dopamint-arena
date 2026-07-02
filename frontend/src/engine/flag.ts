@@ -31,3 +31,17 @@ export function enginePoolEnabled(): boolean {
   const tier = deviceTierInfo().tier;
   return tier === "high" || tier === "max";
 }
+
+/** Render virtualization (ADR-0030): pause paint + throttle-up for off-screen windows and stop the
+ *  worker emitting their snapshots. TEMPORARILY DEFAULT-OFF while we chase an on-screen freeze (a
+ *  window that stays blank though it's visible) — with this off, every live window paints every move
+ *  so the raw gameplay flow can be judged on its own. `?rendervirt=1` forces it back on; flip the
+ *  default once the freeze is root-caused. Only meaningful with the worker engine ({@link engineEnabled}). */
+export function renderVirtualizationEnabled(): boolean {
+  if (typeof location !== "undefined") {
+    const v = new URLSearchParams(location.search).get("rendervirt");
+    if (v === "1") return true;
+    if (v === "0") return false;
+  }
+  return false; // TEMP: off by default while diagnosing the on-screen freeze
+}

@@ -18,7 +18,7 @@ import type {
 } from "./engineApi";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
-import { enginePoolEnabled } from "./flag";
+import { enginePoolEnabled, renderVirtualizationEnabled } from "./flag";
 import { resumeIdb } from "./persist/idb";
 import { elog } from "./debug";
 import type { GameWorkerApi } from "./engine.game.worker";
@@ -70,6 +70,9 @@ interface SnapThrottle {
 const snapThrottle = new Map<string, SnapThrottle>();
 
 function renderIntervalMs(): number {
+  // Virtualization off: don't throttle-up with window count — every window paints at the base cadence
+  // so a single match's move-to-move flow is as smooth as it can be (freeze debug).
+  if (!renderVirtualizationEnabled()) return RENDER_BASE_MS;
   // Only VISIBLE windows spend the shared render budget (ADR-0030): off-screen matches keep running
   // in the worker but don't paint, so on-screen boards aren't throttled paying for hidden ones.
   let n = 0;
@@ -88,7 +91,12 @@ function deliverSnapshot(
   store(snap);
   // Off-screen (ADR-0030): the latest snapshot is stored (getSnapshot stays fresh for the flush on
   // re-show), but skip the React notify entirely — no reconcile, no paint — while the match runs on.
-  if (pvpWindows.get(windowId)?.visible === false) return;
+  // Gated on the flag so turning virtualization OFF paints every window every move (freeze debug).
+  if (
+    renderVirtualizationEnabled() &&
+    pvpWindows.get(windowId)?.visible === false
+  )
+    return;
   let t = snapThrottle.get(windowId);
   if (!t) {
     t = { lastNotifyMs: 0, timer: null, lastStatus: null };
@@ -253,6 +261,8 @@ function ensureGameWorker(
 /** Push a window's visibility into its worker so it stops EMITTING snapshots while off-screen (Phase-1
  *  `setWindowVisible` already gates the main-thread render; this saves the upstream postMessage too). */
 function propagateVisibility(windowId: string, visible: boolean): void {
+  // Virtualization off: never tell the worker to stop emitting — the main thread wants every snapshot.
+  if (!renderVirtualizationEnabled()) return;
   if (enginePoolEnabled()) {
     const gw = gameWorkers.get(windowId);
     if (gw) fire(gw.api.setVisibility(visible));
