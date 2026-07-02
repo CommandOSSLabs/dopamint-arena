@@ -24,6 +24,11 @@ use crate::swarm::settle_manager::SettleManager;
 pub enum InnerAnchor {
     Memory(InMemoryAnchor),
     Sui(SuiOpenIntentAnchor),
+    /// Test-only backend whose `open` always errors, so its tunnel never marks the
+    /// open gate and never reaches settle. Used to prove the pipeline's barrier
+    /// waits terminate on a never-depositing seat instead of hanging.
+    #[cfg(test)]
+    AlwaysFailsOpen,
 }
 
 impl InnerAnchor {
@@ -33,6 +38,8 @@ impl InnerAnchor {
         match self {
             Self::Memory(a) => a.settlement_mode(),
             Self::Sui(a) => a.settlement_mode(),
+            #[cfg(test)]
+            Self::AlwaysFailsOpen => SettlementMode::Rootless,
         }
     }
 
@@ -43,6 +50,10 @@ impl InnerAnchor {
         match self {
             Self::Memory(a) => a.open(request).await,
             Self::Sui(a) => a.open(request).await,
+            #[cfg(test)]
+            Self::AlwaysFailsOpen => Err(TunnelAnchorError::Unavailable(
+                "test: forced open failure".into(),
+            )),
         }
     }
 
@@ -53,6 +64,10 @@ impl InnerAnchor {
         match self {
             Self::Memory(a) => a.settle(request).await,
             Self::Sui(a) => a.settle(request).await,
+            #[cfg(test)]
+            Self::AlwaysFailsOpen => Err(TunnelAnchorError::Unavailable(
+                "test: forced settle failure".into(),
+            )),
         }
     }
 }

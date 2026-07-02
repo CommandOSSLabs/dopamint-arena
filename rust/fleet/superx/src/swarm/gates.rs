@@ -48,6 +48,14 @@ impl PreOpenGate {
         self.opened.load(Ordering::Acquire)
     }
 
+    /// Release the gate regardless of how many tunnels actually opened. The
+    /// pipeline calls this when it abandons the open barrier (stop, deadline, or a
+    /// failed open that makes `target` unreachable) so any seat still parked on
+    /// [`wait`](Self::wait) proceeds instead of hanging forever.
+    pub fn force_release(&self) {
+        let _ = self.released_tx.send_replace(true);
+    }
+
     pub fn is_released(&self) -> bool {
         *self.released_tx.borrow()
     }

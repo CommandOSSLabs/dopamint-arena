@@ -36,6 +36,11 @@ struct SettleState {
     pairs: HashMap<String, PairSlot>,
     /// Seats deposited so far. The barrier releases at `expected_seats`.
     deposited: u64,
+    /// Set when the pipeline abandons the settle barrier (stop/deadline/failure).
+    /// The drain then proceeds on whatever has deposited: complete pairs settle,
+    /// lone seats resolve with an "incomplete at drain" error so no seat parks
+    /// forever waiting for a partner that will never arrive.
+    forced: bool,
 }
 
 pub struct SettleManager {
@@ -64,6 +69,7 @@ impl SettleManager {
             state: Mutex::new(SettleState {
                 pairs: HashMap::new(),
                 deposited: 0,
+                forced: false,
             }),
             barrier: Notify::new(),
         })
@@ -120,13 +126,27 @@ impl SettleManager {
         tokio::spawn(async move { manager.drain().await });
     }
 
+    /// Abandon the settle barrier: release the drain even though fewer than
+    /// `expected_seats` have deposited. Called by the pipeline on stop/deadline or
+    /// when a tunnel fails before settling, so the barrier can never fill. The
+    /// drain then settles whatever complete pairs exist and errors the rest,
+    /// unparking every deposited seat instead of hanging.
+    pub async fn force_release(&self) {
+        self.state.lock().await.forced = true;
+        self.barrier.notify_one();
+    }
+
     async fn drain(self: Arc<Self>) {
-        // Barrier: park until all `2 * expected_tunnels` seats have deposited.
-        // `notify_one` stores a permit, so a signal that races ahead of the first
-        // `notified()` is not lost; the count re-check guards spurious wakeups.
+        // Barrier: park until all `2 * expected_tunnels` seats have deposited, or
+        // the pipeline forces release. `notify_one` stores a permit, so a signal
+        // that races ahead of the first `notified()` is not lost; the re-check
+        // guards spurious wakeups.
         loop {
-            if self.state.lock().await.deposited >= self.expected_seats {
-                break;
+            {
+                let state = self.state.lock().await;
+                if state.deposited >= self.expected_seats || state.forced {
+                    break;
+                }
             }
             self.barrier.notified().await;
         }

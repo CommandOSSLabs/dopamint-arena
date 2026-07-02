@@ -51,6 +51,12 @@ const TUNNEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 /// before the runtime is torn down.
 const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// Once a barrier abandonment is triggered (stop, deadline, or a failed tunnel),
+/// wait this long for still-healthy seats to reach the barrier before forcing it.
+/// Lets in-flight tunnels finish and settle cleanly instead of being aborted, yet
+/// keeps a degraded swarm bounded.
+const BARRIER_GRACE: Duration = Duration::from_millis(250);
+
 /// Layer-1 pipeline concurrency, anchor-agnostic. `*_cohort` caps how many
 /// opens/settles fly concurrently (a cohort completes before the next starts);
 /// `*_spacing` delays between cohorts. `None` = no cap. Distinct from the Sui
@@ -88,6 +94,10 @@ pub struct HeartbeatConfig {
 pub enum AnchorChoice {
     Memory,
     Sui(SuiContext),
+    /// Test-only: every tunnel's `open` fails, so no seat ever deposits. Exercises
+    /// the pipeline's barrier-wait termination on the failure path.
+    #[cfg(test)]
+    AlwaysFailsOpen,
 }
 
 /// Everything one `run-swarm` invocation needs to run its staged pipeline.
@@ -132,6 +142,41 @@ struct TunnelResult {
     moves: u64,
     bytes: u64,
     play_ns: u128,
+}
+
+/// Running tally of reaped tunnel tasks. Shared by the barrier-wait early reaps
+/// (a tunnel that fails before a barrier finishes early) and the final drain, so
+/// every task is accounted exactly once regardless of when it terminated.
+#[derive(Default)]
+struct DrainTally {
+    settled: u64,
+    aborted: u64,
+    moves: u64,
+    bytes: u64,
+    play_ns_samples: Vec<f64>,
+    tps_samples: Vec<f64>,
+}
+
+impl DrainTally {
+    /// Fold one joined task. `Ok` carries a tunnel's joined result (settled or a
+    /// clean failure); `Err` is a panicked/aborted task counted as aborted.
+    fn reap(&mut self, joined: Result<TunnelResult, tokio::task::JoinError>) {
+        match joined {
+            Ok(result) => {
+                if result.settled {
+                    self.settled += 1;
+                }
+                self.moves += result.moves;
+                self.bytes += result.bytes;
+                if result.play_ns > 0 {
+                    self.play_ns_samples.push(result.play_ns as f64);
+                    self.tps_samples
+                        .push(result.moves as f64 * 1_000_000_000.0 / result.play_ns as f64);
+                }
+            }
+            Err(_join_error) => self.aborted += 1,
+        }
+    }
 }
 
 /// Per-seat transcript recorder chosen by settlement mode: rootless anchors need
@@ -237,10 +282,14 @@ where
     // settle is scope-independent, so the manager uses one run-scoped anchor.
     let shared_memory = match &params.anchor {
         AnchorChoice::Memory => Some(Arc::new(InnerAnchor::Memory(InMemoryAnchor::new()))),
+        #[cfg(test)]
+        AnchorChoice::AlwaysFailsOpen => Some(Arc::new(InnerAnchor::AlwaysFailsOpen)),
         AnchorChoice::Sui(_) => None,
     };
     let settle_inner: Arc<InnerAnchor> = match &params.anchor {
         AnchorChoice::Memory => Arc::clone(shared_memory.as_ref().expect("memory inner")),
+        #[cfg(test)]
+        AnchorChoice::AlwaysFailsOpen => Arc::clone(shared_memory.as_ref().expect("shared inner")),
         AnchorChoice::Sui(ctx) => Arc::new(InnerAnchor::Sui(
             ctx.scoped(&format!("{}-s{}-settle", params.run_id, params.swarm_index)),
         )),
@@ -260,6 +309,9 @@ where
 
     let started = Instant::now();
     let mut tasks: JoinSet<TunnelResult> = JoinSet::new();
+    // Accounts every task exactly once across the barrier-wait early reaps and the
+    // final drain.
+    let mut tally = DrainTally::default();
 
     // Spawn tunnels, paced into open cohorts. Because each tunnel's `open` parks
     // on the shared gate after registering, a cohort "completes" once its opens
@@ -281,6 +333,10 @@ where
             let seed = play_seed(params.scenario, local_index);
             let tunnel_inner: Arc<InnerAnchor> = match &params.anchor {
                 AnchorChoice::Memory => Arc::clone(shared_memory.as_ref().expect("memory inner")),
+                #[cfg(test)]
+                AnchorChoice::AlwaysFailsOpen => {
+                    Arc::clone(shared_memory.as_ref().expect("shared inner"))
+                }
                 AnchorChoice::Sui(ctx) => {
                     let global = crate::ids::swarm_global_index(
                         params.swarm_index,
@@ -307,7 +363,14 @@ where
                 tokio::time::sleep(params.cohorts.open_spacing).await;
             }
             // Wait for this cohort's opens to register before launching the next.
-            while open_gate.opened() < spawned && !stop.load(Ordering::Relaxed) {
+            // Bound the wait: if opens in this cohort fail (they never register),
+            // stop waiting so the open barrier below can detect the failure and
+            // abandon instead of the spawn loop spinning here forever.
+            let cohort_deadline = Instant::now() + TUNNEL_DRAIN_TIMEOUT;
+            while open_gate.opened() < spawned
+                && !stop.load(Ordering::Relaxed)
+                && Instant::now() < cohort_deadline
+            {
                 tokio::select! {
                     _ = open_gate.opened_progress() => {}
                     _ = tokio::time::sleep(Duration::from_millis(25)) => {}
@@ -316,9 +379,31 @@ where
         }
     }
 
-    // Open barrier: play cannot start until every tunnel has opened. The gate is
-    // released by the last `mark_opened`; wait for that edge.
-    while !open_gate.is_released() && !stop.load(Ordering::Relaxed) {
+    // Open barrier: play cannot start until every tunnel has opened. Escapes:
+    //  - happy: the last `mark_opened` releases the gate;
+    //  - failure: a tunnel whose `open` errors finishes early without marking, so
+    //    the gate's target is now unreachable — reap finished tasks to detect it;
+    //  - stop / hard deadline: an external stop or a stuck open.
+    // On any abandonment we force the gate so any healthy seat still parked on
+    // `wait` proceeds to play/close, then fall through; the bounded settle drain
+    // reaps or aborts whatever remains.
+    let open_barrier_deadline = Instant::now() + TUNNEL_DRAIN_TIMEOUT;
+    while !open_gate.is_released() {
+        // In a healthy open phase no task finishes (all park on the gate), so a
+        // finished task here is a failed open.
+        let mut failed_open = false;
+        while let Some(joined) = tasks.try_join_next() {
+            failed_open = true;
+            tally.reap(joined);
+        }
+        if failed_open
+            || tasks.is_empty()
+            || stop.load(Ordering::Relaxed)
+            || Instant::now() >= open_barrier_deadline
+        {
+            open_gate.force_release();
+            break;
+        }
         tokio::select! {
             _ = open_gate.wait() => break,
             _ = tokio::time::sleep(Duration::from_millis(25)) => {}
@@ -334,16 +419,42 @@ where
     let expected_seats = tunnels.saturating_mul(2);
     let play_deadline =
         (params.duration_secs > 0).then(|| open_done + Duration::from_secs(params.duration_secs));
-    // Poll for the settle barrier release (all seats parked) — that is the play /
-    // settle phase boundary. Honour the stop flag and the duration deadline by
-    // requesting a graceful stop, which drains each tunnel to its close boundary.
-    while settle_mgr.deposited().await < expected_seats {
-        if stop.load(Ordering::Relaxed) {
+    // Wait for the settle barrier (all seats parked) — the play / settle phase
+    // boundary. Escapes, so a never-depositing seat degrades rather than hangs:
+    //  - happy: every seat deposits (`deposited == expected_seats`);
+    //  - failure: a tunnel that errored before settle finishes without depositing,
+    //    so the barrier can never fill — reap finished tasks to detect it;
+    //  - stop / deadline: nudge a graceful close.
+    // Once any of those fires we allow a short grace for in-flight seats to arrive,
+    // then force the settle barrier so deposited seats drain (complete pairs
+    // settle, lone seats error) instead of parking forever, and fall through to the
+    // bounded drain.
+    let mut abandon_at: Option<Instant> = None;
+    loop {
+        if settle_mgr.deposited().await >= expected_seats {
+            break;
+        }
+        // A finished task during the settle wait is a failed tunnel (a healthy one
+        // does not finish until after its settle resolves).
+        let mut failed = false;
+        while let Some(joined) = tasks.try_join_next() {
+            failed = true;
+            tally.reap(joined);
+        }
+        if tasks.is_empty() {
+            settle_mgr.force_release().await;
+            break;
+        }
+        let deadline_hit = play_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        let stopping = stop.load(Ordering::Relaxed);
+        if stopping || deadline_hit {
             run_control.request_stop();
         }
-        if let Some(deadline) = play_deadline {
-            if Instant::now() >= deadline {
-                run_control.request_stop();
+        if failed || stopping || deadline_hit {
+            let at = *abandon_at.get_or_insert_with(|| Instant::now() + BARRIER_GRACE);
+            if Instant::now() >= at {
+                settle_mgr.force_release().await;
+                break;
             }
         }
         tokio::time::sleep(Duration::from_millis(2)).await;
@@ -351,14 +462,8 @@ where
     let play_done = Instant::now();
     let play_ms = play_done.duration_since(open_done).as_millis().max(1);
 
-    // Settle drain: tasks complete only after their settle resolves. Bound the
-    // wait so a stuck seat aborts rather than hangs.
-    let mut settled = 0u64;
-    let mut aborted = 0u64;
-    let mut total_moves = 0u64;
-    let mut total_bytes = 0u64;
-    let mut play_ns_samples: Vec<f64> = Vec::new();
-    let mut tps_samples: Vec<f64> = Vec::new();
+    // Settle drain: tasks complete only after their settle resolves (or errors).
+    // Bound the wait so a stuck seat aborts rather than hangs.
     let drain_deadline = Instant::now() + TUNNEL_DRAIN_TIMEOUT;
     loop {
         let remaining = drain_deadline.saturating_duration_since(Instant::now());
@@ -366,37 +471,18 @@ where
             break;
         }
         match tokio::time::timeout(remaining, tasks.join_next()).await {
-            Ok(Some(Ok(result))) => {
-                if result.settled {
-                    settled += 1;
-                }
-                total_moves += result.moves;
-                total_bytes += result.bytes;
-                if result.play_ns > 0 {
-                    play_ns_samples.push(result.play_ns as f64);
-                    tps_samples.push(result.moves as f64 * 1_000_000_000.0 / result.play_ns as f64);
-                }
-            }
-            Ok(Some(Err(_join_error))) => aborted += 1,
+            Ok(Some(joined)) => tally.reap(joined),
             Ok(None) => break,
             Err(_elapsed) => break,
         }
     }
-    // Any task still pending after the drain window is a straggler; abort it and
-    // count it aborted so counts stay balanced.
+    // Any task still pending after the drain window is a straggler (e.g. a seat
+    // parked on a partner that never settled); abort it and reap the cancellation
+    // as aborted so counts stay balanced.
     if !tasks.is_empty() {
         tasks.abort_all();
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(r) => {
-                    if r.settled {
-                        settled += 1;
-                    }
-                    total_moves += r.moves;
-                    total_bytes += r.bytes;
-                }
-                Err(_) => aborted += 1,
-            }
+        while let Some(joined) = tasks.join_next().await {
+            tally.reap(joined);
         }
     }
     let ended = Instant::now();
@@ -404,21 +490,23 @@ where
     let elapsed_ms = ended.duration_since(started).as_millis().max(1);
 
     let tunnels_opened = open_gate.opened().min(tunnels);
-    let tunnels_failed = tunnels.saturating_sub(settled).saturating_sub(aborted);
+    let tunnels_failed = tunnels
+        .saturating_sub(tally.settled)
+        .saturating_sub(tally.aborted);
 
     SwarmOutcome {
         tunnels_opened,
-        tunnels_settled: settled,
+        tunnels_settled: tally.settled,
         tunnels_failed,
-        tunnels_aborted: aborted,
-        moves: total_moves,
-        bytes: total_bytes,
+        tunnels_aborted: tally.aborted,
+        moves: tally.moves,
+        bytes: tally.bytes,
         elapsed_ms,
         open_ms,
         play_ms,
         settle_ms,
-        play_ns_dist: summarize(&play_ns_samples),
-        per_tunnel_tps: summarize(&tps_samples),
+        play_ns_dist: summarize(&tally.play_ns_samples),
+        per_tunnel_tps: summarize(&tally.tps_samples),
     }
 }
 
@@ -553,9 +641,15 @@ mod tests {
     #[test]
     fn play_never_starts_before_all_open_and_settle_after_all_play() {
         let out = run_swarm_pipeline(golden_params(4), stop());
+        // Load-bearing: every tunnel opened, then played, then settled. A broken
+        // open barrier that let play/settle race ahead of a slow open would leave
+        // `tunnels_opened < 4` or a tunnel unsettled; a broken settle barrier would
+        // drop the settle count. (`*_ms` are floored with `.max(1)`, so asserting
+        // they are positive would be tautological and prove nothing.)
+        assert_eq!(out.tunnels_opened, 4);
         assert_eq!(out.tunnels_settled, 4);
-        // The barriers make the three phase windows disjoint and non-empty.
-        assert!(out.open_ms > 0 && out.play_ms > 0 && out.settle_ms > 0);
+        assert_eq!(out.tunnels_failed, 0);
+        assert_eq!(out.tunnels_aborted, 0);
     }
 
     #[test]
@@ -566,5 +660,28 @@ mod tests {
         assert_eq!(out.tunnels_failed, 0);
         assert_eq!(out.tunnels_aborted, 0);
         assert!(out.moves > 0);
+    }
+
+    /// Regression: a swarm whose tunnels never open (a never-depositing seat) must
+    /// terminate via the barrier-wait escapes and the bounded drain, not hang. The
+    /// failed tunnels are accounted rather than lost.
+    #[test]
+    fn pipeline_terminates_when_tunnels_never_open() {
+        let mut params = golden_params(4);
+        params.anchor = AnchorChoice::AlwaysFailsOpen;
+        // `duration_secs = 0` disables the deadline nudge, so termination here
+        // relies solely on failure detection (finished tasks) + forced barriers.
+        params.duration_secs = 0;
+
+        let out = run_swarm_pipeline(params, stop());
+
+        assert_eq!(out.tunnels_opened, 0, "no tunnel opens");
+        assert_eq!(out.tunnels_settled, 0, "nothing settles");
+        assert!(
+            out.tunnels_failed + out.tunnels_aborted >= 4,
+            "every tunnel must be accounted as failed or aborted, got failed={} aborted={}",
+            out.tunnels_failed,
+            out.tunnels_aborted,
+        );
     }
 }
