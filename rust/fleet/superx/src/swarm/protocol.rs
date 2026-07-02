@@ -59,6 +59,15 @@ pub fn play_seed(scenario: Scenario, local_index: u64) -> u64 {
     }
 }
 
+/// The splitmix64 finalizer: an invertible scramble of a `u64`. Being a
+/// bijection, it maps distinct seeds to distinct states with good bit diffusion.
+fn splitmix64_finalize(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// A deterministic `MoveStrategy` seeded from a single `u64`. Uses xorshift64*
 /// to feed the protocol's own `sample_move`, so the move sequence is a pure
 /// function of the seed and the tunnel state.
@@ -68,8 +77,13 @@ pub struct SeededStrategy {
 
 impl SeededStrategy {
     pub fn new(seed: u64) -> Self {
-        // xorshift64* must never sit at zero, or it stays stuck there.
-        Self { rng_state: seed | 1 }
+        // Scramble the seed through the splitmix64 finalizer (a bijection over
+        // u64) so distinct seeds map to distinct states. A prior `seed | 1`
+        // cleared the low bit, collapsing adjacent Varied indices (0/1, 2/3, …)
+        // onto the same state and yielding byte-identical move streams. xorshift64*
+        // must never sit at zero, so guard the single seed that finalizes to zero.
+        let mixed = splitmix64_finalize(seed);
+        Self { rng_state: if mixed == 0 { 0x9E37_79B9_7F4A_7C15 } else { mixed } }
     }
 
     fn next_f64(&mut self) -> f64 {
@@ -121,5 +135,15 @@ mod tests {
     fn protocol_from_id_roundtrip() {
         assert_eq!(ProtocolKind::from_id("blackjack.v2").unwrap().id(), "blackjack.v2");
         assert!(ProtocolKind::from_id("nope").is_err());
+    }
+    #[test]
+    fn adjacent_varied_seeds_produce_distinct_streams() {
+        // Regression: `seed | 1` collapsed local indices 0 and 1 to the same RNG
+        // state, so adjacent Varied tunnels emitted byte-identical move streams.
+        let mut a = SeededStrategy::new(play_seed(Scenario::Varied, 0));
+        let mut b = SeededStrategy::new(play_seed(Scenario::Varied, 1));
+        let seq_a: Vec<f64> = (0..8).map(|_| a.next_f64()).collect();
+        let seq_b: Vec<f64> = (0..8).map(|_| b.next_f64()).collect();
+        assert_ne!(seq_a, seq_b);
     }
 }
