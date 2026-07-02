@@ -61,10 +61,11 @@ export async function allocateArenaGameForPlay(opts: {
 }
 
 /** Shared `playArena` recipe: move the caller into its busy state, allocate via
- *  `allocateArenaGameForPlay`, surface "no opponent" or thrown errors through the caller's own
- *  error state, and otherwise hand the live allocation off to the caller's `enterArenaMatch`. Every
- *  arena game's on-demand Play trigger is this same shape — this is the single place it lives so a
- *  game only supplies its wallet-guard, `StakeStrategy`, and state-transition closures. */
+ *  `allocateArenaGameForPlay`, surface "no opponent" through the caller's own error state or a
+ *  thrown error through `onCaught`, and otherwise hand the live allocation off to the caller's
+ *  `enterArenaMatch`. Every arena game's on-demand Play trigger is this same shape — this is the
+ *  single place it lives so a game only supplies its wallet-guard, `StakeStrategy`, and
+ *  state-transition closures. */
 export async function runArenaPlay(opts: {
   arenaGameId: string;
   wallet: string;
@@ -75,11 +76,16 @@ export async function runArenaPlay(opts: {
   setBusy: () => void;
   /** Surface an error message (+ move to the error state). */
   setError: (msg: string) => void;
+  /** Surface a caught throwable exactly as this hook does — the class hooks route it through
+   *  `this.fail(e)`, the functional hooks format it inline. Each hook's own formatting is
+   *  preserved here rather than centralized, since a rare non-Error throw formats differently
+   *  between the two (`fail` keeps a `.message`-bearing non-Error; the inline form stringifies it). */
+  onCaught: (e: unknown) => void;
   /** Wire the live allocation into the match (each hook's enterArenaMatch). */
   enter: (allocation: ArenaAllocation, keypair: KeyPair) => void;
 }): Promise<void> {
-  opts.setBusy();
   try {
+    opts.setBusy();
     const entry = await allocateArenaGameForPlay({
       arenaGameId: opts.arenaGameId,
       wallet: opts.wallet,
@@ -93,6 +99,6 @@ export async function runArenaPlay(opts: {
     }
     opts.enter(entry.allocation, entry.keypair);
   } catch (e) {
-    opts.setError(e instanceof Error ? e.message : String(e));
+    opts.onCaught(e);
   }
 }

@@ -833,6 +833,7 @@ class PvpSession {
         this.status = "error";
         this.emit();
       },
+      onCaught: (e) => this.fail(e),
       enter: (allocation, keypair) =>
         this.enterArenaMatch(allocation, keypair, placements),
     });

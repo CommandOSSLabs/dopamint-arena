@@ -988,6 +988,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setError(msg);
         setStatus("error");
       },
+      onCaught: (e) => {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus("error");
+      },
       enter: enterArenaMatch,
     });
   }, [account, signAndExecute, sponsored, enterArenaMatch]);

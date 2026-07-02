@@ -813,6 +813,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
         this.status = "error";
         this.emit();
       },
+      onCaught: (e) => this.fail(e),
       enter: this.enterArenaMatch,
     });
   };

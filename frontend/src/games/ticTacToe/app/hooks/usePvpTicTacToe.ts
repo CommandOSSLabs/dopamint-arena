@@ -1014,6 +1014,10 @@ export function usePvpTicTacToe(
           setError(msg);
           setPhase("error");
         },
+        onCaught: (e) => {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        },
         enter: enterArenaMatch,
       });
     })();
