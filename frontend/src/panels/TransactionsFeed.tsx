@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useSuiClientContext } from "@mysten/dapp-kit";
+import { Link } from "@tanstack/react-router";
 
 import { Panel, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -91,7 +92,13 @@ export function TransactionsFeed({
                 </tr>
               ) : (
                 rows.map((t) => (
-                  <tr key={t.id} className="border-t border-border/60">
+                  <tr
+                    key={t.id}
+                    className={
+                      "border-t border-border/60" +
+                      (t.mine ? " bg-primary/10" : "")
+                    }
+                  >
                     {onchain && (
                       <>
                         <td className="px-2.5 py-1.5">
@@ -117,15 +124,16 @@ export function TransactionsFeed({
                           )}
                         </td>
                         <td className="px-2.5 py-1.5">
-                          {t.proofUrl ? (
-                            <a
-                              href={t.proofUrl}
+                          {t.type === "Settled" && t.digest ? (
+                            <Link
+                              to="/explorer/$digest"
+                              params={{ digest: t.digest }}
                               target="_blank"
                               rel="noreferrer noopener"
                               className="text-[11px] text-foreground/80 transition-colors hover:text-primary hover:underline"
                             >
-                              ↗ Walrus
-                            </a>
+                              Verify ↗
+                            </Link>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
