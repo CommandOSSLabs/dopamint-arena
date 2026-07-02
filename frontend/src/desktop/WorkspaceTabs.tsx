@@ -39,14 +39,18 @@ type DockSide = "bottom" | "right";
  * "All" floor those controls act on every group at once (see `toolTargets` in
  * Desktop.tsx); on a single workspace they act on just that floor.
  */
-// Per-tab category identity color (see categoryStyle / --cat-* tokens): a solid fill when active,
-// a colored icon when idle. Class strings are LITERAL so Tailwind's scanner emits them.
+// Per-tab category identity color (see categoryStyle / --cat-* tokens). Active = a solid CONSTANT
+// fill with cream text; idle = a colored chip (adaptive-accent wash + accent text/icon), so the
+// whole bar reads as colored and the selected tab still stands out. Class strings are LITERAL so
+// Tailwind's scanner emits them.
 const WORKSPACE_TABS: {
   section: MobileSection;
   label: string;
   icon: LucideIcon;
   solid: string;
   text: string;
+  tint: string;
+  tintHover: string;
 }[] = [
   // The aggregate "All" floor — every workspace's live windows at once — is the default
   // landing (the bare `/` with no `section` param). Its floor tools act on all groups.
@@ -55,34 +59,41 @@ const WORKSPACE_TABS: {
     label: "All",
     icon: LayoutDashboard,
     solid: "bg-cat-all",
-    text: "text-cat-all",
+    text: "text-cat-all-accent",
+    tint: "bg-cat-all-accent/10",
+    tintHover: "hover:bg-cat-all-accent/20",
   },
   {
     section: "games",
     label: "Game",
     icon: Gamepad2,
     solid: "bg-cat-game",
-    text: "text-cat-game",
+    text: "text-cat-game-accent",
+    tint: "bg-cat-game-accent/10",
+    tintHover: "hover:bg-cat-game-accent/20",
   },
   {
     section: "payment",
     label: "Payment",
     icon: Wallet,
     solid: "bg-cat-payment",
-    text: "text-cat-payment",
+    text: "text-cat-payment-accent",
+    tint: "bg-cat-payment-accent/10",
+    tintHover: "hover:bg-cat-payment-accent/20",
   },
   {
     section: "chat",
     label: "Chat",
     icon: MessagesSquare,
     solid: "bg-cat-chat",
-    text: "text-cat-chat",
+    text: "text-cat-chat-accent",
+    tint: "bg-cat-chat-accent/10",
+    tintHover: "hover:bg-cat-chat-accent/20",
   },
 ];
 
 const tabBase =
   "inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent px-3 py-2.5 text-sm font-semibold transition-colors";
-const tabIdle = "text-foreground/60 hover:bg-secondary hover:text-foreground";
 const tabActive = "text-primary-foreground shadow-sm";
 
 /** A row action in the layout-tools menu. */
@@ -151,12 +162,14 @@ export function WorkspaceTabs({
               search={t.section === "all" ? {} : { section: t.section }}
               className={cn(
                 tabBase,
-                isActive ? cn(t.solid, tabActive) : tabIdle,
+                isActive
+                  ? cn(t.solid, tabActive)
+                  : cn(t.tint, t.tintHover, t.text),
               )}
             >
-              {/* Idle tabs keep the category color on the icon so the whole bar reads as colored;
-                  the active tab is a solid category pill with cream text (icon inherits it). */}
-              <Icon className={cn("size-4", !isActive && t.text)} />
+              {/* Icon + label inherit the tab's text color: category accent when idle (a colored
+                  chip), cream when active (a solid category pill). */}
+              <Icon className="size-4" />
               {t.label}
             </Link>
           );

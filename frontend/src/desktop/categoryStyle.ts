@@ -10,13 +10,13 @@ import type { Workspace } from "../games/types";
  */
 export interface CategoryStyle {
   label: string;
-  /** Solid fill for a selected/active surface; pair with cream text (`text-primary-foreground`). */
+  /** Solid CONSTANT fill for a selected/active surface; pair with cream text (`text-primary-foreground`). */
   solid: string;
-  /** Category color as text/icon on a neutral surface. */
+  /** Adaptive accent as text/icon on a neutral surface (reads in both themes). */
   text: string;
-  /** A thin accent bar/border in the category color. */
+  /** Solid adaptive accent for an accent bar/dot. */
   bar: string;
-  /** A faint category wash for a header/tile background. */
+  /** A category wash for a header/tile background (adaptive accent, low opacity). */
   tint: string;
 }
 
@@ -24,22 +24,22 @@ export const CATEGORY_STYLE: Record<Workspace, CategoryStyle> = {
   games: {
     label: "Game",
     solid: "bg-cat-game",
-    text: "text-cat-game",
-    bar: "bg-cat-game",
-    tint: "bg-cat-game/8",
+    text: "text-cat-game-accent",
+    bar: "bg-cat-game-accent",
+    tint: "bg-cat-game-accent/10",
   },
   payment: {
     label: "Payment",
     solid: "bg-cat-payment",
-    text: "text-cat-payment",
-    bar: "bg-cat-payment",
-    tint: "bg-cat-payment/8",
+    text: "text-cat-payment-accent",
+    bar: "bg-cat-payment-accent",
+    tint: "bg-cat-payment-accent/10",
   },
   chat: {
     label: "Chat",
     solid: "bg-cat-chat",
-    text: "text-cat-chat",
-    bar: "bg-cat-chat",
-    tint: "bg-cat-chat/8",
+    text: "text-cat-chat-accent",
+    bar: "bg-cat-chat-accent",
+    tint: "bg-cat-chat-accent/10",
   },
 };

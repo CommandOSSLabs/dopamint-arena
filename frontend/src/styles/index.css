@@ -193,11 +193,19 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  /* Category identity colors → `bg-cat-game`, `text-cat-payment`, `bg-cat-chat/8`, … */
+  /* Category identity colors. Two tones per category:
+     - `cat-*`  — the theme-CONSTANT fill (dark enough for cream text), for a selected/active pill.
+     - `cat-*-accent` — the theme-ADAPTIVE accent (`--wal-*`: darker in light, brighter in dark),
+       for on-surface text / icons / borders / washes that must read on the current canvas.
+     → `bg-cat-game`, `text-cat-payment-accent`, `bg-cat-chat-accent/12`, `border-cat-all-accent`, … */
   --color-cat-game: var(--cat-game);
   --color-cat-payment: var(--cat-payment);
   --color-cat-chat: var(--cat-chat);
   --color-cat-all: var(--cat-all);
+  --color-cat-game-accent: var(--wal-pink);
+  --color-cat-payment-accent: var(--wal-mint);
+  --color-cat-chat-accent: var(--wal-blue);
+  --color-cat-all-accent: var(--wal-violet);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);

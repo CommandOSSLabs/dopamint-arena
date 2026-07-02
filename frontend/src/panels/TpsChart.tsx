@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/panel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
-import { useSampledRate } from "@/telemetry/useSampledRate";
+import { useLocalGamesTps } from "@/telemetry/useLocalGamesTps";
 import { fmtTps } from "@/lib/formatTps";
 import { LiveBadge, OfflineBadge } from "./atoms";
 import type { TelemetrySnapshot } from "./types";
@@ -39,13 +39,13 @@ export function TpsChart({
   snapshot: TelemetrySnapshot;
   className?: string;
 }) {
-  const { status, backend, getGamesTotal } = useTelemetry();
+  const { status, backend } = useTelemetry();
   const isLive = status === "live" && backend !== null;
   const tps = Math.round(snapshot.rate.updatesPerSec);
-  // Real off-chain local total — the aggregate of every game's measured update rate (same
-  // source the per-window chips sum to). Null until there is genuine self-play, so the panel
-  // shows a real number in the offline demo without ever falling back to the placeholder.
-  const localTps = useSampledRate(getGamesTotal);
+  // The local user's TPS: the sum of every open game window's rate — each the same value its header
+  // chip shows (backend per-game rate when live, else the game's locally-sampled rate). Null when
+  // nothing is producing, so the line hides rather than showing a fabricated zero.
+  const localTps = useLocalGamesTps();
   // Latest normalized value for the animation loop. The effect re-runs when `isLive` flips so
   // the canvas (only mounted while live) gets its rAF wired up the moment it appears.
   const valueRef = useRef(0);
