@@ -403,6 +403,9 @@ pub(crate) async fn arena_allocate(
                     },
                 )
                 .await;
+            // Tag the tunnel's game so the live feed's per-game tabs light up: the arena path
+            // reserves (above) rather than calling register_session, which is the other writer.
+            state.control.set_tunnel_game(&open.tunnel_id, game).await;
             allocations.push(ArenaAllocation {
                 game: game.clone(),
                 match_id: slot.match_id.clone(),

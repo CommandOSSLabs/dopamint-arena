@@ -183,6 +183,13 @@ impl ControlStore for InMemoryControlStore {
         self.tunnel_games.read().unwrap().get(tunnel_id).cloned()
     }
 
+    async fn set_tunnel_game(&self, tunnel_id: &str, game: &str) {
+        self.tunnel_games
+            .write()
+            .unwrap()
+            .insert(tunnel_id.to_owned(), game.to_owned());
+    }
+
     async fn claim_faucet_slot(
         &self,
         address: &str,
@@ -520,6 +527,18 @@ mod tests {
         .await;
         assert_eq!(s.tunnel_game("0xt1").await.as_deref(), Some("blackjack"));
         assert_eq!(s.tunnel_game("0xunknown").await, None);
+    }
+
+    // The arena path reserves a match instead of registering a session, so it tags the game
+    // directly — without this the per-game tabs stay empty for every arena (user-vs-bot) row.
+    #[tokio::test]
+    async fn set_tunnel_game_tags_arena_tunnels() {
+        let s = InMemoryControlStore::default();
+        s.set_tunnel_game("0xarena", "quantumPoker").await;
+        assert_eq!(
+            s.tunnel_game("0xarena").await.as_deref(),
+            Some("quantumPoker")
+        );
     }
 
     // The faucet allows up to N pulls per window: the first N succeed, the (N+1)th is refused, and

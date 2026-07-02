@@ -378,6 +378,22 @@ impl ControlStore for RedisControlStore {
             .flatten()
     }
 
+    async fn set_tunnel_game(&self, tunnel_id: &str, game: &str) {
+        let res: Result<(), _> = self
+            .pool
+            .set(
+                format!("tunnel:game:{tunnel_id}"),
+                game,
+                Some(Expiration::EX(TUNNEL_OWNER_TTL)),
+                None,
+                false,
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis set_tunnel_game set failed");
+        }
+    }
+
     async fn claim_faucet_slot(
         &self,
         address: &str,
