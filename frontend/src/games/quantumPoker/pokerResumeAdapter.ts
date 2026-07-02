@@ -37,8 +37,23 @@ export function makePokerResumeAdapter(args: {
     },
     // The hook re-hydrates Uint8Arrays where the protocol needs them.
     deserializeState: (j) => j as PokerState,
-    serializeMove: (m) => pokerMoveCodec.encode(m) as never,
-    deserializeMove: (j) => pokerMoveCodec.decode(j),
+    serializeMove: (m) => {
+      const j = pokerMoveCodec.encode(m) as Record<string, unknown>;
+      // The wire codec drops a commit_slots move's localSecrets (they never leave the owning seat);
+      // this LOCAL record keeps them so a restored pending commit can reveal after it confirms —
+      // otherwise a mid-commit reload resumes with a secret-less pending → can't reveal → stall.
+      if (m.kind === "commit_slots" && m.localSecrets)
+        return { ...j, localSecrets: encodeSlots(m.localSecrets) } as never;
+      return j as never;
+    },
+    deserializeMove: (j) => {
+      const m = pokerMoveCodec.decode(j);
+      const raw = j as { localSecrets?: EncodedSlot[] };
+      if (m.kind === "commit_slots" && raw.localSecrets)
+        (m as { localSecrets?: unknown }).localSecrets =
+          decodeSlots(raw.localSecrets) ?? undefined;
+      return m;
+    },
     // The slot secrets carry Uint8Array value/salt, which localStorage JSON would destroy — encode
     // them as number arrays so the cold-load round-trip is lossless.
     captureSecret: () =>
