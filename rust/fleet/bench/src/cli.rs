@@ -214,9 +214,13 @@ Sui sponsored anchor flags:\n  \
 --sui-stake-source address-balance: withdraw the total stake from the sender balance\n  \
 --sui-open-batch-size: max sponsored open requests per PTB batch; default 255, maximum 255\n  \
 --sui-open-batch-flush-ms: open batch idle debounce in milliseconds; default 250\n  \
+--sui-open-batch-max-in-flight: max open PTB flushes executing at once; default 4\n  \
+--sui-open-batch-gap-ms: minimum gap between starting open PTB flushes; default 0\n  \
 --sui-disable-open-batching: execute each sponsored open request without the batch queue\n\n\
 --sui-settle-batch-size: max PTB settle requests per batch; default 681, maximum 681\n  \
 --sui-settle-batch-flush-ms: settle batch idle debounce in milliseconds; default 250\n  \
+--sui-settle-batch-max-in-flight: max settle PTB flushes executing at once; default 4\n  \
+--sui-settle-batch-gap-ms: minimum gap between starting settle PTB flushes; default 0\n  \
 --sui-disable-settle-batching: execute each PTB settlement without the batch queue\n\n\
 Transcript recorder values:\n  \
 none: do not retain committed transition transcripts\n  \
@@ -376,6 +380,16 @@ struct Raw {
         value_name = "MS"
     )]
     sui_open_batch_flush_ms: u64,
+    /// Maximum Sui open PTB flushes executing concurrently.
+    #[arg(
+        long = "sui-open-batch-max-in-flight",
+        default_value_t = 4,
+        value_name = "N"
+    )]
+    sui_open_batch_max_in_flight: usize,
+    /// Minimum delay between starting Sui open PTB flushes.
+    #[arg(long = "sui-open-batch-gap-ms", default_value_t = 0, value_name = "MS")]
+    sui_open_batch_gap_ms: u64,
     /// Disable Sui sponsored open PTB batching.
     #[arg(long = "sui-disable-open-batching")]
     sui_disable_open_batching: bool,
@@ -393,6 +407,20 @@ struct Raw {
         value_name = "MS"
     )]
     sui_settle_batch_flush_ms: u64,
+    /// Maximum Sui settle PTB flushes executing concurrently.
+    #[arg(
+        long = "sui-settle-batch-max-in-flight",
+        default_value_t = 4,
+        value_name = "N"
+    )]
+    sui_settle_batch_max_in_flight: usize,
+    /// Minimum delay between starting Sui settle PTB flushes.
+    #[arg(
+        long = "sui-settle-batch-gap-ms",
+        default_value_t = 0,
+        value_name = "MS"
+    )]
+    sui_settle_batch_gap_ms: u64,
     /// Disable Sui PTB settlement batching.
     #[arg(long = "sui-disable-settle-batching")]
     sui_disable_settle_batching: bool,
@@ -664,6 +692,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         if raw.sui_open_batch_flush_ms == 0 {
             return Err("--sui-open-batch-flush-ms must be greater than 0".to_string());
         }
+        if raw.sui_open_batch_max_in_flight == 0 {
+            return Err("--sui-open-batch-max-in-flight must be greater than 0".to_string());
+        }
         if raw.sui_settle_batch_size == 0 {
             return Err("--sui-settle-batch-size must be greater than 0".to_string());
         }
@@ -672,6 +703,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         }
         if raw.sui_settle_batch_flush_ms == 0 {
             return Err("--sui-settle-batch-flush-ms must be greater than 0".to_string());
+        }
+        if raw.sui_settle_batch_max_in_flight == 0 {
+            return Err("--sui-settle-batch-max-in-flight must be greater than 0".to_string());
         }
         Some(SuiSponsoredAnchorOpts {
             rpc_url: raw.sui_rpc_url.unwrap(),
@@ -685,11 +719,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
                 enabled: !raw.sui_disable_open_batching,
                 max_batch_size: raw.sui_open_batch_size,
                 flush_interval_ms: raw.sui_open_batch_flush_ms,
+                max_concurrent_flushes: raw.sui_open_batch_max_in_flight,
+                flush_spacing_ms: raw.sui_open_batch_gap_ms,
             },
             settle_batching: SuiOpenBatchingConfig {
                 enabled: !raw.sui_disable_settle_batching,
                 max_batch_size: raw.sui_settle_batch_size,
                 flush_interval_ms: raw.sui_settle_batch_flush_ms,
+                max_concurrent_flushes: raw.sui_settle_batch_max_in_flight,
+                flush_spacing_ms: raw.sui_settle_batch_gap_ms,
             },
         })
     } else {
@@ -1418,9 +1456,13 @@ mod tests {
         assert!(sui.open_batching.enabled);
         assert_eq!(sui.open_batching.max_batch_size, 255);
         assert_eq!(sui.open_batching.flush_interval_ms, 250);
+        assert_eq!(sui.open_batching.max_concurrent_flushes, 4);
+        assert_eq!(sui.open_batching.flush_spacing_ms, 0);
         assert!(sui.settle_batching.enabled);
         assert_eq!(sui.settle_batching.max_batch_size, 681);
         assert_eq!(sui.settle_batching.flush_interval_ms, 250);
+        assert_eq!(sui.settle_batching.max_concurrent_flushes, 4);
+        assert_eq!(sui.settle_batching.flush_spacing_ms, 0);
     }
 
     #[test]
@@ -1444,17 +1486,29 @@ mod tests {
             "25".into(),
             "--sui-open-batch-flush-ms".into(),
             "100".into(),
+            "--sui-open-batch-max-in-flight".into(),
+            "2".into(),
+            "--sui-open-batch-gap-ms".into(),
+            "15".into(),
             "--sui-settle-batch-size".into(),
             "15".into(),
             "--sui-settle-batch-flush-ms".into(),
             "75".into(),
+            "--sui-settle-batch-max-in-flight".into(),
+            "3".into(),
+            "--sui-settle-batch-gap-ms".into(),
+            "20".into(),
         ]);
         let opts = opts.expect("parse sui opts");
         let sui = opts.sui_anchor.expect("sui opts");
         assert_eq!(sui.open_batching.max_batch_size, 25);
         assert_eq!(sui.open_batching.flush_interval_ms, 100);
+        assert_eq!(sui.open_batching.max_concurrent_flushes, 2);
+        assert_eq!(sui.open_batching.flush_spacing_ms, 15);
         assert_eq!(sui.settle_batching.max_batch_size, 15);
         assert_eq!(sui.settle_batching.flush_interval_ms, 75);
+        assert_eq!(sui.settle_batching.max_concurrent_flushes, 3);
+        assert_eq!(sui.settle_batching.flush_spacing_ms, 20);
     }
 
     #[test]
@@ -1531,6 +1585,16 @@ mod tests {
         zero_settle_flush_ms.extend(["--sui-settle-batch-flush-ms", "0"]);
         let err = parse_v(&zero_settle_flush_ms).unwrap_err();
         assert!(err.contains("sui-settle-batch-flush-ms"), "{err}");
+
+        let mut zero_open_max_in_flight = base.to_vec();
+        zero_open_max_in_flight.extend(["--sui-open-batch-max-in-flight", "0"]);
+        let err = parse_v(&zero_open_max_in_flight).unwrap_err();
+        assert!(err.contains("sui-open-batch-max-in-flight"), "{err}");
+
+        let mut zero_settle_max_in_flight = base.to_vec();
+        zero_settle_max_in_flight.extend(["--sui-settle-batch-max-in-flight", "0"]);
+        let err = parse_v(&zero_settle_max_in_flight).unwrap_err();
+        assert!(err.contains("sui-settle-batch-max-in-flight"), "{err}");
     }
 
     #[test]

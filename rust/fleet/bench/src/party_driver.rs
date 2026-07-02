@@ -365,6 +365,14 @@ impl BenchAnchor {
             recorder.record(stage, start, end);
         }
     }
+
+    fn open_pair_timeout(&self) -> Option<Duration> {
+        if self.pre_open_gate.is_some() {
+            None
+        } else {
+            Some(BENCH_PAIR_TIMEOUT)
+        }
+    }
 }
 
 type OpenResult = Result<OpenedTunnel, TunnelAnchorError>;
@@ -408,6 +416,7 @@ impl BenchSubmitter {
         }
     }
 
+    #[cfg(test)]
     async fn open_as_seat(
         &self,
         seat: Seat,
@@ -724,7 +733,12 @@ impl TunnelAnchor for BenchAnchor {
         let started = Instant::now();
         let result = if let Some(submitter) = &self.submitter {
             submitter
-                .open_as_seat(self.seat, &self.inner, request)
+                .open_as_seat_with_pair_timeout(
+                    self.seat,
+                    &self.inner,
+                    request,
+                    self.open_pair_timeout(),
+                )
                 .await
         } else {
             match &self.inner {
@@ -1695,6 +1709,19 @@ mod tests {
             Err(TunnelAnchorError::Unavailable(message))
                 if message.contains("aborted paired open")
         ));
+    }
+
+    #[test]
+    fn bench_anchor_disables_open_pair_timeout_during_warmup() {
+        let anchor = BenchAnchor::new(
+            BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1")),
+            None,
+            Some(BenchSubmitter::new()),
+            Seat::B,
+            Some(PreOpenGate::new(1)),
+        );
+
+        assert_eq!(anchor.open_pair_timeout(), None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

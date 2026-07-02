@@ -119,6 +119,8 @@ pub struct SuiOpenBatchingConfig {
     pub enabled: bool,
     pub max_batch_size: usize,
     pub flush_interval_ms: u64,
+    pub max_concurrent_flushes: usize,
+    pub flush_spacing_ms: u64,
 }
 
 impl Default for SuiOpenBatchingConfig {
@@ -127,6 +129,8 @@ impl Default for SuiOpenBatchingConfig {
             enabled: true,
             max_batch_size: MAX_SPONSORED_OPEN_BATCH_SIZE,
             flush_interval_ms: 250,
+            max_concurrent_flushes: 4,
+            flush_spacing_ms: 0,
         }
     }
 }
@@ -249,7 +253,6 @@ pub struct AddressBalanceGasContext {
     pub chain_id: Digest,
 }
 
-
 /// Direct-mode gas context (reference gas price, epoch, chain id) only changes at
 /// epoch boundaries, so re-fetching it per transaction is wasteful. Kept short
 /// enough that an epoch roll is picked up quickly; `execute_direct_kind` also
@@ -286,12 +289,18 @@ impl GasContextCache {
             return Ok(ctx);
         }
         let ctx = refresh().await?;
-        *self.cached.lock().expect("gas context cache mutex poisoned") = Some((ctx, Instant::now()));
+        *self
+            .cached
+            .lock()
+            .expect("gas context cache mutex poisoned") = Some((ctx, Instant::now()));
         Ok(ctx)
     }
 
     fn fresh(&self) -> Option<AddressBalanceGasContext> {
-        let guard = self.cached.lock().expect("gas context cache mutex poisoned");
+        let guard = self
+            .cached
+            .lock()
+            .expect("gas context cache mutex poisoned");
         guard
             .as_ref()
             .filter(|(_, fetched_at)| fetched_at.elapsed() < self.ttl)
@@ -302,7 +311,10 @@ impl GasContextCache {
     /// direct submit fails, since a wrong gas price or rolled epoch is a likely
     /// cause.
     fn invalidate(&self) {
-        *self.cached.lock().expect("gas context cache mutex poisoned") = None;
+        *self
+            .cached
+            .lock()
+            .expect("gas context cache mutex poisoned") = None;
     }
 }
 
@@ -634,7 +646,10 @@ fn inline_created_objects(
     };
     let mut collected = Vec::with_capacity(created.len());
     for proto_object in object_set.objects() {
-        let Some(id) = proto_object.object_id_opt().and_then(|id| parse_address(id).ok()) else {
+        let Some(id) = proto_object
+            .object_id_opt()
+            .and_then(|id| parse_address(id).ok())
+        else {
             continue;
         };
         if !created.contains(&id) {
@@ -716,8 +731,8 @@ impl SuiChainClient for GrpcSuiChainClient {
 
     async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String> {
         tracing::debug!(op = "get_object", %object_id, endpoint = %self.endpoint, "sui rpc");
-        let request =
-            GetObjectRequest::new(&object_id).with_read_mask(FieldMask::from_paths(OBJECT_READ_FIELDS));
+        let request = GetObjectRequest::new(&object_id)
+            .with_read_mask(FieldMask::from_paths(OBJECT_READ_FIELDS));
         let response = match self
             .client()
             .await?
@@ -727,7 +742,9 @@ impl SuiChainClient for GrpcSuiChainClient {
         {
             Ok(response) => response.into_inner(),
             Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-            Err(status) => return Err(log_chain_call_failure("get_object", &self.endpoint, status)),
+            Err(status) => {
+                return Err(log_chain_call_failure("get_object", &self.endpoint, status))
+            }
         };
         let Some(object) = response.object_opt() else {
             return Ok(None);
@@ -849,8 +866,7 @@ impl SuiChainClient for GrpcSuiChainClient {
     async fn get_transaction(&self, digest: &str) -> Result<Option<ExecutedChainTx>, String> {
         tracing::debug!(op = "get_transaction", %digest, endpoint = %self.endpoint, "sui rpc");
         let digest: Digest = digest.parse().map_err(|e| format!("{e}"))?;
-        let request =
-            GetTransactionRequest::new(&digest).with_read_mask(executed_tx_read_mask());
+        let request = GetTransactionRequest::new(&digest).with_read_mask(executed_tx_read_mask());
         let response = match self
             .client()
             .await?
@@ -861,7 +877,11 @@ impl SuiChainClient for GrpcSuiChainClient {
             Ok(response) => response.into_inner(),
             Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
             Err(status) => {
-                return Err(log_chain_call_failure("get_transaction", &self.endpoint, status))
+                return Err(log_chain_call_failure(
+                    "get_transaction",
+                    &self.endpoint,
+                    status,
+                ))
             }
         };
         let Some(executed) = response.transaction_opt() else {
@@ -986,6 +1006,9 @@ async fn run_open_batch_worker(
     let mut pending = Vec::new();
     let mut flushes = tokio::task::JoinSet::new();
     let max_batch_size = shared.config.open_batching.max_batch_size.max(1);
+    let max_concurrent_flushes = shared.config.open_batching.max_concurrent_flushes.max(1);
+    let flush_spacing = Duration::from_millis(shared.config.open_batching.flush_spacing_ms);
+    let mut next_flush_start = None;
 
     loop {
         drain_finished_batch_flushes(&mut flushes);
@@ -1002,7 +1025,11 @@ async fn run_open_batch_worker(
                 &mut flushes,
                 std::mem::take(&mut pending),
                 SuiPtbFlushReason::Full,
-            );
+                max_concurrent_flushes,
+                flush_spacing,
+                &mut next_flush_start,
+            )
+            .await;
             continue;
         }
 
@@ -1017,7 +1044,11 @@ async fn run_open_batch_worker(
                             &mut flushes,
                             std::mem::take(&mut pending),
                             SuiPtbFlushReason::Shutdown,
-                        );
+                            max_concurrent_flushes,
+                            flush_spacing,
+                            &mut next_flush_start,
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -1028,7 +1059,11 @@ async fn run_open_batch_worker(
                     &mut flushes,
                     std::mem::take(&mut pending),
                     SuiPtbFlushReason::Debounce,
-                );
+                    max_concurrent_flushes,
+                    flush_spacing,
+                    &mut next_flush_start,
+                )
+                .await;
             }
         }
     }
@@ -1043,6 +1078,9 @@ async fn run_settle_batch_worker(
     let mut pending = Vec::new();
     let mut flushes = tokio::task::JoinSet::new();
     let max_batch_size = shared.config.settle_batching.max_batch_size.max(1);
+    let max_concurrent_flushes = shared.config.settle_batching.max_concurrent_flushes.max(1);
+    let flush_spacing = Duration::from_millis(shared.config.settle_batching.flush_spacing_ms);
+    let mut next_flush_start = None;
 
     loop {
         drain_finished_batch_flushes(&mut flushes);
@@ -1059,7 +1097,11 @@ async fn run_settle_batch_worker(
                 &mut flushes,
                 std::mem::take(&mut pending),
                 SuiPtbFlushReason::Full,
-            );
+                max_concurrent_flushes,
+                flush_spacing,
+                &mut next_flush_start,
+            )
+            .await;
             continue;
         }
 
@@ -1074,7 +1116,11 @@ async fn run_settle_batch_worker(
                             &mut flushes,
                             std::mem::take(&mut pending),
                             SuiPtbFlushReason::Shutdown,
-                        );
+                            max_concurrent_flushes,
+                            flush_spacing,
+                            &mut next_flush_start,
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -1085,7 +1131,11 @@ async fn run_settle_batch_worker(
                     &mut flushes,
                     std::mem::take(&mut pending),
                     SuiPtbFlushReason::Debounce,
-                );
+                    max_concurrent_flushes,
+                    flush_spacing,
+                    &mut next_flush_start,
+                )
+                .await;
             }
         }
     }
@@ -1093,34 +1143,71 @@ async fn run_settle_batch_worker(
     await_batch_flushes(&mut flushes).await;
 }
 
-fn spawn_open_batch_flush(
+async fn spawn_open_batch_flush(
     shared: &SuiSponsoredAnchorShared,
     flushes: &mut tokio::task::JoinSet<()>,
     items: Vec<OpenBatchItem>,
     reason: SuiPtbFlushReason,
+    max_concurrent_flushes: usize,
+    flush_spacing: Duration,
+    next_flush_start: &mut Option<tokio::time::Instant>,
 ) {
     if items.is_empty() {
         return;
     }
+    wait_for_batch_flush_slot(flushes, max_concurrent_flushes).await;
+    wait_for_batch_flush_spacing(next_flush_start, flush_spacing).await;
     let shared = shared.clone();
     flushes.spawn(async move {
         shared.flush_open_batch(items, reason).await;
     });
 }
 
-fn spawn_settle_batch_flush(
+async fn spawn_settle_batch_flush(
     shared: &SuiSponsoredAnchorShared,
     flushes: &mut tokio::task::JoinSet<()>,
     items: Vec<SettleBatchItem>,
     reason: SuiPtbFlushReason,
+    max_concurrent_flushes: usize,
+    flush_spacing: Duration,
+    next_flush_start: &mut Option<tokio::time::Instant>,
 ) {
     if items.is_empty() {
         return;
     }
+    wait_for_batch_flush_slot(flushes, max_concurrent_flushes).await;
+    wait_for_batch_flush_spacing(next_flush_start, flush_spacing).await;
     let shared = shared.clone();
     flushes.spawn(async move {
         shared.flush_settle_batch(items, reason).await;
     });
+}
+
+async fn wait_for_batch_flush_slot(
+    flushes: &mut tokio::task::JoinSet<()>,
+    max_concurrent_flushes: usize,
+) {
+    while flushes.len() >= max_concurrent_flushes {
+        match flushes.join_next().await {
+            Some(Ok(())) => {}
+            Some(Err(error)) => tracing::warn!(?error, "sui batch flush task failed to join"),
+            None => break,
+        }
+    }
+}
+
+async fn wait_for_batch_flush_spacing(
+    next_flush_start: &mut Option<tokio::time::Instant>,
+    flush_spacing: Duration,
+) {
+    if let Some(deadline) = *next_flush_start {
+        tokio::time::sleep_until(deadline).await;
+    }
+    *next_flush_start = if flush_spacing.is_zero() {
+        None
+    } else {
+        Some(tokio::time::Instant::now() + flush_spacing)
+    };
 }
 
 fn drain_finished_batch_flushes(flushes: &mut tokio::task::JoinSet<()>) {
@@ -1447,8 +1534,10 @@ impl SuiSponsoredAnchor {
     ) -> Result<OpenedTunnel, TunnelAnchorError> {
         let kind = self.build_open_kind_for_config(&request).await?;
         let executed = self.execute_open_kind(kind).await?;
-        self.cost
-            .add(self.open_gas_paid_by_funder(), net_gas_mist(&executed.effects));
+        self.cost.add(
+            self.open_gas_paid_by_funder(),
+            net_gas_mist(&executed.effects),
+        );
         ensure_success(&executed.effects)?;
         self.record_open_ptb(transaction_digest(&executed.effects), 1, flush_reason);
         let (tunnel_id, created_at_ms, shared_initial_version) =
@@ -1665,8 +1754,10 @@ impl SuiSponsoredAnchor {
             .execute_open_kind(kind)
             .await
             .map_err(open_batch_attempt_error)?;
-        self.cost
-            .add(self.open_gas_paid_by_funder(), net_gas_mist(&executed.effects));
+        self.cost.add(
+            self.open_gas_paid_by_funder(),
+            net_gas_mist(&executed.effects),
+        );
         tracing::debug!(
             requests = requests.len(),
             elapsed_ms = started.elapsed().as_millis(),
@@ -3684,6 +3775,7 @@ mod tests {
             enabled: true,
             max_batch_size: 255,
             flush_interval_ms: 25,
+            ..Default::default()
         };
 
         assert_eq!(
@@ -3721,6 +3813,7 @@ mod tests {
             enabled: true,
             max_batch_size: 681,
             flush_interval_ms: 25,
+            ..Default::default()
         };
 
         assert_eq!(
@@ -4121,6 +4214,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 20,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
@@ -4204,6 +4298,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 20,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
@@ -4275,6 +4370,7 @@ mod tests {
             enabled: true,
             max_batch_size: 1,
             flush_interval_ms: 60_000,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
@@ -4308,6 +4404,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_batch_max_concurrent_flushes_throttles_ptb_execution() {
+        let first_tunnel = Address::from_str("0x42").unwrap();
+        let second_tunnel = Address::from_str("0x43").unwrap();
+        let first_request =
+            open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
+        let second_request =
+            open_request_with_secrets([3u8; 32], [4u8; 32], Balances { a: 11, b: 5 });
+
+        let chain = Arc::new(FakeChain::default());
+        chain.objects.lock().unwrap().insert(
+            first_tunnel,
+            tunnel_object_for_request(first_tunnel, &first_request),
+        );
+        chain.objects.lock().unwrap().insert(
+            second_tunnel,
+            tunnel_object_for_request(second_tunnel, &second_request),
+        );
+        chain
+            .effects_queue
+            .lock()
+            .unwrap()
+            .push_back(success_effects_with_created(vec![first_tunnel]));
+        chain
+            .effects_queue
+            .lock()
+            .unwrap()
+            .push_back(success_effects_with_created(vec![second_tunnel]));
+        *chain.transaction_timestamp_ms.lock().unwrap() = Some(1_770_000_000_123);
+        let gate = Arc::new(ExecuteGate::default());
+        *chain.first_execute_gate.lock().unwrap() = Some(gate.clone());
+
+        let backend = Arc::new(FakeBackend::default());
+        let mut config = config();
+        config.open_mode = SuiOpenMode::DirectCreateAndFund;
+        config.open_batching = SuiOpenBatchingConfig {
+            enabled: true,
+            max_batch_size: 1,
+            flush_interval_ms: 60_000,
+            max_concurrent_flushes: 1,
+            flush_spacing_ms: 0,
+        };
+        let shared = Arc::new(
+            SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
+        );
+        let first_anchor = shared.for_open_intent(intent(1));
+        let second_anchor = shared.for_open_intent(intent(2));
+
+        let first = tokio::spawn(async move { first_anchor.open(first_request).await });
+        gate.entered.notified().await;
+
+        let second = tokio::time::timeout(
+            Duration::from_millis(50),
+            second_anchor.open(second_request),
+        )
+        .await;
+        assert!(
+            second.is_err(),
+            "second open must wait for a flush slot while first PTB is blocked"
+        );
+        assert_eq!(*chain.execute_call_count.lock().unwrap(), 1);
+
+        gate.release.notify_waiters();
+        let first = first.await.expect("first join").expect("first open");
+        assert_eq!(first.tunnel_id, first_tunnel.to_string());
+    }
+
+    #[tokio::test]
     async fn open_batch_metrics_record_debounce_flush_reason() {
         let tunnel = Address::from_str("0x42").unwrap();
         let request = open_request_with_secrets([1u8; 32], [2u8; 32], Balances { a: 7, b: 3 });
@@ -4332,6 +4495,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 1,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
@@ -4376,6 +4540,7 @@ mod tests {
             enabled: true,
             max_batch_size: 1,
             flush_interval_ms: 60_000,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
@@ -4542,6 +4707,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4595,6 +4761,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4648,6 +4815,7 @@ mod tests {
             enabled: true,
             max_batch_size: 3,
             flush_interval_ms: 60_000,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
@@ -4729,6 +4897,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4773,6 +4942,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let anchor = scoped_anchor(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4833,6 +5003,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4895,6 +5066,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -4936,6 +5108,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 10_000,
+            ..Default::default()
         };
         let (anchor_a, anchor_b) = scoped_pair(
             SuiSponsoredAnchor::with_clients(config, chain, backend.clone()).expect("anchor"),
@@ -5482,6 +5655,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 60_000,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
@@ -5622,6 +5796,7 @@ mod tests {
             enabled: true,
             max_batch_size: 1,
             flush_interval_ms: 60_000,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend).expect("anchor"),
@@ -5701,6 +5876,7 @@ mod tests {
             enabled: true,
             max_batch_size: 2,
             flush_interval_ms: 60_000,
+            ..Default::default()
         };
         let shared = Arc::new(
             SuiSponsoredAnchor::with_clients(config, chain.clone(), backend.clone())
