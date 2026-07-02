@@ -13,7 +13,7 @@ members = [
   "rust/protocols/quantum-poker",
   "rust/protocols/tic-tac-toe",
   "rust/protocols/world-canvas",
-  "rust/fleet/serve", "rust/fleet/bench", "rust/fleet/core",
+  "rust/fleet/serve", "rust/fleet/superx", "rust/fleet/bench", "rust/fleet/core",
   "rust/services/bot-fleet",
   "wallet-pool", "wallet-pool/core", "wallet-pool/s3",
 ]
