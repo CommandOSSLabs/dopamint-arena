@@ -19,25 +19,53 @@ export interface ArenaEntry {
 // caro tabs) each get their own bot, so the orchestrator publishes N entries under "caro" and each
 // window consumes one (`consumeArenaEntry` shifts). Each entry's keypair is the one baked into ITS
 // tunnel — entries are interchangeable across same-game windows (any window plays any caro bot).
-const entries = new Map<string, ArenaEntry[]>();
+//
+// Each queued entry carries the wall-clock time it landed so stale ones can be swept: a consuming
+// window claims its entry within milliseconds of it landing (the window is already open and its hook
+// is idle), so an entry still pending after `ENTRY_TTL_MS` means NO window consumed it — the window
+// closed in the allocate→consume gap. Its bot reservation has already expired backend-side (the TTL is
+// set above the allocate→join window), so dropping it just keeps a closed window from stranding the
+// queue; the on-chain deposit remains recoverable via the tunnel's grace/timeout path.
+interface StampedEntry {
+  entry: ArenaEntry;
+  /** `Date.now()` when this entry was published (main-thread store; not a worker). */
+  at: number;
+}
+const ENTRY_TTL_MS = 90_000;
+const entries = new Map<string, StampedEntry[]>();
 const subscribers = new Set<() => void>();
+
+/** Drop entries older than the TTL from one game's queue; returns whether anything was removed. Lazy
+ *  sweep (called on read/consume) — no timer, so the store stays inert when nothing touches it. */
+function pruneStale(arenaGameId: string, now: number): boolean {
+  const q = entries.get(arenaGameId);
+  if (!q) return false;
+  const before = q.length;
+  const live = q.filter((s) => now - s.at < ENTRY_TTL_MS);
+  if (live.length === before) return false;
+  if (live.length === 0) entries.delete(arenaGameId);
+  else entries.set(arenaGameId, live);
+  return true;
+}
 
 /** Publish one allocation + signing key for a game (called per bot after the batched PTB lands).
  *  Appends to the game's queue — repeated calls for the same game stack up (one per window). */
 export function setArenaEntry(arenaGameId: string, entry: ArenaEntry): void {
   const q = entries.get(arenaGameId);
-  if (q) q.push(entry);
-  else entries.set(arenaGameId, [entry]);
+  if (q) q.push({ entry, at: Date.now() });
+  else entries.set(arenaGameId, [{ entry, at: Date.now() }]);
   subscribers.forEach((cb) => cb());
 }
 
 /** Peek this game's next pending entry (does not consume) — for the lazy-allocate in-flight check. */
 export function getArenaEntry(arenaGameId: string): ArenaEntry | undefined {
-  return entries.get(arenaGameId)?.[0];
+  if (pruneStale(arenaGameId, Date.now())) subscribers.forEach((cb) => cb());
+  return entries.get(arenaGameId)?.[0]?.entry;
 }
 
 /** How many pending entries a game has queued — lets the orchestrator avoid over-allocating. */
 export function arenaEntryCount(arenaGameId: string): number {
+  if (pruneStale(arenaGameId, Date.now())) subscribers.forEach((cb) => cb());
   return entries.get(arenaGameId)?.length ?? 0;
 }
 
@@ -67,10 +95,11 @@ export function consumeArenaEntry(
   enter: (allocation: ArenaAllocation, keypair: KeyPair) => void,
 ): void {
   if (entered.current || !isIdle()) return;
+  pruneStale(arenaGameId, Date.now()); // never enter a match whose bot reservation already expired
   const q = entries.get(arenaGameId);
   if (!q || q.length === 0) return;
   // Take ONE entry off the game's queue so sibling windows of the same game each claim a distinct bot.
-  const entry = q.shift()!;
+  const { entry } = q.shift()!;
   if (q.length === 0) entries.delete(arenaGameId);
   entered.current = true;
   subscribers.forEach((cb) => cb());
