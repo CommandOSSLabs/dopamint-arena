@@ -17,6 +17,7 @@ import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import type { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import type {
   CoSignedSettlementWithRoot,
+  CoSignedUpdate,
   OffchainTunnel,
 } from "sui-tunnel-ts/core/tunnel";
 import type { ResumeAdapter } from "@/pvp/resumeSession";
@@ -163,6 +164,14 @@ export interface CloseFallbackParams {
   settlement: CoSignedSettlementWithRoot;
   coinType?: string;
 }
+export interface RaiseDisputeParams {
+  tunnelId: string;
+  /** The latest BOTH-signed checkpoint to stake on-chain via `raise_dispute` (the settlement floor
+   *  when the peer is gone and no fresh cooperative co-signature is reachable). Plain data — it
+   *  structured-clones across the bridge like `CloseFallbackParams.settlement`. */
+  update: CoSignedUpdate;
+  role: Role;
+}
 
 /**
  * Implemented on MAIN (dapp-kit signers + Sui client live there) and called FROM the worker.
@@ -190,6 +199,9 @@ export interface MainBridge {
   readCreatedAt(tunnelId: string): Promise<bigint>;
   /** Settle fallback only (backend `/settle` down): wallet-submitted cooperative close. */
   closeFallback(p: CloseFallbackParams): Promise<void>;
+  /** Unilateral settlement floor: after a resumed match's peer stays gone past the on-chain grace,
+   *  stake the held checkpoint via `raise_dispute` so the stake is recoverable without the peer. */
+  raiseDispute(p: RaiseDisputeParams): Promise<void>;
 }
 
 // --- Per-game spec (imported in the worker, addressed by gameId) --------------------------

@@ -26,6 +26,10 @@ import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { getControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
 import { attachResume, rebuildTunnel } from "@/pvp/resumeSession";
+import {
+  resumeWatchdogShouldArm,
+  RESUME_WATCHDOG_MS,
+} from "@/pvp/resumeWatchdog";
 import type { ResumeRecord } from "@/pvp/resume";
 import { resumeIdb } from "./persist/idb";
 import { elog, emark } from "./debug";
@@ -46,6 +50,12 @@ import type {
 type AnySpec = GameSessionSpec<any, any, any, any, any>;
 type AnyController = MatchController<any, any, any, any, any>;
 type AnyTunnel = DistributedTunnel<any, any>;
+
+/** Which seat proposes at this nonce: A proposes 0→1, B 1→2, … (same rule as pvpMatchHook's `turn`);
+ *  used to tell whether a resumed match is waiting on the peer. */
+function turn(nonce: bigint): Role {
+  return nonce % 2n === 0n ? "A" : "B";
+}
 
 /** Static identity the resume layer + settle need, shared by the live and cold-load paths. */
 interface ActivateInfo {
@@ -105,6 +115,9 @@ export class PvpMatchSession {
   private controller: AnyController | null = null;
   private dt: AnyTunnel | null = null;
   private detachResume: (() => void) | null = null;
+  /** Peer-timeout guard armed after a cold resume that's waiting on the peer; cleared on the first
+   *  confirmed frame or on {@link reset}. Fires {@link armResumeWatchdog}'s drop-to-lobby on timeout. */
+  private resumeWatchdog: ReturnType<typeof setTimeout> | null = null;
 
   private status: EngineStatus = "idle";
   private role: Role | null = null;
@@ -242,6 +255,7 @@ export class PvpMatchSession {
       this.flushTimer = null;
     }
     this.dirty = false;
+    this.clearResumeWatchdog();
     this.detachResume?.();
     this.detachResume = null;
     this.controller?.dispose();
@@ -577,6 +591,10 @@ export class PvpMatchSession {
         /* a move is already in flight — the resync handshake converges it */
       }
       this.emit();
+      // Bound a resume that's waiting on a peer that may never answer (bot exited past its grace, or a
+      // reconnect our resync can't reach): drop to the lobby after RESUME_WATCHDOG_MS instead of sitting
+      // frozen in "playing". Parity with pvpMatchHook — the worker path had no such bound before.
+      this.armResumeWatchdog();
     } catch {
       try {
         for (const r of records) await resumeIdb.delete(r.tunnelId);
@@ -649,6 +667,20 @@ export class PvpMatchSession {
         persist: (rec) => {
           void resumeIdb.put(rec).catch(() => {});
         },
+        // Settlement floor: after attachResume's on-chain grace (the peer dropped and never came back),
+        // stake the held checkpoint via `raise_dispute` so the stake is recoverable without a fresh
+        // cooperative co-signature. Routed through the bridge — the worker holds no wallet signer.
+        // Parity with pvpMatchHook.onGraceExpired; the shorter resume watchdog handles the reload case.
+        onGraceExpired: (latest) => {
+          if (latest)
+            void this.deps.bridge
+              .raiseDispute({
+                tunnelId: info.tunnelId,
+                update: latest,
+                role: info.role,
+              })
+              .catch(() => {});
+        },
       });
     }
 
@@ -695,6 +727,44 @@ export class PvpMatchSession {
       );
     } catch {
       await bridge.closeFallback({ tunnelId, settlement: co });
+    }
+  }
+
+  /** After a cold resume, guard against a peer that never answers. Arm ONLY when we're waiting on the
+   *  peer (a re-sent pending move, or it's their turn) — a clean same-turn resume already succeeded, so
+   *  arming there would tear down a healthy match. Disarm on the first confirmed frame (the peer is
+   *  alive and replying). On timeout, drop the record + reset to the lobby — never eagerly dispute
+   *  (that could attack a still-live channel; the stake is reclaimed by the on-chain grace, and if the
+   *  peer really is gone the grace floor's {@link MainBridge.raiseDispute} covers it). Mirrors
+   *  pvpMatchHook.armResumeWatchdog, but drops the record from THIS worker's IndexedDB. */
+  private armResumeWatchdog(): void {
+    const dt = this.dt as AnyTunnel | null;
+    if (!dt) return;
+    const snap = dt.snapshot();
+    const waitingOnPeer = resumeWatchdogShouldArm(
+      snap.pending !== null,
+      turn(dt.nonce) !== this.role,
+    );
+    if (!waitingOnPeer) return;
+    this.clearResumeWatchdog();
+    const prevConfirmed = dt.onConfirmed;
+    dt.onConfirmed = (u) => {
+      this.clearResumeWatchdog();
+      dt.onConfirmed = prevConfirmed;
+      prevConfirmed?.(u);
+    };
+    const tunnelId = dt.tunnelId;
+    this.resumeWatchdog = setTimeout(() => {
+      this.resumeWatchdog = null;
+      void resumeIdb.delete(tunnelId).catch(() => {});
+      void this.reset();
+    }, RESUME_WATCHDOG_MS);
+  }
+
+  private clearResumeWatchdog(): void {
+    if (this.resumeWatchdog !== null) {
+      clearTimeout(this.resumeWatchdog);
+      this.resumeWatchdog = null;
     }
   }
 }

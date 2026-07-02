@@ -32,7 +32,10 @@ import {
   type Role,
 } from "@/pvp/mpClient";
 import { proposePlan } from "@/pvp/proposePlan";
-import { resumeWatchdogShouldArm } from "@/pvp/resumeWatchdog";
+import {
+  resumeWatchdogShouldArm,
+  RESUME_WATCHDOG_MS,
+} from "@/pvp/resumeWatchdog";
 import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
 import {
   getControlPlaneClient,
@@ -195,12 +198,6 @@ function makeInbox(channel: PvpChannel) {
 function turn(nonce: bigint): Role {
   return nonce % 2n === 0n ? "A" : "B";
 }
-
-/** How long a resume waits for the peer to advance before giving up. Only armed when we're actually
- *  waiting on the peer (pending move / their turn); a co-located bot that's alive replies in ms, so a
- *  quiet window this long means it's gone (exited past grace, or cross-instance where our resync can't
- *  reach it). We then drop the record and reset to idle rather than sit frozen in "playing" forever. */
-const RESUME_WATCHDOG_MS = 10_000;
 
 /**
  * A PvP match's whole session — matchmaking socket, tunnel, bot timer — kept OUT of React so a

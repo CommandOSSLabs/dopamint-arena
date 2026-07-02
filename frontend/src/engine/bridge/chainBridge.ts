@@ -9,7 +9,11 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
-import { closeCooperativeWithRoot, readCreatedAt } from "@/onchain/tunnelTx";
+import {
+  closeCooperativeWithRoot,
+  raiseDisputeUnilateral,
+  readCreatedAt,
+} from "@/onchain/tunnelTx";
 import {
   MTPS_COIN_TYPE,
   isMtpsConfigured,
@@ -25,6 +29,7 @@ import type {
   OpenSelfPlayParams,
   DepositStakeParams,
   CloseFallbackParams,
+  RaiseDisputeParams,
   MainBridge,
 } from "../engineApi";
 
@@ -47,6 +52,7 @@ type ChainBridge = Pick<
   | "depositStake"
   | "readCreatedAt"
   | "closeFallback"
+  | "raiseDispute"
 >;
 
 export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
@@ -129,6 +135,18 @@ export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
         tunnelId: p.tunnelId,
         settlement: p.settlement,
         coinType: p.coinType ?? (isMtpsConfigured ? MTPS_COIN_TYPE : undefined),
+      });
+    },
+    async raiseDispute(p: RaiseDisputeParams) {
+      // Same signer choice as closeFallback: `raise_dispute` needs gas, and MTPS mode holds 0 SUI in
+      // the wallet, so a wallet-signed dispute would fail there — route it through the sponsor instead.
+      await raiseDisputeUnilateral({
+        signExec: (isMtpsConfigured
+          ? deps.sponsoredSignExec
+          : deps.signExec) as never,
+        tunnelId: p.tunnelId,
+        update: p.update,
+        role: p.role,
       });
     },
   };

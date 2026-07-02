@@ -1,3 +1,10 @@
+/** How long a just-resumed match waits on the peer before the watchdog gives up and drops to the
+ *  lobby. Short (not the 1h on-chain grace): resume convergence is a handshake round-trip, so a peer
+ *  that hasn't replied in this window is gone (bot exited, or a reconnect our resync can't reach) and
+ *  the user should get their lobby back rather than stare at a stuck board. Shared by the main-thread
+ *  hook and the worker session so both bound resume identically. */
+export const RESUME_WATCHDOG_MS = 10_000;
+
 /**
  * Whether a just-resumed match should arm the peer-timeout watchdog. Arm ONLY when we're actually
  * waiting on the peer to advance — an unacked move we just re-sent, or it's the peer's turn. A clean
