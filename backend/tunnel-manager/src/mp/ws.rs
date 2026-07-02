@@ -1295,6 +1295,7 @@ mod tests {
             faucet_cooldown_secs: 1_800,
             faucet_max_per_window: 5,
             faucet_admin_token: None,
+            session_jwt_secret: None,
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1464,6 +1465,7 @@ mod tests {
             faucet_cooldown_secs: 1_800,
             faucet_max_per_window: 5,
             faucet_admin_token: None,
+            session_jwt_secret: None,
         })
     }
 
