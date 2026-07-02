@@ -67,6 +67,8 @@ import {
   consumeArenaEntry,
   subscribeArena,
 } from "@/onchain/arenaAllocationStore";
+import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
+import type { StakeStrategy } from "@/onchain/stakeTunnel";
 
 export type Variant = "ttt" | "caro";
 
@@ -163,6 +165,8 @@ export interface PvpTttView {
   balance: bigint; // the connected wallet's SUI balance (MIST)
   digests: { create?: string; deposit?: string; close?: string };
   queue: () => void;
+  /** On-demand arena entry: reserve a server bot for this variant and play it now. */
+  playArena: () => void;
   play: (cell: number) => void;
   next: () => void;
   stop: () => void;
@@ -973,6 +977,52 @@ export function usePvpTicTacToe(
   const enterArenaMatchRef = useRef(enterArenaMatch);
   enterArenaMatchRef.current = enterArenaMatch;
 
+  // On-demand arena entry (ADR-0028): the "Play" trigger for a ttt/caro window the connect-time batch
+  // didn't allocate. Reserve a bot for THIS variant + deposit seat A in one wallet popup, then hand off
+  // to enterArenaMatch — the same path the store-consumer auto-enter uses. Sets `funding` first so the
+  // window shows progress instead of a dead lobby.
+  const playArena = useCallback(() => {
+    void (async () => {
+      const w = walletRef.current;
+      if (!w.isConnected || !w.address) {
+        setError("Connect your wallet on the main menu first");
+        setPhase("error");
+        return;
+      }
+      setError(null);
+      setPhase("funding");
+      try {
+        const walletSignExec = async (tx: never) => {
+          const digest = await walletRef.current.executeTransaction({ tx });
+          return { digest };
+        };
+        const stakeStrategy: StakeStrategy = {
+          sponsoredSignExec: sponsoredRef.current.signExec,
+          walletSignExec: walletSignExec as never,
+          prepareStake: sponsoredRef.current.prepareStake,
+          selectStakeCoin: sponsoredRef.current.selectStakeCoin,
+          ensureStakeBalance: sponsoredRef.current.ensureStakeBalance,
+        };
+        const entry = await allocateArenaGameForPlay({
+          arenaGameId: arenaGameIdFor(variant),
+          wallet: w.address,
+          stake: stakeStrategy,
+          label: variant,
+          stakePerGame: scaledStake,
+        });
+        if (!entry) {
+          setError("no opponent available — try again in a moment");
+          setPhase("error");
+          return;
+        }
+        enterArenaMatch(entry.allocation, entry.keypair);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [variant, scaledStake, enterArenaMatch]);
+
   // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this variant's seat A
   // in the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
   // auto-enter — the window comes alive without a "Find match" click. Only from idle; `clearArenaEntry`
@@ -1256,6 +1306,7 @@ export function usePvpTicTacToe(
     balance,
     digests,
     queue,
+    playArena,
     play,
     next,
     stop,

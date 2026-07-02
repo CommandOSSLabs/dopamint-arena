@@ -43,8 +43,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import { enterArena, type MakeUserParty } from "../../onchain/arenaEnter";
-import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
+import { allocateArenaGameForPlay } from "../../onchain/arenaPlay";
 import {
   consumeArenaEntry,
   subscribeArena,
@@ -972,47 +971,26 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       selectStakeCoin: sponsored.selectStakeCoin,
       ensureStakeBalance: sponsored.ensureStakeBalance,
     };
-    const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
     (async () => {
       try {
         setError(null);
         setStatus("funding");
-        // One ephemeral key for this game: its pubkey is baked into the tunnel as party A at allocate,
-        // and the SAME key co-signs every move via `enterArenaMatch` (a different key rejects sigs).
-        const eph = generateKeyPair();
-        const makeUserParty: MakeUserParty = async () => ({
-          address: wallet,
-          publicKey: eph.publicKey,
-        });
-        // Deposit seat A into the fleet-pre-created tunnel (seat B already funded by the bot). Reuses
-        // the SAME staked-deposit primitive `findMatch` uses, so sponsorship + top-up are identical.
-        const open = async (req: TunnelOpenRequest): Promise<string> => {
-          const tunnelId = req.tunnelId;
-          if (!tunnelId) throw new Error("arena deposit missing tunnelId");
-          await depositStakeStaked({
-            tunnelId,
-            amount: req.aAmount,
-            label: "quantumPoker",
-            ...stake,
-          });
-          return tunnelId;
-        };
-        const allocations = await enterArena({
-          games: [ARENA_GAME_ID],
-          userAddress: wallet,
+        // Reserve a bot + pre-created tunnel for THIS game and deposit seat A (one wallet popup). The
+        // returned key is the per-game ephemeral baked into the tunnel at allocate; the SAME key
+        // co-signs every move via `enterArenaMatch` (a different key rejects sigs).
+        const entry = await allocateArenaGameForPlay({
+          arenaGameId: ARENA_GAME_ID,
+          wallet,
+          stake,
+          label: "quantumPoker",
           stakePerGame: POKER_BUYIN,
-          makeUserParty,
-          open,
-          coinType,
-          apiBase: resolveBackendUrl(),
         });
-        const alloc = allocations.find((a) => a.game === ARENA_GAME_ID);
-        if (!alloc) {
+        if (!entry) {
           setError("no opponent available — try again in a moment");
           setStatus("error");
           return;
         }
-        enterArenaMatch(alloc, eph);
+        enterArenaMatch(entry.allocation, entry.keypair);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");

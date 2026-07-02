@@ -88,10 +88,6 @@ export function useArenaAutoEnter(): void {
 
   useEffect(() => {
     if (!owner) return;
-    const games = arenaGameIdsForOpenWindows();
-    if (games.length === 0) return;
-    if (entered.current === owner) return;
-    entered.current = owner;
 
     const signExec = async (
       tx: Parameters<typeof signAndExecute>[0]["transaction"],
@@ -99,8 +95,11 @@ export function useArenaAutoEnter(): void {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     };
-    // Configure the process-wide batcher with this wallet's signer/sponsor so `enterArena`'s default
-    // `open` (requestTunnelOpen) coalesces every game's seat-A deposit into ONE PTB (PR #95).
+    // Configure the process-wide batcher with this wallet's signer/sponsor UNCONDITIONALLY on connect —
+    // BEFORE the open-games guard below. `enterArena`'s default `open` (requestTunnelOpen) coalesces
+    // seat-A deposits into ONE PTB (PR #95); the add-a-game lazy path (`requestArenaGame`) rides the
+    // same batcher, so it must be configured even when NO arena window was open at connect — else that
+    // later deposit flushes with null deps and silently fails.
     configureSharedBatcher({
       reads: client as never,
       sponsoredSignExec: sponsored.signExec,
@@ -109,6 +108,11 @@ export function useArenaAutoEnter(): void {
       selectStakeCoin: sponsored.selectStakeCoin,
       ensureStakeBalance: sponsored.ensureStakeBalance,
     });
+
+    const games = arenaGameIdsForOpenWindows();
+    if (games.length === 0) return;
+    if (entered.current === owner) return;
+    entered.current = owner;
 
     // One ephemeral key per game; its pubkey is baked into the tunnel at allocate and the SAME key
     // co-signs moves later (via the store → enterArenaMatch), so stash the full keypair as it's minted.

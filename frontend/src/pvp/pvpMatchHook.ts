@@ -48,13 +48,12 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
-import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
 import type { ArenaAllocation } from "@/onchain/arenaEnter";
+import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
 import {
   consumeArenaEntry,
   subscribeArena,
 } from "@/onchain/arenaAllocationStore";
-import type { TunnelOpenRequest } from "@/onchain/tunnelOpenBatcher";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
@@ -131,6 +130,9 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   error: string | null;
   /** Join the public queue; paired with the next player who also clicks Find Match. */
   findMatch: () => void;
+  /** On-demand arena entry: reserve a server bot for THIS game and play it now (arena-wired games).
+   *  The Play trigger when the connect-time batch didn't allocate this window. */
+  playArena: () => void;
   /** Queue this seat's next intent (consumed on the next propose; resets to idle after). */
   setIntent: (intent: Intent) => void;
   toggleAuto: () => void;
@@ -767,6 +769,59 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     })();
   };
 
+  /**
+   * On-demand arena entry: the "Play" trigger for an arena-wired game whose window the connect-time
+   * batch did NOT allocate (opened mid-session, or its entry was consumed/finished). Reserves one bot
+   * for THIS game + deposits seat A in a single wallet popup (`allocateArenaGameForPlay`), then hands
+   * off to `enterArenaMatch` — the same path the store-consumer auto-enter uses. Sets `funding` first
+   * so the window shows progress instead of a dead lobby. No-op if the game isn't arena-wired.
+   */
+  playArena = () => {
+    const deps = this.deps;
+    if (!deps?.account) {
+      this.error = "connect a wallet first";
+      this.status = "error";
+      this.emit();
+      return;
+    }
+    const arenaGameId = this.spec.arenaGameId;
+    if (!arenaGameId) return; // not in the co-located fleet — nothing to allocate
+    const wallet = deps.account.address;
+    installResumePersistence();
+    evictExpiredRecords();
+
+    void (async () => {
+      try {
+        this.error = null;
+        this.status = "funding";
+        this.emit();
+        const stake: StakeStrategy = {
+          sponsoredSignExec: deps.sponsoredSignExec as never,
+          walletSignExec: deps.signExec as never,
+          prepareStake: deps.prepareStake,
+          selectStakeCoin: deps.selectStakeCoin,
+          ensureStakeBalance: deps.ensureStakeBalance,
+        };
+        const entry = await allocateArenaGameForPlay({
+          arenaGameId,
+          wallet,
+          stake,
+          label: this.spec.game,
+          stakePerGame: this.spec.stake,
+        });
+        if (!entry) {
+          this.error = "no opponent available — try again in a moment";
+          this.status = "error";
+          this.emit();
+          return;
+        }
+        this.enterArenaMatch(entry.allocation, entry.keypair);
+      } catch (e) {
+        this.fail(e);
+      }
+    })();
+  };
+
   setIntent = (intent: Intent) => {
     this.intent = intent;
     // A human keypress preempts the idle pacing clock: try to propose at once on our turn
@@ -873,6 +928,7 @@ export function createPvpMatchHook<
       winner: snap.winner,
       error: snap.error,
       findMatch: session.findMatch,
+      playArena: session.playArena,
       setIntent: session.setIntent,
       toggleAuto: session.toggleAuto,
       reset: session.reset,
