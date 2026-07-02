@@ -1118,6 +1118,17 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     resume();
   }, [resume]);
 
+  // Close the relay on unmount so the desktop freeze (which unmounts the game while frozen)
+  // actually stops self-play, and a normal window close doesn't leak the socket. ttt/blackjack
+  // already close mp on unmount; poker was missing this.
+  useEffect(
+    () => () => {
+      detachResumeRef.current?.();
+      mpRef.current?.close();
+    },
+    [],
+  );
+
   // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this game's seat A in
   // the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
   // auto-`enterArenaMatch` — so the window comes alive without a "Play" click. Guarded against

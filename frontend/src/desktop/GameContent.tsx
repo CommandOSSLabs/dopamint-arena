@@ -70,8 +70,14 @@ export const GameContent = memo(function GameContent({
   return (
     <GameTelemetryScope gameId={gameId}>
       <div className="relative h-full">
-        <Content windowId={windowId} onClose={close} />
-        {showScrim && <FrozenScrim />}
+        {/* Unmount the game while frozen: self-contained games (ttt/blackjack/poker) run
+            their own unmount teardown and stop self-playing; session games are already torn
+            down by the desktop freeze effect. The opaque scrim covers the swap. */}
+        {showScrim ? (
+          <FrozenScrim />
+        ) : (
+          <Content windowId={windowId} onClose={close} />
+        )}
       </div>
     </GameTelemetryScope>
   );
