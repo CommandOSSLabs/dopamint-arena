@@ -908,8 +908,11 @@ pub(crate) async fn chat_topic(State(state): State<SharedState>) -> Response {
 /// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
 /// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
 /// (Walrus archival failed) degrade to `None`, never a broken link.
+#[allow(clippy::too_many_arguments)] // one flat row builder; grouping the payout fields buys nothing
 pub(crate) fn settled_event(
     tunnel_id: &str,
+    owner: Option<crate::state::TunnelOwner>,
+    game: Option<String>,
     party_a_balance: u64,
     party_b_balance: u64,
     transcript_root_hex: &str,
@@ -918,13 +921,19 @@ pub(crate) fn settled_event(
     proof_url: &str,
 ) -> crate::state::TunnelEvent {
     let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    // Carry ownership on the close row itself: the settle handler pushes before the indexer's
+    // next poll and wins the per-digest dedup, so without this a settled row would never highlight.
+    let (party_a, party_b, funder) = match owner {
+        Some(o) => (o.party_a, o.party_b, o.funder),
+        None => (None, None, None),
+    };
     crate::state::TunnelEvent {
         tunnel_id: tunnel_id.to_string(),
         kind: crate::state::TunnelEventKind::Settled,
-        party_a: None,
-        party_b: None,
-        funder: None,
-        game: None,
+        party_a,
+        party_b,
+        funder,
+        game,
         party_a_balance: Some(party_a_balance),
         party_b_balance: Some(party_b_balance),
         transcript_root: non_empty(transcript_root_hex),
@@ -1051,6 +1060,12 @@ mod tests {
     fn settled_event_carries_proof_and_payout() {
         let ev = settled_event(
             "0xT",
+            Some(crate::state::TunnelOwner {
+                party_a: Some("0xME".into()),
+                party_b: Some("0xOPP".into()),
+                funder: Some("0xME".into()),
+            }),
+            Some("blackjack".into()),
             1500,
             500,
             "deadbeef",
@@ -1060,6 +1075,10 @@ mod tests {
         );
         assert_eq!(ev.kind, crate::state::TunnelEventKind::Settled);
         assert_eq!(ev.party_a_balance, Some(1500));
+        // The close row inherits ownership so it can highlight for the viewer (spec: open AND close).
+        assert_eq!(ev.party_a.as_deref(), Some("0xME"));
+        assert_eq!(ev.funder.as_deref(), Some("0xME"));
+        assert_eq!(ev.game.as_deref(), Some("blackjack"));
         assert_eq!(ev.transcript_root.as_deref(), Some("deadbeef"));
         assert_eq!(ev.tx_digest, "DiG");
         assert_eq!(ev.proof_url.as_deref(), Some("https://agg/v1/blobs/abc"));
@@ -1069,7 +1088,7 @@ mod tests {
     // broken link or anchor.
     #[test]
     fn settled_event_omits_proof_on_walrus_failure() {
-        let ev = settled_event("0xT", 1, 1, "", "DiG", 1, "");
+        let ev = settled_event("0xT", None, None, 1, 1, "", "DiG", 1, "");
         assert!(ev.proof_url.is_none(), "empty url → no link");
         assert!(ev.transcript_root.is_none(), "empty root → no anchor");
     }
