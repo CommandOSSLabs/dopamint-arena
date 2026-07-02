@@ -149,6 +149,7 @@ fn run_protocol(
         preinitialize,
         opts.bench_mode,
         opts.warmup_timeout_secs,
+        opts.cohorts,
     );
     (outcome, sampler.stop())
 }

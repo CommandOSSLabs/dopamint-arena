@@ -3,7 +3,9 @@
 //! as the serving fleet, and completed lifecycles are replaced until the global
 //! duration stops new launches or the move limit stops move production.
 
-use crate::cli::{AnchorMode, BenchMode, FrameCodecKind, MoveTarget, ScenarioMode};
+use crate::cli::{
+    AnchorMode, BenchMode, CohortConfig, FrameCodecKind, MoveTarget, ScenarioMode,
+};
 use crate::party_driver::{
     SeatKit, StageWindowRecorder, SuiSponsoredBenchContext, TunnelTelemetry,
 };
@@ -518,6 +520,7 @@ pub fn run_lifecycle_pipeline(
     preinitialize: bool,
     bench_mode: BenchMode,
     warmup_timeout_secs: u64,
+    cohorts: CohortConfig,
 ) -> SwarmOutcome {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -530,6 +533,7 @@ pub fn run_lifecycle_pipeline(
         .build()
         .expect("fleet bench runtime");
     let sui_context = sui_context.cloned();
+    let _ = &cohorts;
     let gas_context = sui_context.clone();
     let pool = tunnel_concurrency.max(1);
     let pre_open_gate = match bench_mode {
@@ -1019,6 +1023,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert!(out.moves >= 1);
         assert_eq!(out.tunnels_opened, 1);
@@ -1141,6 +1146,7 @@ mod tests {
             true,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert!(out.moves >= 2);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
@@ -1168,6 +1174,7 @@ mod tests {
             true,
             BenchMode::Warmup,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert_eq!(out.bench_mode, "warmup");
@@ -1257,6 +1264,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert_eq!(out.moves, 143);
         assert_eq!(out.moves_dist.min, 143.0);
@@ -1284,6 +1292,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         let bcs = run_lifecycle_pipeline(
             2,
@@ -1304,6 +1313,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         let postcard = run_lifecycle_pipeline(
             2,
@@ -1324,6 +1334,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert_eq!(bcs.moves, json.moves);
@@ -1354,6 +1365,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
@@ -1381,6 +1393,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_opened, 1);
@@ -1408,6 +1421,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert!(out.moves > 0);
         assert_eq!(out.tunnels_settled, out.tunnels_opened);
@@ -1434,6 +1448,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         )
     }
 
@@ -1475,6 +1490,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
         assert!(
             out.tunnels_claimed > 2,
@@ -1511,6 +1527,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert!(out.moves >= 1);
@@ -1544,6 +1561,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert!(out.moves >= 64);
@@ -1576,6 +1594,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert!(out.moves >= 1);
@@ -1620,6 +1639,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert_eq!(out.tunnels_aborted, 0);
@@ -1648,6 +1668,7 @@ mod tests {
             false,
             BenchMode::Churn,
             120,
+            CohortConfig::unbounded(),
         );
 
         assert_eq!(out.tunnels_claimed, 1);
