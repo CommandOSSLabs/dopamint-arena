@@ -89,14 +89,17 @@ function deliverSnapshot(
   store: (s: MatchSnapshot) => void,
 ): void {
   store(snap);
+  // Virtualization OFF (the default): NO visibility gate and NO fps throttle — notify React on EVERY
+  // snapshot so each window paints every move at the worker's emit rate. Nothing caps the frame rate
+  // and nothing pauses an on-screen window. The gate + throttle below run ONLY when virtualization is
+  // explicitly on (`?rendervirt=1`), to bound render cost across many open windows.
+  if (!renderVirtualizationEnabled()) {
+    for (const l of listeners) l();
+    return;
+  }
   // Off-screen (ADR-0030): the latest snapshot is stored (getSnapshot stays fresh for the flush on
   // re-show), but skip the React notify entirely — no reconcile, no paint — while the match runs on.
-  // Gated on the flag so turning virtualization OFF paints every window every move (freeze debug).
-  if (
-    renderVirtualizationEnabled() &&
-    pvpWindows.get(windowId)?.visible === false
-  )
-    return;
+  if (pvpWindows.get(windowId)?.visible === false) return;
   let t = snapThrottle.get(windowId);
   if (!t) {
     t = { lastNotifyMs: 0, timer: null, lastStatus: null };
