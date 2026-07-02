@@ -834,6 +834,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
       autoRef.current = true;
       setAutoState(true);
+      // Persist the forced-on default so the natural-end auto-rematch (poker is the only game
+      // that re-matches itself) restores auto via reset()'s defaultAuto() — otherwise it stops.
+      rememberAuto(GAME_ID, true);
       const signExec = async (
         tx: Parameters<typeof signAndExecute>[0]["transaction"],
       ) => {
