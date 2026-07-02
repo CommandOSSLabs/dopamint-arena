@@ -150,6 +150,28 @@ impl Config {
         })
     }
 
+    /// Tuning for the governed fullnode RPC layer (AIMD concurrency + retry/backoff). Read
+    /// from env with conservative defaults for the public testnet node; meant to be tuned
+    /// empirically (the node's real limit is undocumented).
+    pub fn rpc_limits(&self) -> crate::sui_rpc::RpcLimits {
+        fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
+            std::env::var(name)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default)
+        }
+        let d = crate::sui_rpc::RpcLimits::default();
+        crate::sui_rpc::RpcLimits {
+            min: env_or("SUI_RPC_MIN_CONCURRENCY", d.min),
+            start: env_or("SUI_RPC_START_CONCURRENCY", d.start),
+            max: env_or("SUI_RPC_MAX_CONCURRENCY", d.max),
+            grow_after: env_or("SUI_RPC_GROW_AFTER", d.grow_after),
+            max_retries: env_or("SUI_RPC_MAX_RETRIES", d.max_retries),
+            base_backoff_ms: env_or("SUI_RPC_BASE_BACKOFF_MS", d.base_backoff_ms),
+            max_backoff_ms: env_or("SUI_RPC_MAX_BACKOFF_MS", d.max_backoff_ms),
+        }
+    }
+
     /// Resolve a phase-required var, failing loud with its name. Called at service
     /// construction (e.g. building the settler in Phase 1) — not at startup.
     #[allow(dead_code)] // first caller lands in Phase 1 (settler construction)

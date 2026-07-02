@@ -124,6 +124,10 @@ impl Protocol for ApiCredits {
         state.client < self.cost_per_call
     }
 
+    fn can_gracefully_close(&self, _state: &ApiCreditsState) -> bool {
+        true
+    }
+
     fn sample_move(
         &self,
         state: &ApiCreditsState,
@@ -134,5 +138,24 @@ impl Protocol for ApiCredits {
             return None;
         }
         Some(ApiCreditsMove::Call)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_api_credit_state_is_gracefully_closeable() {
+        let protocol = ApiCredits { cost_per_call: 1 };
+        let ctx = TunnelContext {
+            tunnel_id: "0xapi".into(),
+            initial: Balances { a: 10, b: 0 },
+            seat: Seat::A,
+        };
+        let state = protocol.initial_state(&ctx);
+
+        assert!(protocol.can_gracefully_close(&state));
+        assert!(!protocol.is_terminal(&state));
     }
 }

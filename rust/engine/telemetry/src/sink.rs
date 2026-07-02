@@ -60,30 +60,45 @@ impl TelemetrySink for NullSink {
 #[derive(Clone, Debug, Default)]
 pub struct CollectingSink {
     samples: Vec<StageSample>,
+    sample_limit: usize,
+    enabled: bool,
 }
 
 impl CollectingSink {
     pub fn with_capacity(n: usize) -> Self {
         Self {
             samples: Vec::with_capacity(n),
+            sample_limit: n,
+            enabled: true,
+        }
+    }
+    pub fn disabled() -> Self {
+        Self {
+            samples: Vec::new(),
+            sample_limit: 0,
+            enabled: false,
         }
     }
     pub fn samples(&self) -> &[StageSample] {
         &self.samples
     }
     pub fn merge(&mut self, other: CollectingSink) {
-        self.samples.extend(other.samples);
+        let remaining = self.sample_limit.saturating_sub(self.samples.len());
+        self.samples
+            .extend(other.samples.into_iter().take(remaining));
     }
 }
 
 impl TelemetrySink for CollectingSink {
     #[inline]
     fn record(&mut self, sample: StageSample) {
-        self.samples.push(sample);
+        if self.enabled && self.samples.len() < self.sample_limit {
+            self.samples.push(sample);
+        }
     }
     #[inline(always)]
     fn enabled(&self) -> bool {
-        true
+        self.enabled
     }
 }
 
@@ -120,5 +135,33 @@ mod tests {
         assert!(a.enabled());
         a.merge(b);
         assert_eq!(a.samples().len(), 2);
+    }
+
+    #[test]
+    fn collecting_sink_caps_samples_at_capacity() {
+        let mut s = CollectingSink::with_capacity(2);
+        for dur_ns in [1, 2, 3] {
+            s.record(StageSample {
+                stage: StageId::FrameRecv,
+                dur_ns,
+                cost: StageCost::default(),
+            });
+        }
+
+        assert_eq!(s.samples().len(), 2);
+        assert_eq!(s.samples()[0].dur_ns, 1);
+        assert_eq!(s.samples()[1].dur_ns, 2);
+    }
+
+    #[test]
+    fn disabled_collecting_sink_drops_samples() {
+        let mut s = CollectingSink::disabled();
+        assert!(!s.enabled());
+        s.record(StageSample {
+            stage: StageId::FrameSend,
+            dur_ns: 100,
+            cost: StageCost::default(),
+        });
+        assert!(s.samples().is_empty());
     }
 }

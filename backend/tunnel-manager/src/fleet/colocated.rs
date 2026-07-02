@@ -12,7 +12,9 @@
 //! and co-signs with the per-match ephemeral key it re-derives from the reservation recipe.
 
 use anyhow::bail;
-use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
+use transcript_store::TranscriptChunkWriter;
+use transcript_stream::{ChunkUpload, S3StreamingRecorder};
+use tunnel_harness::Signer;
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
@@ -170,6 +172,9 @@ pub async fn join_and_spawn(
     // opponent is the joiner (party A) — `rec.seat_a`, which `claim_arena` verified equals `wallet`.
     let st = state.clone();
     let match_id = match_id.to_owned();
+    // Stream this match's co-signed transcript to S3 during play (both `None` = no S3, dev/test).
+    let chunk_upload_tx = state.chunk_upload_tx.clone();
+    let chunk_writer = state.chunk_writer.clone();
     tokio::spawn(async move {
         if let Err(e) = drive_arena_bot(
             &rec.game,
@@ -179,6 +184,8 @@ pub async fn join_and_spawn(
             rec.created_at_ms,
             match_key,
             conn,
+            chunk_upload_tx,
+            chunk_writer,
         )
         .await
         {
@@ -192,6 +199,7 @@ pub async fn join_and_spawn(
 /// Drive the co-located bot (party B) to settlement over the relay bus. The tunnel already exists
 /// (created at allocate); `RelayBridgedAnchor::open` resolves it with no chain call. There is no
 /// join wait or wake — the bot is spawned already paired with a live `MatchRecord`.
+#[allow(clippy::too_many_arguments)]
 async fn drive_arena_bot(
     game: &str,
     match_id: &str,
@@ -200,6 +208,8 @@ async fn drive_arena_bot(
     created_at_ms: u64,
     match_key: DurableSigner,
     conn: std::sync::Arc<BusRelayConnection>,
+    chunk_upload_tx: Option<tokio::sync::mpsc::Sender<ChunkUpload>>,
+    chunk_writer: Option<std::sync::Arc<dyn TranscriptChunkWriter>>,
 ) -> anyhow::Result<()> {
     let transport = BusRelayTransport::new(conn.clone(), match_id.to_owned());
     let channel = MatchChannel::new(transport);
@@ -219,7 +229,17 @@ async fn drive_arena_bot(
         match_id.to_owned(),
         created_at_ms,
     );
-    let moves = play_game(game, channel, anchor, match_key, opponent_wallet).await?;
+    let moves = play_game(
+        game,
+        channel,
+        anchor,
+        match_key,
+        opponent_wallet,
+        tunnel_id,
+        chunk_upload_tx,
+        chunk_writer,
+    )
+    .await?;
     tracing::info!(
         match_id = %match_id,
         game = %game,
@@ -234,27 +254,41 @@ async fn drive_arena_bot(
 /// transport/anchor are game-agnostic; this is the one place protocol+strategy are chosen, so adding
 /// a game is a single arm here — once its Rust protocol byte-matches the FE's TS protocol (verified
 /// by a cross-language golden test) and it has a `MoveStrategy`. Returns the move count.
+#[allow(clippy::too_many_arguments)]
 async fn play_game(
     game: &str,
     channel: MatchChannel<BusRelayTransport>,
     anchor: RelayBridgedAnchor,
     match_key: DurableSigner,
     opponent_wallet: &str,
+    tunnel_id: &str,
+    chunk_upload_tx: Option<tokio::sync::mpsc::Sender<ChunkUpload>>,
+    chunk_writer: Option<std::sync::Arc<dyn TranscriptChunkWriter>>,
 ) -> anyhow::Result<u64> {
     // Every game drives the identical party-B seam (Role::B + a fresh transcript recorder); only the
-    // protocol's `play_*` entry differs, so each game is one arm.
+    // protocol's `play_*` entry differs, so each game is one arm. The recorder folds the O(log N) root
+    // AND streams the co-signed transcript to S3 in chunks during play through the shared bounded
+    // uploader (`chunk_upload_tx`); `finish()` flushes the tail + seals the manifest via `chunk_writer`.
+    // A clone drives the game while the retained handle finishes. Both `None` (dev/test) → root only.
     macro_rules! play {
-        ($play_fn:ident) => {
-            $play_fn(
+        ($play_fn:ident) => {{
+            let recorder = S3StreamingRecorder::new(tunnel_id, chunk_upload_tx, chunk_writer);
+            // Seal on EVERY terminal exit, including abandon: a disconnect makes `$play_fn` return
+            // Err, so finishing before `?` is what flushes the tail chunk + seals the manifest for an
+            // errored/abandoned match. (A hung or panicking match still won't reach here; the SIGTERM
+            // uploader drain and the co-signed checkpoint bound that residual — see A.2 in the design.)
+            let result = $play_fn(
                 channel,
                 anchor,
                 match_key,
                 Role::B,
                 opponent_wallet,
-                InMemoryTranscriptRecorder::new(),
+                recorder.clone(),
             )
-            .await?
-        };
+            .await;
+            recorder.finish().await;
+            result?
+        }};
     }
     let outcome = match game {
         "blackjack" => play!(play_blackjack_v2),
@@ -306,6 +340,7 @@ fn secret_from_hex(hex_str: &str) -> Option<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::state::AppState;
+    use tunnel_harness::InMemoryTranscriptRecorder;
 
     // `reserve_arena_slot` mints a globally-unique recipe with a distinct per-match key each call —
     // two concurrent matches must never share a match id or a co-signing secret.

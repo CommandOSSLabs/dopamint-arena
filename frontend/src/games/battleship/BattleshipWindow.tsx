@@ -24,7 +24,7 @@ const BTN_PRIMARY =
  * lives in a windowId-keyed store, so minimizing or resizing the window never drops the
  * game. ADR 0003.
  */
-export function BattleshipWindow({ windowId, onClose }: GameWindowProps) {
+export function BattleshipWindow({ windowId }: GameWindowProps) {
   // One size-container for the whole game so every pane sizes off the WINDOW's
   // width AND height (container queries + cqh units), not the viewport — correct
   // in a small floating window on a big screen, or full-width on mobile.
@@ -35,7 +35,7 @@ export function BattleshipWindow({ windowId, onClose }: GameWindowProps) {
 
       {/* Actual game layout sits on top */}
       <div className="relative z-20 h-full w-full">
-        <PvpGame windowId={windowId} onExit={onClose} />
+        <PvpGame windowId={windowId} />
       </div>
     </div>
   );
@@ -109,21 +109,24 @@ function ModeFrame({
   headerExtra,
   children,
 }: {
-  onBack: () => void;
+  onBack?: () => void;
   headerExtra?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="flex h-full w-full flex-col">
       {/* A thin in-game control strip. The window chrome above already shows the title,
-          so this carries only the game actions (Back / Auto / Settle), kept compact. */}
+          so this carries only the game actions (Back / Auto / Settle), kept compact.
+          Back is omitted on the placement menu — closing is the title-bar ✕'s job. */}
       <header className="bs-head shrink-0 py-[clamp(4px,1.4cqmin,9px)]">
-        <button
-          onClick={onBack}
-          className="sketch-btn inline-flex items-center gap-1"
-        >
-          <ArrowLeft className="size-[1em]" /> Back
-        </button>
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="sketch-btn inline-flex items-center gap-1"
+          >
+            <ArrowLeft className="size-[1em]" /> Back
+          </button>
+        )}
         {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}
       </header>
       {/* Scrolls vertically when a pane is taller than the window (e.g. stacked
@@ -158,13 +161,7 @@ function settleLabel(status: string): string | undefined {
   return undefined;
 }
 
-function PvpGame({
-  windowId,
-  onExit,
-}: {
-  windowId: string;
-  onExit: () => void;
-}) {
+function PvpGame({ windowId }: { windowId: string }) {
   const {
     status,
     view,
@@ -206,26 +203,30 @@ function PvpGame({
     return () => clearTimeout(t);
   }, [status, auto, view?.myTurn, setAuto]);
 
-  // Back: publish our settlement half, then leave once it's on the wire (status → settled) or if it
-  // errors — a failed/stuck close must never trap the player. A timeout backstops an unreachable
-  // settle boundary. Pre-match (idle/matching/funding/error) there's nothing to settle, so just close.
+  // Back: publish our settlement half, then drop back to the placement menu once it's on the wire
+  // (status → settled) or if it errors — a failed/stuck close must never trap the player. A timeout
+  // backstops an unreachable settle boundary. The window itself closes only via the title-bar ✕ or
+  // Back on the placement menu (idle).
   const [leaving, setLeaving] = useState(false);
   useEffect(() => {
     if (!leaving) return;
     if (status === "settled" || status === "error") {
-      onExit();
+      setLeaving(false);
+      reset();
       return;
     }
-    const bail = window.setTimeout(onExit, 8000);
+    const bail = window.setTimeout(() => {
+      setLeaving(false);
+      reset();
+    }, 8000);
     return () => window.clearTimeout(bail);
-  }, [leaving, status, onExit]);
+  }, [leaving, status, reset]);
   const back = () => {
     if (status === "playing" || status === "settling") {
       setLeaving(true);
-      endMatch(); // publish our half; the leaving effect closes the window on "settled"
+      endMatch(); // publish our half; the leaving effect returns to the menu on "settled"
     } else {
-      reset();
-      onExit();
+      reset(); // matching / funding / error → back to the placement menu
     }
   };
   let content: ReactNode;
@@ -277,7 +278,10 @@ function PvpGame({
       <AutoToggle on={auto} onChange={setAuto} />
     ) : undefined;
   return (
-    <ModeFrame onBack={back} headerExtra={headerExtra}>
+    <ModeFrame
+      onBack={status === "idle" ? undefined : back}
+      headerExtra={headerExtra}
+    >
       {content}
     </ModeFrame>
   );

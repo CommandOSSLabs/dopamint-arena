@@ -1,4 +1,4 @@
-use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
+use super::{current_initial_balance, play_with_strategies, MAX_MOVES};
 use crate::cli::{AnchorMode, FrameCodecKind};
 use crate::party_driver::SuiSponsoredBenchContext;
 use crate::party_driver::TunnelTelemetry;
@@ -15,6 +15,7 @@ pub(crate) async fn play_single(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
     play_with_strategies(
         BombIt,
         BombItStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
@@ -25,8 +26,8 @@ pub(crate) async fn play_single(
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )
@@ -43,18 +44,20 @@ pub(crate) async fn play_series(
     telemetry: TunnelTelemetry,
 ) -> TunnelOutcome {
     let seed = card_seed.unwrap_or(0);
+    let initial_balance = current_initial_balance();
+    let stake_per_game = 0;
     play_with_strategies(
-        BombItSeries::new(tunnel_id, 100),
-        BombItSeriesStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5, 100),
-        BombItSeriesStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE, 100),
+        BombItSeries::new(tunnel_id, stake_per_game),
+        BombItSeriesStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5, stake_per_game),
+        BombItSeriesStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE, stake_per_game),
         codec,
         anchor_mode,
         sui_context,
         seed,
         kit,
         tunnel_id,
-        DEFAULT_BALANCE,
-        DEFAULT_BALANCE,
+        initial_balance,
+        initial_balance,
         MAX_MOVES,
         telemetry,
     )

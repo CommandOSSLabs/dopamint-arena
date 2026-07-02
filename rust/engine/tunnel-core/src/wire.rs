@@ -109,17 +109,24 @@ pub fn encode_settle_body(
     out.extend_from_slice(sig_b);
     out.extend_from_slice(&(transcript_entries.len() as u32).to_be_bytes());
     for entry in transcript_entries {
-        let len: u16 = entry
-            .message
-            .len()
-            .try_into()
-            .expect("transcript entry message length fits u16");
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(&entry.message);
-        out.extend_from_slice(&entry.sig_a);
-        out.extend_from_slice(&entry.sig_b);
+        encode_settle_entry(entry, &mut out);
     }
     out
+}
+
+/// Encode ONE settle-body entry: `u16` message length + message + 64 B `sig_a` + 64 B `sig_b`.
+/// The single source of truth for per-entry layout — `encode_settle_body` and the streaming chunk
+/// writer both go through here, so reassembled chunks are byte-identical to the body's entries.
+pub fn encode_settle_entry(entry: &SettleBodyEntry, out: &mut Vec<u8>) {
+    let len: u16 = entry
+        .message
+        .len()
+        .try_into()
+        .expect("transcript entry message length fits u16");
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&entry.message);
+    out.extend_from_slice(&entry.sig_a);
+    out.extend_from_slice(&entry.sig_b);
 }
 
 pub struct HtlcLock {

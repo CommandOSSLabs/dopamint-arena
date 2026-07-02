@@ -6,6 +6,7 @@
 use anyhow::{anyhow, Context};
 use axum::body::Bytes;
 
+#[derive(Clone)]
 pub struct WalrusClient {
     http: reqwest::Client,
     publisher_url: String,

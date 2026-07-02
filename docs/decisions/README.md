@@ -110,6 +110,8 @@ numbering (no gaps reused). Currently:
 
 - 0020 — Two bot fleets over one sans-IO core (user-serving + local bench).
 - 0027 — Serving-fleet topology: WS-client for the demo → co-located at scale.
+- 0029 — Async queued settlement: `/settle` enqueues → 202; a worker pool
+  coalesces closes into batched PTBs behind a governed AIMD+backoff RPC layer.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was

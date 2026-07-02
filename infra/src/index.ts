@@ -224,6 +224,8 @@ const explorer = createExplorerServices({
   securityGroupId: sgs.backend.id, // already allowed to DB proxy (5432) + Redis (6379)
   databaseUrlSecretArn: databaseUrlSecret.arn,
   pubSubEndpoint: cache.pubSubEndpoint,
+  // Same bucket the tunnel-manager streams transcript chunks to, so /transcript verifies from S3.
+  s3TranscriptsBucket: transcriptsBucket.bucketName,
   vpcId: network.vpcId,
   listener: alb.listener,
   corsAllowedOrigins: cfg.corsAllowedOrigins,

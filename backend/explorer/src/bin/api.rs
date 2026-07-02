@@ -15,6 +15,11 @@ use explorer::api::{router, ApiState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Pin one rustls CryptoProvider (ring) as the process default BEFORE any TLS. Building the S3
+    // client (S3TranscriptStore::from_env, once S3_TRANSCRIPTS_BUCKET is set) pulls aws-lc-rs into
+    // the graph alongside ring; without this, rustls 0.23 can't auto-select a provider and panics at
+    // startup (the S3-enabled task crash-loops on exit 101). Mirrors tunnel-manager + indexer.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -24,11 +29,28 @@ async fn main() -> anyhow::Result<()> {
 
     let database_url = std::env::var("DATABASE_URL")?;
     let store = Arc::new(shared::postgres::PgSettlementStore::connect(&database_url).await?);
+    // One S3 store, two read views: streamed chunks and the one-object settle archive (it
+    // implements both traits). Same bucket/prefix the tunnel-manager writes to (S3_TRANSCRIPTS_BUCKET
+    // / S3_TRANSCRIPTS_PREFIX). Unset -> None -> /transcript serves only the legacy Walrus blob, so
+    // the explorer runs unchanged where S3 isn't configured.
+    let s3 = match transcript_store::S3TranscriptStore::from_env().await {
+        Ok(store) => Some(Arc::new(store)),
+        Err(e) => {
+            tracing::info!("s3 transcript reader disabled: {e}");
+            None
+        }
+    };
+    let chunks = s3
+        .clone()
+        .map(|s| s as Arc<dyn transcript_store::TranscriptChunkReader>);
+    let archive = s3.map(|s| s as Arc<dyn transcript_store::TranscriptReader>);
     let state = ApiState {
         store,
         walrus_aggregator_url: std::env::var("WALRUS_AGGREGATOR_URL")
             .unwrap_or_else(|_| "https://aggregator.walrus-testnet.walrus.space".into()),
         http: reqwest::Client::new(),
+        chunks,
+        archive,
     };
 
     // Bridge Redis pub/sub -> a broadcast channel the SSE handler subscribes to.

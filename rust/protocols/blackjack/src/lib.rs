@@ -19,7 +19,7 @@ pub const MIN_BET: u64 = 25;
 pub const BET_OPTIONS: [u64; 4] = [25, 100, 500, 1000];
 const DEALER_STANDS_AT: u32 = 17;
 const BUST_AT: u32 = 21;
-const ROUND_CAP: u64 = 1000;
+pub const ROUND_CAP: u64 = 1000;
 
 /// `protocolDomain("blackjack.bet.v1")` = `sui_tunnel::proto::` + name.
 const DOMAIN: &[u8] = b"sui_tunnel::proto::blackjack.bet.v1";
@@ -238,7 +238,11 @@ pub fn initial_state(balance_a: u64, balance_b: u64, card_seed: Option<u64>) -> 
 }
 
 pub fn is_terminal(s: &BjState) -> bool {
-    s.round >= ROUND_CAP || (s.phase == Phase::RoundOver && max_bet(s) < MIN_BET)
+    is_terminal_with_round_cap(s, ROUND_CAP)
+}
+
+pub fn is_terminal_with_round_cap(s: &BjState, round_cap: u64) -> bool {
+    s.round >= round_cap || (s.phase == Phase::RoundOver && max_bet(s) < MIN_BET)
 }
 
 fn draw_to(hand: &mut Vec<u8>, card_seed: Option<u64>, round: u64, draw_index: u64) -> u64 {
@@ -317,6 +321,15 @@ fn settle(s: &BjState, winner: Option<Party>) -> BjState {
 }
 
 pub fn apply_move(s: &BjState, mv: BjMove, by: Party) -> Result<BjState, String> {
+    apply_move_with_round_cap(s, mv, by, ROUND_CAP)
+}
+
+pub fn apply_move_with_round_cap(
+    s: &BjState,
+    mv: BjMove,
+    by: Party,
+    round_cap: u64,
+) -> Result<BjState, String> {
     match s.phase {
         Phase::RoundOver => {
             let BjMove::Bet { amount } = mv else {
@@ -326,7 +339,7 @@ pub fn apply_move(s: &BjState, mv: BjMove, by: Party) -> Result<BjState, String>
             if by != next_player {
                 return Err(format!("only the player ({next_player:?}) sets the bet"));
             }
-            if is_terminal(s) {
+            if is_terminal_with_round_cap(s, round_cap) {
                 return Err("game over: a side cannot fund another bet".into());
             }
             let cap = max_bet(s);
@@ -391,7 +404,11 @@ pub fn encode_state(s: &BjState) -> Vec<u8> {
 /// (always 25 when affordable); player hits while `hand_value < 17`, else stands; dealer
 /// stands. Mirrors `frontend/src/agent/games/blackjack/kit.ts::BlackjackBot`.
 pub fn plan(s: &BjState, seat: Party) -> Option<BjMove> {
-    if is_terminal(s) {
+    plan_with_round_cap(s, seat, ROUND_CAP)
+}
+
+pub fn plan_with_round_cap(s: &BjState, seat: Party, round_cap: u64) -> Option<BjMove> {
+    if is_terminal_with_round_cap(s, round_cap) {
         return None;
     }
     if actor_for(s) != seat {
@@ -465,6 +482,10 @@ impl Protocol for Blackjack {
         is_terminal(s)
     }
 
+    fn can_gracefully_close(&self, s: &BjState) -> bool {
+        s.phase == Phase::RoundOver
+    }
+
     fn sample_move(
         &self,
         s: &BjState,
@@ -495,6 +516,20 @@ mod tests {
             serde_json::to_string(&BjMove::Stand).unwrap(),
             r#"{"action":"stand"}"#
         );
+    }
+
+    #[test]
+    fn round_over_is_graceful_close_boundary() {
+        let protocol = Blackjack;
+        let state = initial_state(100, 100, None);
+        let active_round = BjState {
+            phase: Phase::Player,
+            ..state.clone()
+        };
+
+        assert!(protocol.can_gracefully_close(&state));
+        assert!(!protocol.is_terminal(&state));
+        assert!(!protocol.can_gracefully_close(&active_round));
     }
 
     #[test]

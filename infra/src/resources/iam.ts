@@ -13,8 +13,9 @@ export interface IamInputs {
   // Secret ARNs the ECS task-execution role may read to inject `secrets` at launch
   // (e.g. DB password, settler key). Scoped to exactly these resources.
   taskExecSecretArns?: pulumi.Input<string>[];
-  // ARN of the transcripts bucket the tunnel-manager task role may write (ADR-0023).
-  // Omitted => no S3 policy is attached (e.g. a stack without S3 archival).
+  // ARN of the transcripts bucket. The tunnel-manager writes chunks/manifests (ADR-0023) and the
+  // explorer-api reads them back to verify transcripts from S3; both share this task role, so the
+  // policy grants Get+Put+List. Omitted => no S3 policy is attached (a stack without S3 archival).
   taskRoleTranscriptsBucketArn?: pulumi.Input<string>;
   // S3 bucket holding the wallet-pool blob (PR #124). The TASK role (the running container's
   // identity, used by `S3WalletPoolStore::from_env`) gets `s3:GetObject` on it. Omitted => no grant.
@@ -81,7 +82,13 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
             Statement: [
               {
                 Effect: "Allow",
-                Action: ["s3:PutObject", "s3:AbortMultipartUpload"],
+                // GetObject: the explorer-api reads the manifest + chunk objects to reassemble and
+                // verify a transcript from S3. Put/Abort: the tunnel-manager streams chunks.
+                Action: [
+                  "s3:GetObject",
+                  "s3:PutObject",
+                  "s3:AbortMultipartUpload",
+                ],
                 Resource: `${bucketArn}/*`,
               },
               {

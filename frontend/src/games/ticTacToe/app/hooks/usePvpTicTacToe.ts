@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   core,
-  proof,
   bytesToHex,
   hexToBytes,
   generateSalt,
@@ -11,6 +10,7 @@ import {
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { settleViaBackend } from "@/backend/settle";
 import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
+import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
@@ -108,10 +108,9 @@ const MAX_GAMES = 1;
 // defers, which breaks re-entrant propose and lets the confirmed-update sync run first).
 const AUTO_MOVE_MS = 0;
 const NEXT_MS = 150; // pause before auto-requeuing the next match (flat-out: just enough to glimpse)
-// Settle-half exchange: both seats send their half at the same instant, so a single relay drop
-// would hang the close. Resend this often until the peer's half lands, and give up after the
-// timeout so a truly lost peer recovers (auto re-queues) instead of stranding the table forever.
-const SETTLE_RETRY_MS = 600;
+// Settle: we wait for the co-located bot's half (the bot owns the transcript and sends its half
+// unconditionally at its terminal). Give up after this timeout so a truly lost peer recovers (auto
+// re-queues) instead of stranding the table forever.
 const SETTLE_TIMEOUT_MS = 12000;
 
 export type PvpPhase =
@@ -266,7 +265,6 @@ export function usePvpTicTacToe(
   } | null>(null);
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
-  const transcriptRef = useRef<proof.Transcript | null>(null);
 
   const refreshBalance = useCallback(async () => {
     const addr = walletRef.current.address;
@@ -320,56 +318,29 @@ export function usePvpTicTacToe(
       settledRef.current = true;
       setPhase("settling");
       try {
-        const root = transcriptRef.current
-          ? transcriptRef.current.root()
-          : new Uint8Array(32);
-        const half = t.buildSettlementHalfWithRoot(
-          createdAtRef.current,
-          root,
-          0n,
-        );
-        const sendHalf = () =>
-          channel.sendPeer({
-            t: "settleHalf",
-            partyABalance: half.settlement.partyABalance.toString(),
-            partyBBalance: half.settlement.partyBBalance.toString(),
-            finalNonce: half.settlement.finalNonce.toString(),
-            timestamp: half.settlement.timestamp.toString(),
-            transcriptRoot: bytesToHex(root),
-            sig: bytesToHex(half.sigSelf),
-          });
-        sendHalf();
-        // Wait for the peer's half. Resend ours every SETTLE_RETRY_MS until it lands (a single
-        // relay drop on this simultaneous exchange would otherwise hang here forever), and reject
-        // after SETTLE_TIMEOUT_MS so the catch below can recover instead of stranding "settling".
+        // Wait for the co-located bot's half. The FE keeps NO transcript, so we sign seat A's half
+        // over the ROOT the bot supplied and submit a header-only body (the bot owns the canonical
+        // transcript, archived to S3). Reject after SETTLE_TIMEOUT_MS so the catch below can recover
+        // (auto re-queues) instead of stranding "settling" on a lost peer.
         const other =
           bufferedSettleRef.current ??
           (await new Promise<{ sig: Uint8Array; root: Uint8Array }>(
             (resolve, reject) => {
-              let elapsed = 0;
-              const iv = setInterval(() => {
-                elapsed += SETTLE_RETRY_MS;
-                if (elapsed >= SETTLE_TIMEOUT_MS) {
-                  clearInterval(iv);
-                  settleResolveRef.current = null;
-                  reject(new Error("settle handshake timed out"));
-                  return;
-                }
-                sendHalf();
-              }, SETTLE_RETRY_MS);
+              const to = setTimeout(() => {
+                settleResolveRef.current = null;
+                reject(new Error("settle handshake timed out"));
+              }, SETTLE_TIMEOUT_MS);
               settleResolveRef.current = (v) => {
-                clearInterval(iv);
+                clearTimeout(to);
                 resolve(v);
               };
             },
           ));
         bufferedSettleRef.current = null;
-        if (bytesToHex(other.root) !== bytesToHex(root)) {
-          throw new Error("Transcript root mismatch between players");
-        }
-        const coSigned = t.combineSettlementWithRoot(
-          half.settlement,
-          half.sigSelf,
+        const coSigned = coSignCloseFromPeerRoot(
+          t,
+          createdAtRef.current,
+          other.root,
           other.sig,
         );
         // Single submitter = seat A — unified with every other game and the fleet bot, which
@@ -379,9 +350,7 @@ export function usePvpTicTacToe(
           const closeDigest = await settleViaBackend({
             tunnelId: t.tunnelId,
             settlement: coSigned as any,
-            transcript: transcriptRef.current
-              ? transcriptRef.current.rawEntries()
-              : [],
+            transcript: [],
             label: "tictactoe",
             fallbackClose: async () => {
               // Close pays in the same coin the tunnel was funded in (MTPS vs SUI). In MTPS
@@ -496,8 +465,7 @@ export function usePvpTicTacToe(
           }, AUTO_MOVE_MS);
         }
       };
-      t.onConfirmed = (u) => {
-        transcriptRef.current?.append(u);
+      t.onConfirmed = () => {
         onAdvance();
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
@@ -818,7 +786,6 @@ export function usePvpTicTacToe(
           channel.transport,
           { a: bankroll, b: bankroll },
         );
-        transcriptRef.current = new proof.Transcript(tunnelId);
 
         activateTttSession(mp, channel, t, {
           matchId: m.matchId,
@@ -862,6 +829,9 @@ export function usePvpTicTacToe(
       const selfWallet = w.address;
       setError(null);
       setPhase("connecting");
+      // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
+      autoRef.current = true;
+      setAutoState(true);
       stoppingRef.current = false;
       bufferedHelloRef.current = null;
       bufferedSettleRef.current = null;
@@ -958,7 +928,6 @@ export function usePvpTicTacToe(
             channel.transport,
             { a: bankroll, b: bankroll },
           );
-          transcriptRef.current = new proof.Transcript(allocation.tunnelId);
           activateTttSession(mp, channel, t, {
             matchId: m.matchId,
             role: m.role,
@@ -1167,34 +1136,9 @@ export function usePvpTicTacToe(
   );
 
   const leave = useCallback(() => {
-    // Back: publish our settlement half before tearing down, so leaving SETTLES (the staying seat /
-    // 1h grace path submits the close) instead of stranding the staked tunnel. Sync + best-effort, so
-    // the half is on the wire before the transport closes; no live/unsettled match ⇒ just teardown.
-    const t = tunnelRef.current;
-    const ch = channelRef.current;
-    if (t && ch && !settledRef.current) {
-      try {
-        const root = transcriptRef.current
-          ? transcriptRef.current.root()
-          : new Uint8Array(32);
-        const half = t.buildSettlementHalfWithRoot(
-          createdAtRef.current,
-          root,
-          0n,
-        );
-        ch.sendPeer({
-          t: "settleHalf",
-          partyABalance: half.settlement.partyABalance.toString(),
-          partyBBalance: half.settlement.partyBBalance.toString(),
-          finalNonce: half.settlement.finalNonce.toString(),
-          timestamp: half.settlement.timestamp.toString(),
-          transcriptRoot: bytesToHex(root),
-          sig: bytesToHex(half.sigSelf),
-        });
-      } catch (e) {
-        console.error("[ttt pvp] leave publish failed:", e);
-      }
-    }
+    // Back: tear down and return to the lobby. The FE has no half to publish (the bot owns the
+    // transcript and only settles at its own terminal), so leaving relies on the bot's terminal /
+    // the 1h on-chain grace as the settlement floor rather than pushing a co-signed half.
     teardownMatch(false);
     setPhase("idle");
   }, [teardownMatch]);

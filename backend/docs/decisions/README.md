@@ -19,3 +19,9 @@ folder the record lives in. See the root
 - [0027](0027-serving-fleet-topology-wsclient-then-colocated.md) — Serving-fleet
   topology: WS-client for the demo → co-located game-server at 5000 CCU; the
   `RelayTransport` seam is the swap point (capacity win, latency user-invisible).
+- [0029](0029-async-queued-batched-settlement.md) — `/settle` becomes
+  asynchronous: validate → durable Redis stream → 202; a worker pool coalesces up
+  to K `close_cooperative_with_root` calls into one PTB (retry-by-split), behind a
+  governed AIMD+backoff RPC layer; confirmation via the `explorer:proofs` event.
+  Stays on the public fullnode, living under its ceiling by raising S. Scales the
+  0020 provenance layer; batches settles the way 0019 batches opens.

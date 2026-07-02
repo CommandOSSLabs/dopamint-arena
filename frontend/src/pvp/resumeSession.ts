@@ -318,6 +318,19 @@ export function attachResume<State, Move>(
     if (rec) writeResumeRecord(rec);
   };
 
+  // Persist on propose too, preserving any game-set onProposed. `onConfirmed` fires only AFTER the
+  // pending clears, so it can NEVER capture a still-in-flight move; without this the proposer's
+  // pending is lost on reload. That matters against the co-located bot, whose resync-less resume
+  // relies on the restored pending: `resume()` re-sends it and the bot's replayed ACK then finds a
+  // matching pending instead of throwing "unexpected ACK". Debounced/coalesced with the confirm
+  // write; the pagehide flush persists it before a reload.
+  const prevProposed = tunnel.onProposed;
+  tunnel.onProposed = () => {
+    prevProposed?.();
+    const rec = buildRecord(tunnel, args.adapter, identity);
+    if (rec) writeResumeRecord(rec);
+  };
+
   // Route the peer's resync through the channel's existing onPeer; preserve any prior handler.
   const peerHandler = (m: Exclude<PeerMessage, { t: "frame" }>) => {
     if ((m as { t: string }).t === "resync")
@@ -325,11 +338,22 @@ export function attachResume<State, Move>(
   };
   channel.addPeerListener(peerHandler);
 
+  // On resume: announce our nonce (so a live bot targets its replay) AND re-deliver any restored
+  // in-flight move. `restoreInto` re-seats the pending WITHOUT sending, and only the generic hook
+  // called `resendPending` itself — the custom hooks (poker, tic-tac-toe/caro, battleship, blackjack)
+  // did not, so a move made just before a reload was persisted (onProposed) but never re-sent, and a
+  // bot that hadn't received it deadlocked. Doing it HERE covers every hook. Both are idempotent: an
+  // unanswered resync is harmless, and the bot re-ACKs a duplicate move; `resendPending` no-ops with
+  // nothing pending.
+  const resumeKick = () => {
+    sendResync(args);
+    args.tunnel.resendPending();
+  };
   const offOk = mp.onResumeOk((e) => {
-    if (e.matchId === identity.matchId && e.peerOnline) sendResync(args);
+    if (e.matchId === identity.matchId) resumeKick();
   });
   const offRes = mp.onPeerResumed((e) => {
-    if (e.matchId === identity.matchId) sendResync(args);
+    if (e.matchId === identity.matchId) resumeKick();
   });
 
   const graceMs = args.graceMs ?? 3_600_000;
@@ -371,5 +395,6 @@ export function attachResume<State, Move>(
     cancelGrace();
     channel.removePeerListener(peerHandler);
     if (tunnel.onConfirmed) tunnel.onConfirmed = prevConfirmed;
+    if (tunnel.onProposed) tunnel.onProposed = prevProposed;
   };
 }

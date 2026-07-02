@@ -48,6 +48,11 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Pin one rustls CryptoProvider (ring) as the process default BEFORE any TLS. The framework's
+    // ingestion client fetches checkpoints over HTTPS; with both aws-lc-rs and ring in the graph,
+    // rustls 0.23 cannot auto-select a provider and panics on the first handshake (crash-loop that
+    // froze the watermark). Mirrors tunnel-manager/main.rs.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = dotenvy::dotenv();
     // Do NOT install a tracing subscriber here: `IndexerCluster::build()` installs the framework's
     // own global subscriber (telemetry/metrics), and a second `.init()` panics on boot with
