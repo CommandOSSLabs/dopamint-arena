@@ -52,6 +52,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  hasResumableMatch,
 } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
@@ -941,6 +942,17 @@ export function usePvpTicTacToe(
   );
   const enterArenaMatchRef = useRef(enterArenaMatch);
   enterArenaMatchRef.current = enterArenaMatch;
+
+  // Cold-load resume: mirror useBattleshipPvp's session.resume() on wallet-connect. If this variant
+  // has an in-flight match from a prior session, restore it automatically — the arena allocator
+  // suppresses re-allocation for a resuming game, so without this the match is unreachable until a
+  // manual "Find match" click. Guard on hasResumableMatch so a FRESH load still routes through the
+  // arena-entry flow below (queue()'s resumeActiveTunnels resumes without joining the public queue).
+  useEffect(() => {
+    if (!wallet.address) return;
+    if (phaseRef.current !== "idle") return;
+    if (hasResumableMatch(variant)) queue();
+  }, [wallet.address, variant, queue]);
 
   // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this variant's seat A
   // in the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and

@@ -43,6 +43,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  hasResumableMatch,
 } from "@/pvp/resume";
 import {
   BlackjackProtocol,
@@ -961,6 +962,16 @@ export function usePvpBlackjack(): PvpView {
     },
     [walletAddress, proto, client, activateSession, finishSettle],
   );
+
+  // Cold-load resume: restore any in-flight blackjack match on wallet-connect (mirrors
+  // useBattleshipPvp's session.resume()). The arena allocator suppresses re-allocation for a
+  // resuming game, so without this the match is unreachable until a manual "Find match" click.
+  // Guard on hasResumableMatch so a FRESH load still routes through the arena-entry flow below.
+  useEffect(() => {
+    if (!walletAddress) return;
+    if (phase !== "idle") return;
+    if (hasResumableMatch("blackjack")) queue();
+  }, [walletAddress, phase, queue]);
 
   // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited blackjack's seat A in
   // the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and
