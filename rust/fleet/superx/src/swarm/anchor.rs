@@ -39,6 +39,20 @@ pub enum InnerAnchor {
         memory: InMemoryAnchor,
         doomed: Arc<std::sync::Mutex<Option<[u8; 64]>>>,
     },
+    /// Test-only backend that records the peak number of *distinct tunnels* whose
+    /// settle is in flight at once, holding each settle for `hold` so overlapping
+    /// submissions are observable. Both seats of a tunnel carry the same
+    /// `tunnel_id`, so keying the in-flight set by id counts tunnels — not seats —
+    /// letting a test distinguish cohort-concurrent draining (peak == cohort) from
+    /// a strictly sequential one (peak == 1, even though a tunnel's two seat
+    /// settles run under one `join!`).
+    #[cfg(test)]
+    SettleConcurrencyProbe {
+        memory: InMemoryAnchor,
+        active: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+        peak: Arc<std::sync::atomic::AtomicUsize>,
+        hold: std::time::Duration,
+    },
 }
 
 impl InnerAnchor {
@@ -52,6 +66,8 @@ impl InnerAnchor {
             Self::AlwaysFailsOpen => SettlementMode::Rootless,
             #[cfg(test)]
             Self::FailsFirstTunnelOpen { memory, .. } => memory.settlement_mode(),
+            #[cfg(test)]
+            Self::SettleConcurrencyProbe { memory, .. } => memory.settlement_mode(),
         }
     }
 
@@ -92,6 +108,8 @@ impl InnerAnchor {
                     memory.open(request).await
                 }
             }
+            #[cfg(test)]
+            Self::SettleConcurrencyProbe { memory, .. } => memory.open(request).await,
         }
     }
 
@@ -108,6 +126,28 @@ impl InnerAnchor {
             )),
             #[cfg(test)]
             Self::FailsFirstTunnelOpen { memory, .. } => memory.settle(request).await,
+            #[cfg(test)]
+            Self::SettleConcurrencyProbe {
+                memory,
+                active,
+                peak,
+                hold,
+            } => {
+                use std::sync::atomic::Ordering;
+                let tunnel_id = request.tunnel_id.clone();
+                {
+                    let mut in_flight = active.lock().expect("probe active lock");
+                    in_flight.insert(tunnel_id.clone());
+                    peak.fetch_max(in_flight.len(), Ordering::AcqRel);
+                }
+                tokio::time::sleep(*hold).await;
+                let settled = memory.settle(request).await;
+                active
+                    .lock()
+                    .expect("probe active lock")
+                    .remove(&tunnel_id);
+                settled
+            }
         }
     }
 }

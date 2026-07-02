@@ -100,6 +100,12 @@ impl SettleWaveGate {
         })
     }
 
+    /// The wave cohort size (always `>= 1`). The settle drain uses it to bound how
+    /// many tunnels it keeps in flight at once and to stay strictly sequential at 1.
+    pub(crate) fn cohort(&self) -> usize {
+        self.cohort
+    }
+
     /// Park until this caller is admitted into a wave. The caller proceeds to its
     /// settle submission after this returns; the next wave waits `spacing`.
     pub async fn admit(&self) {

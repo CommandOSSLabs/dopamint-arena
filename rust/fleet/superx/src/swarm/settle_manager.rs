@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{oneshot, Mutex, Notify};
+use tokio::task::JoinSet;
 use tunnel_harness::{Seat, SettledTunnel, SettlementMode, TunnelAnchorError, TunnelSettleRequest};
 
 use crate::swarm::anchor::InnerAnchor;
@@ -151,9 +152,31 @@ impl SettleManager {
             self.barrier.notified().await;
         }
         let tunnel_ids: Vec<String> = self.state.lock().await.pairs.keys().cloned().collect();
-        for tunnel_id in tunnel_ids {
-            self.settle_one(&tunnel_id).await;
+        let cohort = self.wave.cohort();
+        // Cohort 1 stays strictly sequential: each tunnel's pair fully settles
+        // before the next admits. This is the memory anchor's natural mode.
+        if cohort <= 1 {
+            for tunnel_id in tunnel_ids {
+                self.wave.admit().await;
+                self.settle_one(&tunnel_id).await;
+            }
+            return;
         }
+        // Cohort > 1: admit each tunnel through the wave, then spawn its settle so
+        // wave-admitted members overlap in flight. The `JoinSet` is held at `cohort`
+        // members — draining one before admitting the next — so the wave gate and
+        // cohort size together cap concurrency at the cohort. This is what lets a
+        // sponsored settle PTB batch fill instead of trickling one pair at a time.
+        let mut in_flight = JoinSet::new();
+        for tunnel_id in tunnel_ids {
+            self.wave.admit().await;
+            let manager = Arc::clone(&self);
+            in_flight.spawn(async move { manager.settle_one(&tunnel_id).await });
+            if in_flight.len() >= cohort {
+                in_flight.join_next().await;
+            }
+        }
+        while in_flight.join_next().await.is_some() {}
     }
 
     async fn settle_one(&self, tunnel_id: &str) {
@@ -174,7 +197,6 @@ impl SettleManager {
         };
         let result: SettleResult = match pair {
             Ok((request_a, request_b)) => {
-                self.wave.admit().await;
                 let (result_a, result_b) =
                     tokio::join!(self.inner.settle(request_a), self.inner.settle(request_b));
                 result_a.or(result_b)
@@ -321,5 +343,93 @@ mod tests {
         assert_eq!(settled_a.final_balances, Balances { a, b });
         assert_eq!(settled_a.final_balances, settled_b.final_balances);
         assert_eq!(settled_a.digest, settled_b.digest);
+    }
+
+    /// Open one tunnel on `memory` and return its id plus both signed halves.
+    /// `index` seeds distinct seat keys so every tunnel in a swarm is unique.
+    async fn build_tunnel(
+        memory: &InMemoryAnchor,
+        index: u8,
+    ) -> (String, TunnelSettleRequest, TunnelSettleRequest) {
+        let (secret_a, pk_a) = seat_keys(index.wrapping_mul(2).wrapping_add(1));
+        let (secret_b, pk_b) = seat_keys(index.wrapping_mul(2).wrapping_add(127));
+        let opened = memory
+            .open(TunnelOpenRequest {
+                protocol: ProtocolId::parse("payments.v1").unwrap(),
+                party_a: pk_a,
+                party_b: pk_b,
+                initial: Balances { a: 100, b: 100 },
+            })
+            .await
+            .unwrap();
+        let tunnel_id = opened.tunnel_id;
+        let (a, b, nonce, ts) = (120u64, 80u64, 1u64, 42u64);
+        let sig_a = sign_settlement(&secret_a, &tunnel_id, a, b, nonce, ts);
+        let sig_b = sign_settlement(&secret_b, &tunnel_id, a, b, nonce, ts);
+        let req_a = settle_request(Seat::A, &tunnel_id, sig_a, a, b, nonce, ts);
+        let req_b = settle_request(Seat::B, &tunnel_id, sig_b, a, b, nonce, ts);
+        (tunnel_id, req_a, req_b)
+    }
+
+    /// Drive `tunnels` tunnels through a manager with the given wave and return the
+    /// peak number of distinct tunnels the inner anchor saw settling at once.
+    async fn drain_peak_concurrency(tunnels: u8, cohort: usize) -> usize {
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let memory = InMemoryAnchor::default();
+        let mut requests = Vec::new();
+        for index in 0..tunnels {
+            requests.push(build_tunnel(&memory, index).await);
+        }
+
+        let active = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(InnerAnchor::SettleConcurrencyProbe {
+            memory,
+            active,
+            peak: Arc::clone(&peak),
+            hold: Duration::from_millis(40),
+        });
+        let wave = SettleWaveGate::new(cohort, Duration::ZERO);
+        let manager = SettleManager::new(inner, tunnels as u64, wave, SettlementMode::Rootless);
+        manager.begin_drain();
+
+        let mut tasks = Vec::new();
+        for (_id, req_a, req_b) in requests {
+            let ma = Arc::clone(&manager);
+            let mb = Arc::clone(&manager);
+            tasks.push(tokio::spawn(async move { ma.submit(Seat::A, req_a).await }));
+            tasks.push(tokio::spawn(async move { mb.submit(Seat::B, req_b).await }));
+        }
+        for task in tasks {
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .expect("seat settles within deadline")
+                .unwrap()
+                .expect("settle succeeds");
+        }
+        peak.load(Ordering::Acquire)
+    }
+
+    #[tokio::test]
+    async fn drain_overlaps_cohort_members_in_flight() {
+        // A cohort of 4 must fly 4 tunnels at once, not trickle one pair at a time.
+        let peak = drain_peak_concurrency(4, 4).await;
+        assert_eq!(
+            peak, 4,
+            "settle_cohort=4 must overlap all four tunnels in flight, saw peak {peak}"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_serializes_when_cohort_is_one() {
+        // cohort=1 keeps exactly one tunnel in flight even though each tunnel's two
+        // seat settles run concurrently under one `join!`.
+        let peak = drain_peak_concurrency(4, 1).await;
+        assert_eq!(
+            peak, 1,
+            "settle_cohort=1 must settle strictly one tunnel at a time, saw peak {peak}"
+        );
     }
 }
