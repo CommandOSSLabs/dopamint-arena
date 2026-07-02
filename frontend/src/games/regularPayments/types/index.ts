@@ -6,7 +6,6 @@ export type SessionPhase =
   | "idle"
   | "opening"
   | "shopping"
-  | "paying"
   | "settling"
   | "error";
 

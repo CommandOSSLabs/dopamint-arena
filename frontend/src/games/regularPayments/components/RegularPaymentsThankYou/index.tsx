@@ -21,7 +21,14 @@ export function RegularPaymentsThankYou({
       setSecondsLeft((s) => {
         if (s <= 1) {
           clearInterval(id);
-          session.completeRound();
+
+          // Cannot update a component (...) while rendering a different component, timeout to avoid that
+          const roundId = setTimeout(() => {
+            session.completeRound();
+
+            clearTimeout(roundId);
+          }, 0);
+
           return 0;
         }
 

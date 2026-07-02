@@ -3085,6 +3085,7 @@ dependencies = [
  "tunnel-core",
  "tunnel-cross",
  "tunnel-harness",
+ "tunnel-payments",
  "tunnel-quantum-poker",
  "tunnel-tic-tac-toe",
  "tunnel-world-canvas",

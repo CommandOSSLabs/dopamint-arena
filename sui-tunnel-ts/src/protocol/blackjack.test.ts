@@ -1,18 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computeCommitment } from "../core/commitment";
 import {
+  computeCommitment,
+  MIN_SALT_LEN,
+  verifyCommitment,
+} from "../core/commitment";
+import {
+  actorFor,
   BlackjackMove,
   BlackjackProtocol,
   BlackjackSlotSecret,
   BlackjackState,
-  FIXED_PLAYER_A,
-  MIN_BET,
-  actorFor,
   deriveRank,
+  FIXED_PLAYER_A,
   getDealerParty,
   getPlayerParty,
   blackjackHandValue as handValue,
+  MIN_BET,
+  secureCommitMove,
 } from "./blackjack";
 
 const proto = new BlackjackProtocol();
@@ -140,6 +145,68 @@ test("both commits advance draw_commit -> draw_reveal", () => {
   s = proto.applyMove(s, commitMove(secret(2)), "B");
   assert.equal(s.phase, "draw_reveal");
   assert.ok(s.pendingCommitA && s.pendingCommitB);
+});
+
+test("secureCommitMove draws the secret from the supplied byte source, not Math.random", () => {
+  const requested: number[] = [];
+  let n = 0;
+  const bytes = (len: number) => {
+    requested.push(len);
+    return Uint8Array.from({ length: len }, () => ++n);
+  };
+  const realRandom = Math.random;
+  Math.random = () => {
+    throw new Error("Math.random must not be used to mint a commit secret");
+  };
+  try {
+    const mv = secureCommitMove(bytes);
+    assert.deepEqual(requested, [1, MIN_SALT_LEN]);
+    assert.equal(mv.localSecret!.value.length, 1);
+    assert.equal(mv.localSecret!.salt.length, MIN_SALT_LEN);
+    assert.ok(
+      verifyCommitment(
+        mv.commitment,
+        mv.localSecret!.value,
+        mv.localSecret!.salt,
+      ),
+    );
+  } finally {
+    Math.random = realRandom;
+  }
+});
+
+test("secureCommitMove yields a commit applyMove accepts and stores", () => {
+  let s = placeBet(fresh());
+  let bj = 0;
+  const bytes = (len: number) =>
+    Uint8Array.from({ length: len }, () => (bj = (bj + 7) & 0xff));
+  const mv = secureCommitMove(bytes);
+  s = proto.applyMove(s, mv, "A");
+  assert.deepEqual(s.localSecretA, mv.localSecret);
+  assert.equal(s.phase, "draw_commit");
+});
+
+test("randomMove draw_commit is seed-deterministic (sim/replay contract, not for stakes)", () => {
+  // Pins the replay invariant: the same seed must reproduce the same commit, so a
+  // (seed, config) pair fully determines a sim workload. A CSPRNG slipped into
+  // randomMove would break this — which is precisely why real stakes mint via
+  // secureCommitMove(core.randomBytes), never randomMove. See randomSecret's contract.
+  const seeded = (seed: number) => {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const s = placeBet(fresh()); // draw_commit, A owes a commit
+  const m1 = proto.randomMove(s, "A", seeded(42));
+  const m2 = proto.randomMove(s, "A", seeded(42));
+  assert.ok(m1?.kind === "commit" && m2?.kind === "commit");
+  assert.deepEqual(m1.commitment, m2.commitment);
+  assert.deepEqual(m1.localSecret, m2.localSecret);
 });
 
 test("a party cannot commit twice for the same card", () => {

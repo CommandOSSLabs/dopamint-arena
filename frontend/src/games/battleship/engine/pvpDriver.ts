@@ -6,11 +6,12 @@
  * own `shoot` is the one human-driven move. See ADR 0003.
  */
 
-import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { BattleshipMove, BattleshipState } from "../protocol/battleship";
-import type { FleetSecret } from "./selfPlay";
+import { pendingBoardReveal } from "../protocol/battleship";
 import { proveCell } from "./merkle";
+import type { FleetSecret } from "./selfPlay";
 
 type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
 
@@ -64,6 +65,16 @@ export function proposeDue(
 ): boolean {
   const st = dt.state;
   if (st.winner !== 0) return false;
+
+  // After sinking the opponent, this seat must reveal its own board to claim the win.
+  if (st.phase === "awaitingBoardReveal") {
+    if (pendingBoardReveal(st) !== role) return false;
+    dt.propose(
+      { type: "reveal_board", cells: secret.board, salts: secret.salts },
+      0n,
+    );
+    return true;
+  }
 
   if (st.phase === "awaitingCommits") {
     const myCommit = role === "A" ? st.commitA : st.commitB;

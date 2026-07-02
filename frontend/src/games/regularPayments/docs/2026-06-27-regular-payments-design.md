@@ -1,8 +1,8 @@
 # Regular Payments — Tunnel Mart (VinMart-style grocery checkout)
 
-> **Status:** Approved (design) — **pivot in progress** (bot + WS migration pending server WIP)  
+> **Status:** Approved — **bot-server arena path shipped** (`feat/regular-payments-bot`)  
 > **Date:** 2026-06-27  
-> **Last updated:** 2026-06-30
+> **Last updated:** 2026-07-02
 > **Scope:** **Regular Payments** — a consumer checkout app in the arena payment workspace.  
 > **Package:** `frontend/src/games/regularPayments/`  
 > **Register id:** `regular-payments` (retire `micro-payments`)  
@@ -26,12 +26,15 @@ retired sections** (marked below).
 | Who opens tunnel | User wallet at Go shop (self-play) | **Shop bot (seat B) opens** — *provisional; confirm when bot WIP lands* |
 | UI / styling | — | **Walrus Memory design system** — `frontend/src/designSystem/`, shadcn/ui, `/design-system` |
 
-**Interim shipped code (today):** self-play grocery shop on `feat/regular-payments-grocery` —
-useful for UI/catalog/TPS experiments; **not** the long-term architecture.
+**Shipped (2026-07):** `useRegularPaymentsSession` drives **`DistributedTunnel` + `/v1/mp`** against
+the colocated fleet shop bot (`regular_payments` / `ShopPosStrategy`). Arena entry uses
+`allocateArenaGameForPlay` (ADR-0025/0028) — same pattern as blackjack, bomb-it, etc.
 
-**Migration gate:** Wait for teammate **bot + WS feature** (matchmaking, relay messages, open/fund
-handshake) to land before frontend FIND SHOP migration. Final wire sequence is owned by that WIP,
-not copied wholesale from another game.
+**Retired:** `OffchainTunnel.selfPlay` / `openAndFundSelfPlay` — do not reintroduce.
+
+**IDs (maintainers):** UI registry id = `regular-payments` (hyphen). Backend arena id =
+`regular_payments` (underscore) — `profile_for`, `FLEET_COLOCATED_GAMES`, `registerSession`,
+`allocateArenaGameForPlay`.
 
 ---
 
@@ -75,8 +78,9 @@ Party B  =  Store POS (shop bot — managed key on server fleet)
 
 Each shopping trip (target):
 
-1. **Lobby** — **Find shop** → `queue.join("regular-payments")` on `/v1/mp` → paired with shop bot.
-2. **Fund** — bot opens tunnel (target); shopper deposits **10 MTPS** budget; bot deposits activation dust.
+1. **Lobby** — **Find shop** → `allocateArenaGameForPlay({ arenaGameId: "regular_payments" })` →
+   backend reserves fleet bot + tunnel; shopper deposits seat A (`stake_each` from `profile_for`).
+2. **Fund** — fleet pre-opens tunnel and funds seat B; shopper funds seat A in the allocate PTB.
 3. **Shop** — each **add to cart** = `payments.v1` step `{ from: "A", amount: catalogPrice }` over relay;
    bot co-signs if valid. **Remove** = B→A refund (bot cooperates — detail TBD in bot WIP).
 4. **Pay now** — **settle only** (transcript already contains all payment steps).
@@ -98,22 +102,22 @@ truth for FE + shop bot. Moves must match catalog prices (`verifyMove` on FE; mi
 | Layer | Responsibility | Target |
 |-------|----------------|--------|
 | **UI** | Lobby / Shop / Thank you | `components/RegularPayments*` |
-| **Hook** | Session lifecycle, screens, telemetry | `useRegularPaymentsPvpSession` (new; replaces self-play hook) |
+| **Hook** | Session lifecycle, screens, telemetry | `useRegularPaymentsSession` |
 | **Session core** | Cart math, `verifyMove`, pure helpers | `utils/sessionCore.ts` (+ tests) |
 | **Protocol** | Off-chain transitions | `sui-tunnel-ts` **`payments.v1`** |
 | **Engine** | Co-signed steps | `DistributedTunnel` + `MpClient` relay transport |
 | **Counterparty** | Seat B co-sign | Shop bot (`fleet-serve` / agent kit — WIP) |
 | **Open / fund** | On-chain | Bot opens (target) → shopper deposits budget → bot deposits dust |
 | **Settle** | Close + transcript | `POST /settle` + `close_cooperative_with_root` fallback |
-| **Telemetry** | TPS | `registerSession` + `sendHeartbeat` (`game: "regular-payments"`) |
+| **Telemetry** | TPS | `registerSession` + `sendHeartbeat` (`game: "regular_payments"`) |
 
-### 3.2 Interim (self-play — retire after bot migration)
+### 3.2 Retired (self-play — do not restore)
 
-| Layer | Today |
-|-------|-------|
+| Layer | Was |
+|-------|-----|
 | Engine | `OffchainTunnel.selfPlay` |
 | Open | `openAndFundSelfPlay` (one wallet, both seats) |
-| Cart step | `tunnel.step` on add/remove in browser |
+| Cart step | `tunnel.step` with both keys local (~200 TPS; not relay+bot) |
 
 ### 3.3 On-chain vs off-chain (target)
 
@@ -133,7 +137,7 @@ truth for FE + shop bot. Moves must match catalog prices (`verifyMove` on FE; mi
 
 | Field | Value | Notes |
 |-------|-------|-------|
-| `depositBudget` (party A) | **10 MTPS** | Shopper budget |
+| `depositBudget` (party A) | **500 MTPS** | `DEPOSIT_BUDGET` = `mtps(500)`; matches `REGULAR_PAYMENTS.stake_each` |
 | `depositB` (activation dust) | **1** base unit | Shop seat; not shop capital |
 | Catalog prices | ~0.01–0.02 MTPS | High step count per full cart |
 
@@ -163,7 +167,7 @@ lobby ──(Find shop, match+open+fund)──► shop ──(Pay now, settle on
 - Title **Tunnel Mart** / Regular Payments
 - **Find shop** — disabled until wallet connected
 - States: idle → matching → funding → error
-- Interim label **Go shop** remains until migration
+- CTA label **Find shop** (`findShop` in hook)
 
 ### 4.3 Shop
 
@@ -199,38 +203,39 @@ Pay now no longer runs an off-chain stream. Catalog + cart are locked only while
 
 ## 5. Sequence diagrams
 
-### 5.1 Happy path (target — bot WIP)
+### 5.1 Happy path (shipped — arena + fleet)
 
 ```mermaid
 sequenceDiagram
     participant U as Shopper (A)
+    participant BE as Backend arena
     participant WS as /v1/mp relay
     participant Bot as Shop bot (B)
-    participant C as tunnel::Tunnel
     participant S as Backend /settle
 
-    U->>WS: Find shop (queue.join)
-    WS->>U: match.found (role A)
-    WS->>Bot: match.found (role B)
-    Bot->>C: open tunnel (partyA=shopper, partyB=shop)
-    Bot->>WS: tunnel.opened + peer messages
-    WS->>U: tunnelId
-    U->>C: deposit (budget A)
-    Bot->>C: deposit (dust B)
+    U->>BE: Find shop — allocateArenaGameForPlay
+    BE->>Bot: reserve match + open tunnel (B funded)
+    BE->>U: allocation + tunnelId
+    U->>BE: deposit seat A (stake_each)
+    U->>WS: joinMatch + hello (eph key)
+    Bot->>WS: hello (fleet eph key)
     U->>U: shop — pick items
     loop each add to cart
-        U->>WS: propose PAY A→B
+        U->>WS: propose { from: A, amount: catalogPrice }
         WS->>Bot: MOVE
-        Bot->>WS: ACK (co-sign)
+        Bot->>Bot: RegularPayments catalog check
+        Bot->>WS: co-sign ACK
         WS->>U: onConfirmed
-        Note over U: TPS++
+        Note over U: TPS++ (relay+bot RTT ~15–18/s)
     end
-    U->>S: Pay now → POST /settle
-    S->>C: close_cooperative_with_root
+    U->>WS: { t: stop }
+    Bot->>WS: settleHalf
+    U->>S: Pay now — coSignCloseFromPeerRoot → POST /settle
+    S->>S: close_cooperative_with_root
     U->>U: thankYou → lobby
 ```
 
-*Open/fund message order is **provisional** until bot WIP documents the canonical handshake.*
+**Settle is cooperative close only** — not `endMatch` (poker) and not `isTerminal` for `payments.v1`.
 
 ### 5.2 Interim self-play (retire)
 
@@ -271,7 +276,7 @@ sequenceDiagram
 ```typescript
 registerSession({
   userAddress,
-  game: "regular-payments",
+  game: "regular_payments", // underscore — backend arena id
   tunnels: [{ tunnelId, partyA, partyB }],
 });
 ```
@@ -283,17 +288,22 @@ registerSession({
 | Shop header chip | Rolling 1s TPS **during shopping** |
 | Telemetry panel | Same heartbeat path as other arena apps |
 
-### 6.4 Throughput (target)
+### 6.4 Throughput (shipped)
 
-- Manual picks: human-paced (low TPS)
-- Auto mode: time-budget batch loop (Bomb It autopilot pattern) — **not** `requestAnimationFrame`
-- Post-migration: label as **relay + bot** lane, not self-play
+- **Lane:** relay + bot (genuine two-party). ~15–18 TPS per pick stream is RTT-limited; ~200 TPS was
+  self-play (both keys local) — not comparable.
+- **Manual picks:** `AUTO_ADD_INTERVAL_MS` pacing; fly-to-cart every pick.
+- **Auto mode (P5):** `AUTO_BURST_BUDGET_MS` time-budget loop + `sleep(0)` between picks — **not**
+  `requestAnimationFrame`. Cart/balance UI flushes every `AUTO_UI_BATCH_STEPS` confirms;
+  `cartFlyCue` patches every pick for animation. `pickInFlight` gates Pay now.
+
+Constants: `utils/constants.ts`. Session logic: `hooks/useRegularPaymentsSession.ts`.
 
 ### 6.5 Future levers
 
 - Browser Web Worker for tunnel client (see `docs/design/frontend-tunnel-client-worker.md` on remote branch)
-- `fleet-serve` shop bots at scale
-- Batch UI updates during auto burst
+- Cart remove = B-initiated refund move (stubbed in FE today)
+- `fleet-serve` shop bots at scale beyond colocated cap
 
 ---
 
@@ -386,14 +396,15 @@ tunnel.propose({ from: "A", amount: priceMtps }, ...)
 | Phase | Deliverable | Status |
 |-------|-------------|--------|
 | **P0** | Design doc + `regular-payments` registry | Done |
-| **P1** | Types, utils, self-play hook skeleton | Done (interim) |
-| **P2** | Grocery shop UI (lobby / shop / thank you) | In progress |
-| **P3** | Cart pick = off-chain step (interim self-play) | In progress |
-| **P4** | Pay now = settle only | In progress |
-| **P5** | TPS batch + telemetry during shop | Planned |
-| **P6** | **Bot + WS** (server WIP) | **Blocked — teammate** |
-| **P7** | FIND SHOP migration (`DistributedTunnel`) | After P6 |
-| **P8** | Remove self-play path | After P7 |
+| **P1** | Types, utils, session core | Done |
+| **P2** | Grocery shop UI (lobby / shop / thank you) | Done |
+| **P3** | Cart pick = off-chain co-signed step (relay+bot) | Done |
+| **P4** | Pay now = cooperative settle (`stop` → `settleHalf`) | Done |
+| **P5** | Auto burst TPS + batched UI + shop telemetry | Done |
+| **P6** | Fleet bot + `RegularPayments` protocol (Rust) | Done |
+| **P7** | Arena FIND SHOP (`DistributedTunnel` + `MpClient`) | Done |
+| **P8** | Remove self-play path | Done (retired) |
+| **P9** | Cart remove (B refund move) | Planned |
 
 ---
 
@@ -410,11 +421,13 @@ tunnel.propose({ from: "A", amount: priceMtps }, ...)
 | Lobby CTA (target) | **Find shop** |
 | Shopper seat | **A** |
 | Shop bot seat | **B** |
-| Who opens tunnel (target) | **Shop bot (B)** — confirm with bot WIP |
+| Who opens tunnel | **Fleet** pre-opens at allocate; shopper funds A |
 | Back from shop | UI only → lobby; no settle |
 | TPS window | During **shopping** |
-| Auto throughput | Time-budget batch + `sleep(0)` — not rAF |
-| Migration gate | Wait for bot + WS WIP before FIND SHOP coding |
+| Auto throughput | Time-budget burst + batched UI (`AUTO_UI_BATCH_STEPS`) |
+| Pick validation | FE `verifyMove` + Rust `RegularPayments` / `is_catalog_amount` |
+| Settle wire | `{ t: "stop" }` → `settleHalf` → `/settle` (label `regular-payments`) |
+| Backend scope | Additive: `regular_payments` in `FLEET_COLOCATED_GAMES` + `profile_for` only |
 | Theme / components | Walrus Memory design system — per [coding-patterns doc](./2026-06-28-coding-patterns.md) §3 |
 | Thank you | 3s auto-return + Go lobby |
 
@@ -453,3 +466,47 @@ Regular Payments is **app #1** of three planned payment-category apps:
 | Agent allowance | `example_agent_allowance` | No (pull / cap) |
 
 Do not merge these into one UI.
+
+---
+
+## 15. Maintainer quick reference
+
+### Backend (isolated per game — does not change other games' profiles)
+
+| Knob | Value |
+|------|-------|
+| `profile_for` | `rust/fleet/core/src/play_match.rs` → `REGULAR_PAYMENTS` (`stake_each: 500`) |
+| Fleet dispatch | `colocated.rs` → `"regular_payments" => play_regular_payments` |
+| Protocol | `rust/protocols/payments/src/regular_payments.rs` + `catalog.rs` |
+| Bot strategy | `ShopPosStrategy` — co-signs A moves; never initiates purchases |
+| Deploy gate | `FLEET_COLOCATED_GAMES` includes `regular_payments` (`infra/src/components/Backend.ts`) |
+| Local dev | `backend/tunnel-manager/.env.example` |
+
+### Frontend entrypoints
+
+| File | Role |
+|------|------|
+| `hooks/useRegularPaymentsSession.ts` | Session SSoT: arena, tunnel, auto loop, settle |
+| `utils/sessionCore.ts` | `verifyMove`, cart math (unit-tested) |
+| `utils/catalog.ts` | Price allowlist — must match Rust `catalog.rs` |
+| `onchain/arenaPlay.ts` | Shared `allocateArenaGameForPlay` (not game-specific) |
+
+### Per-pick contract
+
+1. `verifyMove(state, { from: "A", amount: product.priceMtps }, PRODUCTS)` on FE.
+2. `tunnel.propose(move, moveTs++)` over relay.
+3. Bot applies `RegularPayments::apply_move` (catalog price guard on seat A).
+4. `onConfirmed` → telemetry + TPS; cart updated in memory (batched in auto burst).
+
+### Settle contract
+
+1. `channel.sendPeer({ t: "stop" })`.
+2. Await bot `settleHalf` (`sig` + `transcriptRoot`).
+3. `coSignCloseFromPeerRoot` → `settleViaBackend` / `closeCooperativeWithRoot`.
+4. **No mock digest.** Errors restore `phase: "shopping"`.
+
+### PR / commit checklist
+
+- Registry id (`regular-payments`) ≠ arena id (`regular_payments`) — both intentional.
+- Catalog changes require FE + Rust + agent kit alignment.
+- `pnpm exec tsc --noEmit` in `frontend/`; `sessionCore.test.ts` via `tsx`.

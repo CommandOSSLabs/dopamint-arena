@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { Loader2 } from "lucide-react";
 import { useRef } from "react";
 import type { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 import { RegularPaymentsShopCartFlyLayer } from "./RegularPaymentsShopCartFlyLayer";

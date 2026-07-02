@@ -77,11 +77,9 @@ export function RegularPaymentsShopCartFlyLayer({
     const cue = session.cartFlyCue;
     if (!cue || cue.seq <= lastFlySeqRef.current) return;
 
-    if (!session.cartTotal) return;
-
     lastFlySeqRef.current = cue.seq;
     spawnFlyForProduct(cue.productId, cue.emoji);
-  }, [session.cartFlyCue, spawnFlyForProduct, session.cartTotal]);
+  }, [session.cartFlyCue, spawnFlyForProduct]);
 
   if (flies.length === 0) return null;
 

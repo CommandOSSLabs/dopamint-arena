@@ -17,9 +17,10 @@ use tunnel_bomb_it::{BombIt, BombItStrategy};
 use tunnel_caro::{CaroSeries, CaroSeriesStrategy, CaroStrength};
 use tunnel_cross::{Cross, CrossStrategy};
 use tunnel_harness::{
-    Balances, DriverOutcome, MoveStrategy, PartyDriver, Protocol, SeatParts, Signer,
-    TranscriptRecorder, TunnelAnchor,
+    Balances, DriverOutcome, DriverRunControl, MoveStrategy, PartyDriver, Protocol, SeatParts,
+    Signer, TranscriptRecorder, TunnelAnchor,
 };
+use tunnel_payments::{PayMove, Payments, RegularPayments, ShopPosStrategy};
 use tunnel_quantum_poker::{QuantumPoker, QuantumPokerStrategy};
 use tunnel_tic_tac_toe::{TicTacToeDifficulty, TicTacToeSeries, TicTacToeSeriesStrategy};
 use tunnel_world_canvas::{WorldCanvasStroke, WorldCanvasStrokeStrategy};
@@ -116,6 +117,14 @@ pub const BATTLESHIP: GameProfile = GameProfile {
     stake_each: 1,
 };
 
+/// Regular Payments (Tunnel Mart): shopper budget per seat at arena open — matches FE
+/// `DEPOSIT_BUDGET` (`mtps(500)` → 500 whole MTPS). The shop bot (seat B) never initiates;
+/// it co-signs catalog-priced A→B moves from the human shopper.
+pub const REGULAR_PAYMENTS: GameProfile = GameProfile {
+    game_id: "regular_payments",
+    stake_each: 500,
+};
+
 /// Caro's pinned board size — the FE canonical (`PvpScene` default). The arena path can't negotiate
 /// it (joins by match id), so both the bot and the FE arena consumer must use this exact size.
 const CARO_BOARD_SIZE: usize = 15;
@@ -133,6 +142,7 @@ pub fn profile_for(game: &str) -> Option<GameProfile> {
         "tic_tac_toe" => Some(TIC_TAC_TOE),
         "caro" => Some(CARO),
         "battleship" => Some(BATTLESHIP),
+        "regular_payments" => Some(REGULAR_PAYMENTS),
         _ => None,
     }
 }
@@ -178,6 +188,25 @@ where
         .map_err(|e| anyhow!("send hello: {e:?}"))?;
     let opponent_pk = recv_hello(&channel).await?;
 
+    // Graceful stop: the FE's `{t:"stop"}` (Pay now) must wind the bot down and emit `settleHalf`.
+    // Non-terminal protocols (regular payments, world canvas, …) never finish otherwise.
+    let run_control = DriverRunControl::graceful_unbounded();
+    let stop_control = run_control.clone();
+    let game_id = profile.game_id;
+    let frame_transport = channel.take_frame_transport();
+    let stop_listener = tokio::spawn(async move {
+        while let Some(msg) = channel.recv_peer().await {
+            if msg == PeerMsg::Stop {
+                tracing::info!(
+                    game = game_id,
+                    "peer stop received — requesting graceful settle"
+                );
+                stop_control.request_stop();
+                break;
+            }
+        }
+    });
+
     // 2. Hand the driver the demuxed frame transport + the anchor; it opens, plays, and settles.
     let parts = SeatParts {
         protocol,
@@ -189,21 +218,18 @@ where
         },
         seat: match_info.role.seat(),
     };
-    let driver = PartyDriver::new(
-        parts,
-        strategy,
-        channel.take_frame_transport(),
-        anchor,
-        recorder,
-    );
+    let driver = PartyDriver::new(parts, strategy, frame_transport, anchor, recorder)
+        .with_run_control(run_control);
     let mut ts = 1u64;
-    let (outcome, _recorder) = driver
+    let driver_result = driver
         .run(MAX_MOVES, move || {
             ts += 1;
             ts
         })
         .await
-        .map_err(|e| anyhow!("party driver run: {e:?}"))?;
+        .map_err(|e| anyhow!("party driver run: {e:?}"));
+    stop_listener.abort();
+    let (outcome, _recorder) = driver_result?;
     Ok(outcome)
 }
 
@@ -473,6 +499,39 @@ where
             .map_err(|e| anyhow!("caro strategy: {e:?}"))?;
     play_match(
         protocol, strategy, &CARO, &info, channel, anchor, signer, recorder,
+    )
+    .await
+}
+
+/// Regular Payments: `payments.v1` shop POS — the fleet bot (seat B) co-signs shopper moves and
+/// never initiates purchases.
+pub async fn play_regular_payments<T, A, R>(
+    channel: MatchChannel<T>,
+    anchor: A,
+    signer: DurableSigner,
+    role: Role,
+    opponent_wallet: &str,
+    recorder: R,
+) -> Result<DriverOutcome>
+where
+    T: RelayTransport,
+    A: TunnelAnchor + Send + Sync,
+    R: TranscriptRecorder<PayMove> + Send + Sync,
+{
+    let info = MatchInfo {
+        match_id: String::new(),
+        role,
+        opponent_wallet: opponent_wallet.to_owned(),
+    };
+    play_match(
+        RegularPayments(Payments { max_transfers: 0 }),
+        ShopPosStrategy,
+        &REGULAR_PAYMENTS,
+        &info,
+        channel,
+        anchor,
+        signer,
+        recorder,
     )
     .await
 }

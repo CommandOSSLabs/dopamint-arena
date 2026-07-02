@@ -1,4 +1,4 @@
-use crate::{PayMove, PayState, Payments};
+use crate::{PayMove, PayState, Payments, RegularPayments};
 use tunnel_harness::{MoveStrategy, MoveStrategyContext, ProtocolError, Seat};
 
 #[derive(Clone, Copy, Debug)]
@@ -12,6 +12,32 @@ impl PaymentsStrategy {
             return Err(ProtocolError("payment amount must be positive".into()));
         }
         Ok(Self { payment_amount })
+    }
+}
+
+/// Shop POS (seat B): never initiates — only co-signs valid shopper moves over the relay.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShopPosStrategy;
+
+impl MoveStrategy<Payments> for ShopPosStrategy {
+    async fn plan_move(
+        &mut self,
+        _state: &PayState,
+        _seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<PayMove> {
+        None
+    }
+}
+
+impl MoveStrategy<RegularPayments> for ShopPosStrategy {
+    async fn plan_move(
+        &mut self,
+        _state: &PayState,
+        _seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<PayMove> {
+        None
     }
 }
 

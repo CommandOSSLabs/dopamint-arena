@@ -392,6 +392,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (!move) return;
     autoNonceRef.current = targetNonce;
     window.setTimeout(() => {
+      // The per-nonce debounce has done its job (it stopped a second timer racing this one during the
+      // delay); release it NOW that the timer fired. If the send self-cancels below — the nonce moved,
+      // a pending appeared, or a backgrounded tab fired us late after a resync changed the state — a
+      // later trigger (an incoming frame, a resync's onReconciled) must be free to re-schedule this
+      // nonce. Leaving it set stranded the proposer here forever: `pending=false`, never proposes the
+      // next reveal, surviving every resync — the "opponent's turn" reveal deadlock.
+      autoNonceRef.current = -1n;
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
       if (settlingRef.current) return;
