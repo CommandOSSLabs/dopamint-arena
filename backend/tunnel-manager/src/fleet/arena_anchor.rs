@@ -598,6 +598,21 @@ mod tests {
         );
     }
 
+    // Cross-language golden: the same (0, total) forfeit vector above serializes to a fixed hex,
+    // independently pinned on the TS side (forfeit.test.ts's "forfeit settlement (partyA=0,
+    // partyB=total) matches the Rust golden") against the SAME literal. `serialize_settlement_with_root`
+    // is already byte-parity-pinned generically (wire.rs / wire.test.ts); this locks the forfeit-shaped
+    // inputs so a field-order/width drift on either side is caught without new golden infra.
+    #[test]
+    fn forfeit_settlement_matches_ts_golden() {
+        let canonical = canonical_bytes("0xab", 0, 2000, 1, 42, &[9u8; 32]);
+        assert_eq!(canonical.len(), 121);
+        assert_eq!(
+            hex::encode(&canonical),
+            "7375695f74756e6e656c3a3a736574746c656d656e745f763200000000000000000000000000000000000000000000000000000000000000ab000000000000000000000000000007d00000000000000001000000000000002a0909090909090909090909090909090909090909090909090909090909090909"
+        );
+    }
+
     // A split that CONSERVES the pot (500 + 1500 == 2000) but hands the human 500 back leaves the bot
     // worse off than a true forfeit (which entitles it to the whole pot). Even with a valid human
     // signature it must be rejected — the money-safety floor, not just conservation.
