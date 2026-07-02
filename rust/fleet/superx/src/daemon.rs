@@ -30,7 +30,9 @@ use crate::swarm::report::SwarmReport;
 
 /// Default control socket: `$XDG_RUNTIME_DIR/fleet-superx.sock` when the runtime
 /// dir is set (per-user, cleaned on logout), else `/tmp/fleet-superx.sock`.
-fn default_socket() -> PathBuf {
+/// Shared by the daemon (bind default) and the client (connect default) so both
+/// agree on the same path with no flags.
+pub fn default_socket() -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"));
