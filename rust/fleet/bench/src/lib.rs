@@ -9,6 +9,7 @@ mod pre_open_gate;
 pub mod protocols;
 pub mod report;
 pub mod resources;
+mod settle_wave_gate;
 pub mod stats;
 pub mod swarm;
 
