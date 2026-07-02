@@ -222,6 +222,7 @@ mod tests {
                 settle_spacing: Duration::ZERO,
             },
             extra: vec![],
+            heartbeat_sink: None,
         }
     }
 

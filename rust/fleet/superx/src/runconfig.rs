@@ -26,10 +26,17 @@ pub struct RunConfig {
     pub initial_balance: u64,
     pub cohorts: CohortWire,
     pub extra: Vec<String>,
+    /// Sink root (`http://<sink-addr>`) the daemon's heartbeat sink is bound at,
+    /// or `None` when the daemon ran without `--sink-addr`. [`swarm_args`] appends
+    /// `--heartbeat-url <root>/runs/<run_id>` so each swarm posts run-scoped
+    /// telemetry the sink can fold back to this run.
+    pub heartbeat_sink: Option<String>,
 }
 
 impl RunConfig {
-    /// Fold a daemon-generated `run_id` into a client's [`StartRun`].
+    /// Fold a daemon-generated `run_id` into a client's [`StartRun`]. Telemetry is
+    /// off by default; the daemon sets [`RunConfig::heartbeat_sink`] when it runs a
+    /// sink.
     pub fn from_start(start: StartRun, run_id: String) -> Self {
         Self {
             run_id,
@@ -44,6 +51,7 @@ impl RunConfig {
             initial_balance: start.initial_balance,
             cohorts: start.cohorts,
             extra: start.extra,
+            heartbeat_sink: None,
         }
     }
 }
@@ -99,6 +107,16 @@ pub fn swarm_args(cfg: &RunConfig, swarm_index: u64) -> Vec<String> {
     }
     args.push("--settle-spacing-ms".to_string());
     args.push(cfg.cohorts.settle_spacing.as_millis().to_string());
+    // Run-scope the swarm's telemetry under the sink root so the sink folds every
+    // heartbeat back to this run (the run id rides the URL path).
+    if let Some(sink_root) = &cfg.heartbeat_sink {
+        args.push("--heartbeat-url".to_string());
+        args.push(format!(
+            "{}/runs/{}",
+            sink_root.trim_end_matches('/'),
+            cfg.run_id
+        ));
+    }
     args.extend(cfg.extra.iter().cloned());
     args
 }
@@ -172,6 +190,22 @@ mod tests {
                 flag(&swarm_args(&rep, i), "--tunnels")
             );
             assert_eq!(flag(&swarm_args(&seq, i), "--tunnels"), Some("7"));
+        }
+    }
+
+    #[test]
+    fn heartbeat_url_is_run_scoped_only_when_a_sink_is_set() {
+        let mut c = cfg(SpawnMode::Distribute, 2, 4);
+        // No sink configured: swarms run without live telemetry.
+        assert_eq!(flag(&swarm_args(&c, 0), "--heartbeat-url"), None);
+        // Sink configured: each swarm posts to `<root>/runs/<run_id>`, trailing
+        // slash on the root notwithstanding.
+        c.heartbeat_sink = Some("http://127.0.0.1:9000/".to_string());
+        for i in 0..2 {
+            assert_eq!(
+                flag(&swarm_args(&c, i), "--heartbeat-url"),
+                Some("http://127.0.0.1:9000/runs/run-1")
+            );
         }
     }
 

@@ -423,6 +423,8 @@ mod tests {
             registry: Arc::new(Registry::new()),
             self_exe: PathBuf::from("/nonexistent/fleet-superx-not-here"),
             nonce: 0x9999,
+            sink: None,
+            heartbeat_base: None,
         });
         let serve_ctx = ctx.clone();
         tokio::spawn(async move {

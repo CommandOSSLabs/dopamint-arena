@@ -93,6 +93,8 @@ async fn stop_drains_running_swarm_to_finished_with_no_half_open() {
         // The test binary can't `run-swarm`; spawn the real in-crate binary.
         self_exe: PathBuf::from(env!("CARGO_BIN_EXE_fleet-superx")),
         nonce: 0xABCD_1234,
+        sink: None,
+        heartbeat_base: None,
     });
     let serve_ctx = ctx.clone();
     tokio::spawn(async move {

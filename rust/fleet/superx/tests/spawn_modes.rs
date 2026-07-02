@@ -38,6 +38,7 @@ fn memory_cfg(mode: SpawnMode, swarms: u64, tunnels: u64, cohorts: CohortWire) -
         initial_balance: 1_000_000,
         cohorts,
         extra: Vec::new(),
+        heartbeat_sink: None,
     }
 }
 

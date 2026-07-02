@@ -7,4 +7,5 @@ pub mod merge;
 pub mod proto;
 pub mod registry;
 pub mod runconfig;
+pub mod sink;
 pub mod spawn;

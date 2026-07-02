@@ -3110,6 +3110,7 @@ dependencies = [
 name = "fleet-superx"
 version = "0.1.0"
 dependencies = [
+ "axum 0.7.9",
  "clap",
  "futures-util",
  "getrandom 0.2.17",

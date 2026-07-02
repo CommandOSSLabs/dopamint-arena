@@ -25,6 +25,7 @@ use crate::proto::SpawnMode;
 use crate::proto::{decode_line, encode_line, Request, Response, RunSummary};
 use crate::registry::{Registry, RunRecord, RunState};
 use crate::runconfig::RunConfig;
+use crate::sink::{serve_sink, Sink};
 use crate::spawn::{
     run_replicate_or_distribute_observed, run_sequential_observed, self_exe, signal_swarm,
     SwarmError, SwarmProgressObserver,
@@ -63,16 +64,27 @@ pub struct DaemonContext {
     pub registry: Arc<Registry>,
     pub self_exe: PathBuf,
     pub nonce: u64,
+    /// Live heartbeat sink, present when the daemon was started with
+    /// `--sink-addr`. Held here so `watch` (Phase C3) can read live aggregates;
+    /// [`serve_sink`] holds a clone that folds incoming heartbeats.
+    pub sink: Option<Sink>,
+    /// Sink root (`http://<sink-addr>`) forwarded into each run's [`RunConfig`] so
+    /// spawned swarms post run-scoped telemetry. `None` when no sink runs.
+    pub heartbeat_base: Option<String>,
 }
 
 impl DaemonContext {
     /// Build a context rooted at this process's own executable (spawned as the
-    /// `run-swarm` worker) with a fresh per-process id nonce.
+    /// `run-swarm` worker) with a fresh per-process id nonce. Telemetry is off
+    /// until [`daemon_main`] binds a sink and sets [`DaemonContext::sink`] /
+    /// [`DaemonContext::heartbeat_base`].
     pub fn new() -> Self {
         Self {
             registry: Arc::new(Registry::new()),
             self_exe: self_exe(),
             nonce: process_nonce(),
+            sink: None,
+            heartbeat_base: None,
         }
     }
 }
@@ -121,7 +133,38 @@ pub fn daemon_main(a: DaemonArgs) -> i32 {
             }
         };
         eprintln!("fleet-superx daemon: listening on {}", a.socket.display());
-        let ctx = Arc::new(DaemonContext::new());
+        let mut ctx = DaemonContext::new();
+
+        // Optionally bind the localhost heartbeat sink before serving so a bind
+        // failure aborts startup. The sink runs on a detached task (auxiliary
+        // telemetry, not the control plane); its root is threaded into each run so
+        // spawned swarms post run-scoped heartbeats.
+        if let Some(sink_addr) = &a.sink_addr {
+            let sink_listener = match TcpListener::bind(sink_addr).await {
+                Ok(listener) => listener,
+                Err(err) => {
+                    eprintln!("fleet-superx daemon: failed to bind sink {sink_addr}: {err}");
+                    return 1;
+                }
+            };
+            let bound = match sink_listener.local_addr() {
+                Ok(addr) => addr,
+                Err(err) => {
+                    eprintln!("fleet-superx daemon: sink addr unavailable: {err}");
+                    return 1;
+                }
+            };
+            eprintln!("fleet-superx daemon: heartbeat sink listening on {bound}");
+            let sink = Sink::new();
+            ctx.sink = Some(sink.clone());
+            ctx.heartbeat_base = Some(format!("http://{bound}"));
+            tokio::spawn(async move {
+                if let Err(err) = serve_sink(sink_listener, sink).await {
+                    eprintln!("fleet-superx daemon: heartbeat sink stopped: {err}");
+                }
+            });
+        }
+        let ctx = Arc::new(ctx);
 
         // Optionally bind the WebSocket control listener before serving so a bind
         // failure aborts startup rather than surfacing mid-run.
@@ -258,7 +301,10 @@ pub async fn handle_request(request: Request, ctx: &Arc<DaemonContext>) -> Respo
     match request {
         Request::Start(start) => {
             let run_id = ctx.registry.gen_run_id(ctx.nonce);
-            let cfg = RunConfig::from_start(start, run_id.clone());
+            let mut cfg = RunConfig::from_start(start, run_id.clone());
+            // Point this run's swarms at the daemon's sink (if one runs) so their
+            // heartbeats fold into a live aggregate keyed by this run id.
+            cfg.heartbeat_sink = ctx.heartbeat_base.clone();
             ctx.registry.insert(RunRecord::new(cfg.clone()));
             let ctx = ctx.clone();
             tokio::spawn(async move { execute_run(ctx, cfg).await });

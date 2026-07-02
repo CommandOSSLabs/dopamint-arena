@@ -22,6 +22,8 @@ sui-tunnel-anchor = { path = "../../engine/sui-tunnel-anchor" }
 tunnel-blackjack = { path = "../../protocols/blackjack" }
 tunnel-payments = { path = "../../protocols/payments" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "net", "sync", "time", "io-util", "signal"] }
+# Localhost heartbeat sink HTTP server (Phase C); workspace-pinned axum 0.7.
+axum = { workspace = true }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 clap = { workspace = true, features = ["derive"] }
