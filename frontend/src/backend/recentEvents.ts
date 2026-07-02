@@ -22,10 +22,15 @@ export function recentEventsToTxnRows(
   events: TunnelEvent[],
   viewer?: string | null,
 ): TxnRow[] {
+  // Sui addresses are canonical lowercase hex from both the RPC event decode and dapp-kit, but
+  // compare case-insensitively so a stray casing/format difference can't silently drop the highlight.
+  const v = viewer?.toLowerCase() ?? null;
   return events.map((e) => {
     const mine =
-      !!viewer &&
-      (e.partyA === viewer || e.partyB === viewer || e.funder === viewer);
+      !!v &&
+      (e.partyA?.toLowerCase() === v ||
+        e.partyB?.toLowerCase() === v ||
+        e.funder?.toLowerCase() === v);
     const address = mine
       ? (viewer ?? undefined)
       : (e.partyA ?? e.partyB ?? e.funder ?? undefined);

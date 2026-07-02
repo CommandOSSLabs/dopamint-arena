@@ -103,3 +103,14 @@ test("uncaptured ownership → ADDRESS undefined (—), not mine", () => {
   assert.equal(row.address, undefined);
   assert.equal(row.mine, false);
 });
+
+test("highlight is case-insensitive so a casing mismatch never silently drops it", () => {
+  const e: TunnelEvent = {
+    ...settled,
+    partyA: "0xAbCdEf",
+    partyB: "0xOPP",
+    funder: "0xAbCdEf",
+  };
+  const [row] = recentEventsToTxnRows([e], "0xabcdef"); // lower-case viewer, mixed-case party
+  assert.equal(row.mine, true);
+});
