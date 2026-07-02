@@ -83,6 +83,18 @@ export type PeerMessage =
       transcriptRoot: string;
       sig: string;
     }
+  // Forced (0,total) concession — human leaving mid-match. Same field shape as `settleHalf` so the
+  // bot can rebuild + verify the exact same settlement bytes; the tag is distinct so the bot's
+  // natural-terminal co-sign path never mistakes an early forfeit for the ordinary close.
+  | {
+      t: "forfeit";
+      partyABalance: string;
+      partyBBalance: string;
+      finalNonce: string;
+      timestamp: string;
+      transcriptRoot: string;
+      sig: string;
+    }
   | { t: "opened"; tunnelId: string }
   | { t: "settle"; sig: string; root: string }
   | { t: "closed"; digest: string }

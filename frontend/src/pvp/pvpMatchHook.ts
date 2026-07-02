@@ -33,6 +33,7 @@ import {
   type Role,
 } from "@/pvp/mpClient";
 import { proposePlan } from "@/pvp/proposePlan";
+import { buildForfeitHalf } from "@/pvp/forfeit";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
@@ -67,6 +68,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  keypairFromSecretHex,
 } from "@/pvp/resume";
 
 export type PvpStatus =
@@ -140,6 +142,10 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   /** Back / leave mid-match: publish this seat's settlement half, then return to the lobby. Unlike
    *  `reset` (a bare disconnect), this settles — the staying seat / grace path submits the close. */
   leave: () => void;
+  /** Concede the live match: force the whole pot to the opponent (see `buildForfeitHalf`), get the
+   *  bot's co-signed half, submit the close, then return to the lobby. Falls back to `leave()` off a
+   *  live tunnel. */
+  forfeit: () => void;
 }
 
 interface PvpDeps {
@@ -223,6 +229,14 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   private settleNow: ((publishOnly: boolean) => void) | null = null;
   /** True between `leave()` and teardown, so the publish-only settle returns to the lobby once sent. */
   private leaving = false;
+  /** Live match's peer channel, transcript, and inbox — promoted from `activateSession` locals (the
+   *  way `settleNow` already is) so `forfeit()` can drive its own settlement exchange from outside
+   *  that closure. */
+  private channel: PvpChannel | null = null;
+  private transcript: Transcript | null = null;
+  private waitPeer: ReturnType<typeof makeInbox> | null = null;
+  /** This match's per-game ephemeral signing key (see `buildForfeitHalf`'s `eph`). */
+  private selfEph: KeyPair | null = null;
 
   constructor(private readonly spec: PvpMatchSpec<State, Move, Intent, View>) {
     this.intent = spec.idleIntent;
@@ -354,6 +368,10 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.error = null;
     this.settleNow = null;
     this.leaving = false;
+    this.channel = null;
+    this.transcript = null;
+    this.waitPeer = null;
+    this.selfEph = null;
     this.emit();
   };
 
@@ -373,6 +391,80 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     }
   };
 
+  /** Forfeit the live match: concede the whole pot to the opponent. Builds the forced (0,total) half
+   *  (`buildForfeitHalf`), sends a `forfeit` peer frame (NOT `settleHalf`, so a natural-terminal
+   *  co-sign never mistakes it for the ordinary close), awaits the bot's co-signed `settleHalf` reply,
+   *  combines, and submits the close exactly like `settle()`. `settling` also covers the rare race
+   *  where the match already went terminal naturally right as the human forfeits — the bot may reply
+   *  with a half over DIFFERENT balances there, which fails combine's signature check; that's caught
+   *  below and treated like any other failed leave rather than crashing the window. Off a live tunnel
+   *  it falls back to the ordinary `leave()`. */
+  forfeit = () => {
+    const dt = this.dt;
+    const ch = this.channel;
+    const deps = this.deps;
+    const eph = this.selfEph;
+    const transcript = this.transcript;
+    const waitPeer = this.waitPeer;
+    if (
+      !dt ||
+      !ch ||
+      !deps?.account ||
+      !eph ||
+      !transcript ||
+      !waitPeer ||
+      (this.status !== "playing" && this.status !== "settling")
+    ) {
+      this.leave();
+      return;
+    }
+    const wallet = deps.account.address;
+    this.status = "settling";
+    this.emit();
+    void (async () => {
+      try {
+        const { a, b } = dt.protocol.balances(dt.state);
+        const total = a + b;
+        const reads = deps.client as unknown as Parameters<
+          typeof readCreatedAt
+        >[0];
+        const createdAt = await readCreatedAt(reads, dt.tunnelId);
+        const root = transcript.root();
+        const { settlement, sig } = buildForfeitHalf({
+          tunnelId: dt.tunnelId,
+          total,
+          wallet,
+          eph,
+          timestamp: createdAt,
+          transcriptRoot: root,
+        });
+        ch.sendPeer({
+          t: "forfeit",
+          partyABalance: settlement.partyABalance.toString(),
+          partyBBalance: settlement.partyBBalance.toString(),
+          finalNonce: settlement.finalNonce.toString(),
+          timestamp: settlement.timestamp.toString(),
+          transcriptRoot: toHex(root),
+          sig: toHex(sig),
+        });
+        const other = await waitPeer<{ sig: string }>("settleHalf");
+        const co = dt.combineSettlementWithRoot(
+          settlement,
+          sig,
+          fromHex(other.sig),
+        );
+        await getControlPlaneClient().settle(
+          dt.tunnelId,
+          coSignedToSettleBody(co, transcript.rawEntries()),
+        );
+      } catch (e) {
+        console.warn(`[${this.spec.game}] forfeit submit failed; leaving`, e);
+      } finally {
+        this.reset();
+      }
+    })();
+  };
+
   dispose = () => {
     if (this.proposeTimer !== null) {
       clearTimeout(this.proposeTimer);
@@ -383,6 +475,10 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.mp?.close();
     this.mp = null;
     this.dt = null;
+    this.channel = null;
+    this.transcript = null;
+    this.waitPeer = null;
+    this.selfEph = null;
     this.listeners.clear();
   };
 
@@ -410,6 +506,9 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     // so set it here — the resume() cold-load path doesn't set it otherwise, which left a resumed
     // match with a null `dt` (no view → stuck loading, the propose loop never schedules).
     this.dt = dt;
+    this.channel = channel;
+    this.waitPeer = waitPeer;
+    this.selfEph = keypairFromSecretHex(info.selfEphemeralSecretHex);
     const deps = this.deps!;
     const signExec = deps.signExec;
     const sponsoredSignExec = deps.sponsoredSignExec;
@@ -419,6 +518,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     >[0]["reads"];
     const proto = this.spec.makeProtocol();
     const transcript = new Transcript(dt.tunnelId);
+    this.transcript = transcript;
     let settling = false;
     // One cooperative close, guarded to fire once. A natural terminal does the full half-exchange +
     // submit; `publishOnly` (leaver/Back) publishes our half and returns to the lobby. Stored on
@@ -933,6 +1033,7 @@ export function createPvpMatchHook<
       toggleAuto: session.toggleAuto,
       reset: session.reset,
       leave: session.leave,
+      forfeit: session.forfeit,
     };
   };
 }

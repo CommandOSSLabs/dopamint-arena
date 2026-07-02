@@ -1,17 +1,27 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { GameWindowProps } from "../types";
 import { ArenaScreen, type ArenaScreenTheme } from "./ArenaScreen";
+import { ForfeitDialog } from "@/pvp/ForfeitDialog";
+
+/** Per-seat stake (MIST) as the dialog's fixed copy expects, e.g. "100 MTPS". */
+function formatStake(stake: number): string {
+  return `${stake} MTPS`;
+}
 
 /** The pvp-match surface the window controller reads. */
 interface ArenaPvp {
   status: string; // PvpStatus, but the controller only string-compares it
   error: string | null;
   view: unknown;
+  /** Per-seat stake (MIST); shown in the forfeit confirm. */
+  stake: number;
   reset: () => void;
   /** Idle "Play": reserve a server bot for this game and enter its tunnel. See pvpMatchHook.playArena. */
   playArena: () => void;
   /** Back/Cancel: settles (publishes a half) when a match is live, else resets. See pvpMatchHook. */
   leave: () => void;
+  /** Concede a live match: forced-half close, opponent takes the pot. See pvpMatchHook.forfeit. */
+  forfeit: () => void;
 }
 
 export interface ArenaWindowSpec<Pvp extends ArenaPvp> {
@@ -45,6 +55,11 @@ export function createArenaWindow<Pvp extends ArenaPvp>(
     // lobby); on the matching/error/settled screens it just resets. So an in-game Back no longer
     // strands the staked tunnel — it publishes a settlement half on the way out.
     const backToLobby = () => pvp.leave();
+    // The in-board Back during a live match asks first — forfeiting hands the whole pot to the
+    // opponent, so it's confirmed via ForfeitDialog rather than firing immediately like `leave()`.
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const isLiveMatch = pvp.status === "playing" || pvp.status === "settling";
+    const onBoardBack = isLiveMatch ? () => setConfirmOpen(true) : backToLobby;
 
     const screen = (
       children: ReactNode,
@@ -96,7 +111,20 @@ export function createArenaWindow<Pvp extends ArenaPvp>(
         pvp.status === "settled") &&
       pvp.view !== null
     )
-      return spec.renderPvpBoard(pvp, backToLobby);
+      return (
+        <>
+          {spec.renderPvpBoard(pvp, onBoardBack)}
+          <ForfeitDialog
+            open={confirmOpen}
+            stake={formatStake(pvp.stake)}
+            onKeepPlaying={() => setConfirmOpen(false)}
+            onForfeit={() => {
+              setConfirmOpen(false);
+              pvp.forfeit();
+            }}
+          />
+        </>
+      );
     return loading;
   };
 }
