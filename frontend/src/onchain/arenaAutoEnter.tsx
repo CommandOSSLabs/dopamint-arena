@@ -87,7 +87,14 @@ export function useArenaAutoEnter(): void {
   const entered = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!owner) {
+      // Re-arm on disconnect so a reconnect re-runs the batched entry, giving open windows
+      // that can't resume a fresh auto-mode match (freeze-on-disconnect). Reconnect then
+      // behaves like a reload; arenaGameIdsForOpenWindows() still excludes windows whose
+      // in-flight tunnel will resume, so only non-resuming windows re-allocate.
+      entered.current = null;
+      return;
+    }
     const games = arenaGameIdsForOpenWindows();
     if (games.length === 0) return;
     if (entered.current === owner) return;
