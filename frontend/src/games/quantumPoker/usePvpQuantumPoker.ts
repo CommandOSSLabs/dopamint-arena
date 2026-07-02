@@ -277,7 +277,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [endRequested, setEndRequested] = useState(false);
   // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
   // tick it on and new hands let a persona bot play your seat. See autoPreference.
-  const [auto, setAutoState] = useState(() => defaultAuto(GAME_ID));
+  const [auto, setAutoState] = useState(() => defaultAuto(GAME_ID, true));
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -289,7 +289,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // Auto mode: a persona bot drives this seat's BETTING. `autoRef` mirrors `auto` for use inside
   // the imperative move loop (closures that read it after toggles); `autoBotRef` is the stateless
   // kit bot built once per match.
-  const autoRef = useRef(defaultAuto(GAME_ID));
+  const autoRef = useRef(defaultAuto(GAME_ID, true));
   const autoBotRef = useRef<PokerSeatBot | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
   const detachResumeRef = useRef<(() => void) | null>(null);
@@ -325,7 +325,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
     // Reset Auto to the session default (ON the first time, else your last toggle).
-    autoRef.current = defaultAuto(GAME_ID);
+    autoRef.current = defaultAuto(GAME_ID, true);
     autoBotRef.current = null;
     setAutoState(autoRef.current);
     channelRef.current = null;
@@ -1105,8 +1105,38 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           opponentPubkeyHex: rec.opponentPubkeyHex,
           selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
         });
-        await mp.connect();
+        try {
+          await mp.connect();
+        } catch {
+          // Resume connect failed — a 2nd socket for this wallet racing the relay's routing after a
+          // freeze/reconnect, or the match is gone. Recover with a fresh match, not an error dead-end.
+          clearResumeRecord(tunnel.tunnelId);
+          reset();
+          findMatchRef.current?.();
+          return;
+        }
         maybeAutoPropose();
+        // Resume watchdog (mirrors the shared kit's armResumeWatchdog): if the co-located bot
+        // never answers the resync — it exited past its grace, or the displayState!==state guard
+        // suppressed the auto-kick — don't hang at "playing". Drop the record and start a fresh
+        // match (poker's own natural-end recovery). Disarms on the first confirmed frame; a stale
+        // timer is ignored once a newer mp has replaced this one.
+        {
+          const resumed = tunnel;
+          let answered = false;
+          const prevConfirmed = resumed.onConfirmed;
+          resumed.onConfirmed = (u) => {
+            answered = true;
+            resumed.onConfirmed = prevConfirmed;
+            prevConfirmed?.(u);
+          };
+          setTimeout(() => {
+            if (answered || mpRef.current !== mp) return;
+            clearResumeRecord(resumed.tunnelId);
+            reset();
+            findMatchRef.current?.();
+          }, 10_000);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");
@@ -1124,6 +1154,17 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   useEffect(() => {
     resume();
   }, [resume]);
+
+  // Close the relay on unmount so the desktop freeze (which unmounts the game while frozen)
+  // actually stops self-play, and a normal window close doesn't leak the socket. ttt/blackjack
+  // already close mp on unmount; poker was missing this.
+  useEffect(
+    () => () => {
+      detachResumeRef.current?.();
+      mpRef.current?.close();
+    },
+    [],
+  );
 
   // Centralized batched entry (ADR-0028): the on-connect orchestrator deposited this game's seat A in
   // the one batched PTB and published {allocation, keypair} to the arena store. Consume it once and

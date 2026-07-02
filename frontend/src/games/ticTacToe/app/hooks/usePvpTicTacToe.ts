@@ -224,9 +224,9 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
-  // tick it on and new games keep a bot playing for you. See autoPreference.
-  const [auto, setAutoState] = useState(() => defaultAuto(variant));
+  // Arena games autopilot by default (fallback true) so a resume/reload keeps playing; your
+  // explicit toggle still sticks for the session. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto(variant, true));
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
     create?: string;
@@ -240,7 +240,7 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(defaultAuto(variant));
+  const autoRef = useRef(defaultAuto(variant, true));
   const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
@@ -576,7 +576,7 @@ export function usePvpTicTacToe(
         // Fresh queue resets Auto to the session default (ON the first time, else your last
         // toggle); auto-requeue passes keepAuto so the Auto loop survives across per-game matches.
         if (!opts?.keepAuto) {
-          autoRef.current = defaultAuto(variant);
+          autoRef.current = defaultAuto(variant, true);
           setAutoState(autoRef.current);
         }
         bufferedSettleRef.current = null;
@@ -594,8 +594,22 @@ export function usePvpTicTacToe(
           // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
           // variant and re-attach to it. The opening handshake then carries resume{matchId}.
           if (tryResume(mp)) {
-            await mp.connect();
-            return; // skip quickMatch — we are continuing an in-flight match
+            try {
+              await mp.connect();
+              return; // skip quickMatch — we are continuing an in-flight match
+            } catch {
+              // Resume connect failed — commonly a 2nd socket for this wallet racing the relay's
+              // routing right after a freeze/reconnect closed the old one, or the match is gone.
+              // Don't dead-end at "error": drop the stale record + raced socket and retry as a
+              // fresh match (the cleared record makes the retry fall through to quickMatch).
+              const resumedTid = tunnelRef.current?.tunnelId;
+              if (resumedTid) clearResumeRecord(resumedTid);
+              mp.close();
+              mpRef.current = null;
+              tunnelRef.current = null;
+              queue(opts);
+              return;
+            }
           }
           await mp.connect();
           setPhase("queuing");
@@ -625,29 +639,13 @@ export function usePvpTicTacToe(
     const w = walletRef.current;
     const selfWallet = w.address;
     if (!w.isConnected || !selfWallet) return;
-    // installResumePersistence + evictExpiredRecords already run in the mount effect, and
-    // tryResume → resumeActiveTunnels re-runs both — no need to repeat them here.
     if (!hasResumableMatch(variant)) return;
-    void (async () => {
-      try {
-        const mp = new MpClient(
-          resolveMpWsUrl(MP_URL),
-          selfWallet,
-          eph.coreKey,
-        );
-        mpRef.current = mp;
-        if (!tryResume(mp)) {
-          mpRef.current = null;
-          mp.close();
-          return;
-        }
-        await mp.connect();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-      }
-    })();
-  }, [eph, variant, tryResume]);
+    // Route cold-load resume through queue(): its resume branch (tryResume) restores the in-flight
+    // match WITH the connect-error recovery, and a stale/terminal record falls through to a fresh
+    // match instead of stranding at the lobby. The hasResumableMatch guard keeps a FRESH load on
+    // the arena-entry path (no auto public-queue join).
+    queue();
+  }, [variant, queue]);
   useEffect(() => {
     resume();
   }, [resume]);
@@ -1142,7 +1140,7 @@ export function usePvpTicTacToe(
       stoppingRef.current = false;
       autoKickedRef.current = false;
       if (!keepAuto) {
-        autoRef.current = defaultAuto(variant);
+        autoRef.current = defaultAuto(variant, true);
         setAutoState(autoRef.current);
       }
       openedResolveRef.current = null;
@@ -1213,13 +1211,13 @@ export function usePvpTicTacToe(
     requeueRef.current = requeue;
   }, [requeue]);
 
-  // After a per-game match settles ("done"), auto-find the next match when Auto is on. A short
+  // After a per-game match settles ("done"), always auto-find the next match — these are
+  // self-playing arena games (parity with poker); an explicit Leave() → "idle" stops the loop.
+  // Auto only governs whether the bot or you plays the match, not whether one is found. A short
   // pause lets the result show before re-queuing.
   useEffect(() => {
-    if (phase !== "done" || !autoRef.current) return;
-    const id = setTimeout(() => {
-      if (autoRef.current) requeue();
-    }, NEXT_MS);
+    if (phase !== "done") return;
+    const id = setTimeout(() => requeue(), NEXT_MS);
     return () => clearTimeout(id);
   }, [phase, requeue]);
 
