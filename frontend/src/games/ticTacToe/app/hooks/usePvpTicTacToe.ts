@@ -111,8 +111,6 @@ const NEXT_MS = 150; // pause before auto-requeuing the next match (flat-out: ju
 // timeout so a truly lost peer recovers (auto re-queues) instead of stranding the table forever.
 const SETTLE_RETRY_MS = 600;
 const SETTLE_TIMEOUT_MS = 12000;
-/** Re-send an unconfirmed move proposal on this cadence until the peer ACKs it (see the resend effect). */
-const RESEND_PENDING_MS = 1500;
 
 export type PvpPhase =
   | "idle"
@@ -996,25 +994,9 @@ export function usePvpTicTacToe(
     return subscribeArena(tryEnter);
   }, [variant]);
 
-  // Reliability net for a move whose ACK never comes back. The relay's outbound send is
-  // fire-and-forget (no queue): a move fired during a WS hiccup is dropped and — absent a full
-  // reconnect to trigger the resync handshake — never re-sent, stranding the board on the proposer's
-  // turn. While a proposal sits unconfirmed, re-send it. resendPending() is idempotent (the peer
-  // re-ACKs a move it already applied), so this only unsticks a genuinely-missed frame.
-  useEffect(() => {
-    const id = setInterval(() => {
-      const t = tunnelRef.current;
-      if (t && t.displayState !== t.state) t.resendPending();
-    }, RESEND_PENDING_MS);
-    return () => clearInterval(id);
-  }, []);
-
   const play = useCallback((cell: number) => {
     const t = tunnelRef.current;
     if (!t) return;
-    // One move in flight at a time: while a proposal awaits the peer's ACK, ignore repeat
-    // input instead of throwing "already awaiting ACK" (mirrors proposePlan's hasPending guard).
-    if (t.displayState !== t.state) return;
     const st = t.state;
     if (st.inner.winner !== 0 || st.inner.turn !== roleRef.current) return; // not my turn / between games
     if (t.displayState !== st) return; // a proposal is already awaiting its ACK (e.g. a re-seated resume move)
@@ -1028,7 +1010,6 @@ export function usePvpTicTacToe(
   const next = useCallback(() => {
     const t = tunnelRef.current;
     if (!t) return;
-    if (t.displayState !== t.state) return; // a move already awaits the peer's ACK
     if (
       roleRef.current !== "A" ||
       t.state.inner.winner === 0 ||

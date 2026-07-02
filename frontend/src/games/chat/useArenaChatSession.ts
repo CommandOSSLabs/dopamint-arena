@@ -27,7 +27,6 @@ import {
   isMtpsConfigured,
 } from "@/onchain/mtps";
 import {
-  chatShouldSettleForMoveCap,
   createChatProtocol,
   toChatApiMessages,
   type ChatMessage,
@@ -357,16 +356,6 @@ class ChatSession {
     if (!trimmed) return;
     // Not the human's turn (lastSender === "A" means B must reply next).
     if (tunnel.state.lastSender === HUMAN_SEAT) return;
-
-    // Open-ended chat has no natural terminal, so the tunnel's move ceiling is the only
-    // stop rule. If another human+bot exchange might not fit under MAX_MOVES_PER_TUNNEL,
-    // settle now at this clean boundary instead of risking an overrun mid-exchange.
-    if (chatShouldSettleForMoveCap(Number(tunnel.nonce))) {
-      this.settleRequested = true;
-      this.emit();
-      void this.settle();
-      return;
-    }
 
     const myGen = this.gen;
     tunnel.step({ kind: "msg", text: trimmed }, HUMAN_SEAT);

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
 import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
-import { canSafelyPlayNextEpisode } from "sui-tunnel-ts/proof/limits";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -97,17 +96,6 @@ const PLUMBING_MS = 120;
 // still uses BOT_MOVE_MS / NEXT_MS / PLUMBING_MS above.
 const AUTO_MOVE_MS = 0;
 const AUTO_REQUEUE_MS = 150;
-
-/**
- * Conservative upper bound on the tunnel updates one blackjack round costs (bets, hits,
- * dealer play, plus commit/reveal plumbing). Feeds canSafelyPlayNextEpisode so a series
- * settles at a round boundary while there is still room under MAX_MOVES_PER_TUNNEL,
- * rather than overrunning the cap mid-round. Must exceed the true worst case.
- */
-const BLACKJACK_MAX_MOVES_PER_ROUND = 30;
-
-/** Re-send an unconfirmed proposal on this cadence until the peer ACKs it (see the resend effect). */
-const RESEND_PENDING_MS = 1500;
 
 export type PvpPhase =
   | "idle"
@@ -425,20 +413,10 @@ export function usePvpBlackjack(): PvpView {
           lastBalanceA = balA;
         }
         if (stoppingRef.current) return; // a stop/settle is in progress
-        // Settle at match end, or early at a clean round boundary when the tunnel is too
-        // close to its move ceiling to safely play another round.
-        if (
-          proto.isTerminal(st) ||
-          (st.phase === "round_over" &&
-            !canSafelyPlayNextEpisode(
-              Number(t.nonce),
-              BLACKJACK_MAX_MOVES_PER_ROUND,
-            ))
-        ) {
+        if (proto.isTerminal(st)) {
           void finishSettle(t, channel, info.matchId);
           return;
         }
-
         const owed = actorFor(st, getPlayerParty); // PvP: default rotation
         if (!owed) return;
         // Plumbing (commit/reveal) is ALWAYS auto-driven by this seat when it owes it.
@@ -1016,24 +994,10 @@ export function usePvpBlackjack(): PvpView {
     return subscribeArena(tryEnter);
   }, [enterArenaMatch, phase]);
 
-  // Reliability net for a proposal whose ACK never comes back. The relay's outbound send is
-  // fire-and-forget (no queue): a move fired during a WS hiccup is dropped and — absent a full
-  // reconnect to trigger the resync handshake — never re-sent, stranding the hand on "awaiting ACK".
-  // While a proposal sits unconfirmed, re-send it. resendPending() is idempotent (the peer re-ACKs a
-  // move it already applied), so this only unsticks a genuinely-missed frame.
-  useEffect(() => {
-    const id = setInterval(() => {
-      const t = tunnelRef.current;
-      if (t && t.displayState !== t.state) t.resendPending();
-    }, RESEND_PENDING_MS);
-    return () => clearInterval(id);
-  }, []);
-
   // Player Hit/Stand (only the player, only on the player's turn).
   const proposePlayer = useCallback((action: "hit" | "stand") => {
     const t = tunnelRef.current;
     if (!t) return;
-    if (t.displayState !== t.state) return; // a move already awaits the peer's ACK
     if (
       roleRef.current !== getPlayerParty(t.state.round) ||
       t.state.phase !== "player" ||
@@ -1054,9 +1018,6 @@ export function usePvpBlackjack(): PvpView {
     (amount: number) => {
       const t = tunnelRef.current;
       if (!t) return;
-      // One move may be in flight at a time: while a proposal awaits the peer's ACK, ignore
-      // repeat input instead of throwing "already awaiting ACK" (mirrors proposePlan's guard).
-      if (t.displayState !== t.state) return;
       if (
         roleRef.current !== getPlayerParty(t.state.round + 1n) ||
         t.state.phase !== "round_over" ||

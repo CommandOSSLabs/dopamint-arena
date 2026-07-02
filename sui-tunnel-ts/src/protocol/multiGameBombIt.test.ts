@@ -74,7 +74,6 @@ test("a decided duel swaps EXACTLY the per-game stake; draw/push swaps nothing",
     gamesPlayed: 0,
     balanceA: 1000n,
     balanceB: 1000n,
-    totalMoves: 0,
   };
   assert.equal(
     proto.isGameOver(drawn),
@@ -131,7 +130,6 @@ test("session IS terminal once a side cannot fund the next stake", () => {
     gamesPlayed: 0,
     balanceA: 1950n,
     balanceB: 50n,
-    totalMoves: 0,
   };
   assert.equal(proto.isTerminal(state), true, "B (50) cannot fund a 100 stake");
 });
