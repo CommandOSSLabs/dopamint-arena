@@ -6,16 +6,19 @@
 //! replies `Started` immediately; the background task drives the run's
 //! lifecycle in the shared [`Registry`] (`Running` → collect reports → `merge`
 //! → `Finished`/`Failed`). `List` snapshots every run; `Stop` marks a run
-//! draining. The WebSocket transport (Task B7) reuses [`handle_request`] so
-//! both surfaces stay byte-for-byte identical.
+//! draining. The WebSocket transport ([`serve_ws`]) reuses [`handle_request`] so
+//! both surfaces stay byte-for-byte identical; `daemon --ws ADDR` runs it
+//! concurrently with the Unix listener.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Args;
+use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::merge::merge;
 use crate::proto::SpawnMode;
@@ -114,7 +117,37 @@ pub fn daemon_main(a: DaemonArgs) -> i32 {
         };
         eprintln!("fleet-superx daemon: listening on {}", a.socket.display());
         let ctx = Arc::new(DaemonContext::new());
-        if let Err(err) = serve_unix(listener, ctx).await {
+
+        // Optionally bind the WebSocket control listener before serving so a bind
+        // failure aborts startup rather than surfacing mid-run.
+        let ws_listener = match &a.ws {
+            Some(addr) => match TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    eprintln!("fleet-superx daemon: websocket listening on {addr}");
+                    Some(listener)
+                }
+                Err(err) => {
+                    eprintln!("fleet-superx daemon: failed to bind ws {addr}: {err}");
+                    return 1;
+                }
+            },
+            None => None,
+        };
+
+        // Serve both transports concurrently; either accept loop erroring out is
+        // a fatal control-plane failure.
+        let unix = serve_unix(listener, ctx.clone());
+        let result = match ws_listener {
+            Some(ws_listener) => {
+                let ws = serve_ws(ws_listener, ctx);
+                tokio::select! {
+                    r = unix => r,
+                    r = ws => r,
+                }
+            }
+            None => unix.await,
+        };
+        if let Err(err) = result {
             eprintln!("fleet-superx daemon: accept loop failed: {err}");
             return 1;
         }
@@ -160,6 +193,53 @@ async fn serve_connection(stream: UnixStream, ctx: Arc<DaemonContext>) -> std::i
             .write_all(encode_line(&response).as_bytes())
             .await?;
     }
+}
+
+/// Accept and serve WebSocket control connections on `listener` until it errors.
+/// The remote transport mirrors [`serve_unix`]: each connection runs on its own
+/// task and dispatches through the shared [`handle_request`], so Unix and remote
+/// clients observe byte-for-byte identical behavior. Factored out of
+/// [`daemon_main`] so integration tests can drive it on an ephemeral loopback
+/// port (`127.0.0.1:0`).
+pub async fn serve_ws(listener: TcpListener, ctx: Arc<DaemonContext>) -> std::io::Result<()> {
+    loop {
+        let (stream, _addr) = listener.accept().await?;
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = serve_ws_connection(stream, ctx).await {
+                eprintln!("fleet-superx daemon: ws connection error: {err}");
+            }
+        });
+    }
+}
+
+/// Upgrade one TCP connection to WebSocket and serve control frames. Each text
+/// frame carries one JSON [`Request`]; the matching [`Response`] is written back
+/// as a text frame. Non-text frames (ping/pong/binary) are ignored; a close
+/// frame ends the connection.
+async fn serve_ws_connection(
+    stream: TcpStream,
+    ctx: Arc<DaemonContext>,
+) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+    let mut ws = tokio_tungstenite::accept_async(stream).await?;
+    while let Some(message) = ws.next().await {
+        match message? {
+            Message::Text(text) => {
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let response = match decode_line::<Request>(&text) {
+                    Ok(request) => handle_request(request, &ctx).await,
+                    Err(err) => Response::Error(format!("malformed request: {err}")),
+                };
+                ws.send(Message::Text(encode_line(&response))).await?;
+            }
+            Message::Close(_) => return Ok(()),
+            // Ping is auto-ponged by tungstenite; other frames carry no request.
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Dispatch one control request against the shared registry. Transport-agnostic
