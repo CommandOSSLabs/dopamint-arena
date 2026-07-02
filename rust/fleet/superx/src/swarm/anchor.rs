@@ -10,9 +10,12 @@ use sui_tunnel_anchor::{
     SuiSettleMode, SuiSponsoredAnchor, SuiSponsoredAnchorConfig,
 };
 use tunnel_harness::{
-    InMemoryAnchor, OpenedTunnel, SettledTunnel, SettlementMode, TunnelAnchor, TunnelAnchorError,
-    TunnelOpenRequest, TunnelSettleRequest,
+    InMemoryAnchor, OpenedTunnel, Seat, SettledTunnel, SettlementMode, TunnelAnchor,
+    TunnelAnchorError, TunnelOpenRequest, TunnelSettleRequest,
 };
+
+use crate::swarm::gates::PreOpenGate;
+use crate::swarm::settle_manager::SettleManager;
 
 /// One tunnel's chain backend. Cloneable and cheap: both variants hold shared
 /// handles (`InMemoryAnchor` is `Arc`-backed; `SuiOpenIntentAnchor` scopes a shared
@@ -101,6 +104,66 @@ impl SuiContext {
     /// the label is the tunnel id, so open idempotency is scoped per tunnel.
     pub fn scoped(&self, tunnel_id: &str) -> SuiOpenIntentAnchor {
         self.0.for_open_intent(SuiOpenIntentId::from_label(tunnel_id))
+    }
+}
+
+/// The [`TunnelAnchor`] each [`PartyDriver`](tunnel_harness) in a swarm is handed.
+/// It brackets one seat of one tunnel with the swarm-wide staging barriers:
+/// `open` opens through the inner backend then parks on the [`PreOpenGate`] until
+/// the whole swarm is open (play cannot begin until every tunnel has opened);
+/// `settle` hands off to the shared [`SettleManager`], which holds every seat
+/// behind the settle barrier and drains the pairs in waves. Cheap to construct —
+/// it only clones shared handles — so the pipeline builds one per seat.
+pub struct StagingAnchor {
+    inner: Arc<InnerAnchor>,
+    /// Which seat of the tunnel this anchor drives; only seat A counts the tunnel
+    /// into the open gate so the barrier target matches the tunnel count.
+    seat: Seat,
+    open_gate: Arc<PreOpenGate>,
+    settle: Arc<SettleManager>,
+}
+
+impl StagingAnchor {
+    pub fn new(
+        inner: Arc<InnerAnchor>,
+        seat: Seat,
+        open_gate: Arc<PreOpenGate>,
+        settle: Arc<SettleManager>,
+    ) -> Self {
+        Self {
+            inner,
+            seat,
+            open_gate,
+            settle,
+        }
+    }
+}
+
+impl TunnelAnchor for StagingAnchor {
+    fn settlement_mode(&self) -> SettlementMode {
+        self.inner.settlement_mode()
+    }
+
+    async fn open(
+        &self,
+        request: TunnelOpenRequest,
+    ) -> Result<OpenedTunnel, TunnelAnchorError> {
+        let opened = self.inner.open(request).await?;
+        // Open barrier: hold both seats between open and play until the whole
+        // swarm is open. Seat A counts the tunnel once; both seats then park.
+        // Mirrors the bench warm-up barrier (`rust/fleet/bench/src/party_driver.rs`).
+        if self.seat == Seat::A {
+            self.open_gate.mark_opened();
+        }
+        self.open_gate.wait().await;
+        Ok(opened)
+    }
+
+    async fn settle(
+        &self,
+        request: TunnelSettleRequest,
+    ) -> Result<SettledTunnel, TunnelAnchorError> {
+        self.settle.submit(self.seat, request).await
     }
 }
 
