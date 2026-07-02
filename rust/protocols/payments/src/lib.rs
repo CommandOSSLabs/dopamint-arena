@@ -5,11 +5,38 @@
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod catalog;
+pub mod regular_payments;
 pub mod strategy;
-pub use strategy::PaymentsStrategy;
+pub use catalog::{is_catalog_amount, CATALOG_PRICE_HI, CATALOG_PRICE_LO};
+pub use regular_payments::RegularPayments;
+pub use strategy::{PaymentsStrategy, ShopPosStrategy};
 
 const DOMAIN: &[u8] = b"sui_tunnel::proto::payments.v1";
 const TRANSFER: u64 = 1;
+
+/// Move-wire serde: the relayed move is JSON (`JsonFrameCodec`), and the FE
+/// `paymentsMoveCodec` sends `amount` as a decimal string. Branch on
+/// `is_human_readable()` so bench codecs (bcs/postcard) keep plain `u64`.
+mod wire_dec_u64 {
+    pub fn serialize<S: serde::Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_str(&v.to_string())
+        } else {
+            s.serialize_u64(*v)
+        }
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        use serde::Deserialize;
+        if d.is_human_readable() {
+            String::deserialize(d)?
+                .parse()
+                .map_err(serde::de::Error::custom)
+        } else {
+            u64::deserialize(d)
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PayState {
@@ -23,6 +50,7 @@ pub struct PayState {
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PayMove {
     pub from: Seat,
+    #[serde(with = "wire_dec_u64")]
     pub amount: u64,
 }
 
@@ -163,6 +191,22 @@ mod tests {
                 Seat::A,
             )
             .is_err());
+    }
+
+    #[test]
+    fn move_json_matches_ts_payments_move_codec() {
+        use serde_json::json;
+        assert_eq!(
+            serde_json::to_value(PayMove {
+                from: Seat::A,
+                amount: 2,
+            })
+            .unwrap(),
+            json!({ "from": "A", "amount": "2" }),
+        );
+        let mv: PayMove = serde_json::from_value(json!({ "from": "A", "amount": "1" })).unwrap();
+        assert_eq!(mv.from, Seat::A);
+        assert_eq!(mv.amount, 1);
     }
 
     #[test]

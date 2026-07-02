@@ -1,30 +1,32 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
-import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
-import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
-import {
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-} from "@mysten/dapp-kit";
-import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { BET_OPTIONS, bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 import { getSuiClient } from "@/games/blackjack/app/lib/bjBots";
+import { handValue as bjCardsHandValue } from "@/games/blackjack/app/lib/bjCards";
 import { getOrCreateEphemeral } from "@/games/blackjack/app/lib/bjPvpIdentity";
 import {
+  buildCloseWithRootTx,
   buildCreateAndShareTx,
   buildDepositTx,
-  buildCloseTx,
-  buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
-import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "@/onchain/sponsor";
+import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
+import {
+  consumeArenaEntry,
+  subscribeArena,
+} from "@/onchain/arenaAllocationStore";
+import type { ArenaAllocation } from "@/onchain/arenaEnter";
 import {
   MTPS_COIN_TYPE,
   isMtpsAddressBalance,
   isMtpsConfigured,
 } from "@/onchain/mtps";
-import { handValue as bjCardsHandValue } from "@/games/blackjack/app/lib/bjCards";
+import { withSponsorFallback } from "@/onchain/sponsor";
+import {
+  raiseDisputeUnilateral,
+  submitRebuildingOnStale,
+} from "@/onchain/tunnelTx";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
+import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import {
   MpClient,
   resolveMpWsUrl,
@@ -32,42 +34,39 @@ import {
   type PeerMessage,
   type PvpChannel,
 } from "@/pvp/mpClient";
-import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
-  raiseDisputeUnilateral,
-  submitRebuildingOnStale,
-} from "@/onchain/tunnelTx";
-import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
-import {
-  installResumePersistence,
-  evictExpiredRecords,
-  readResumeRecord,
   clearResumeRecord,
+  evictExpiredRecords,
+  installResumePersistence,
+  readResumeRecord,
 } from "@/pvp/resume";
+import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { bytesToHex, core, hexToBytes } from "sui-tunnel-ts";
+import type { KeyPair } from "sui-tunnel-ts/core/crypto";
 import {
   BlackjackProtocol,
-  actorFor,
-  getPlayerParty,
-  getDealerParty,
-  blackjackHandValue as handValue,
   MIN_BET,
+  actorFor,
+  getDealerParty,
+  getPlayerParty,
+  secureCommitMove,
   maxBet as tableMaxBet,
-  type BlackjackState,
   type BlackjackMove,
+  type BlackjackState,
 } from "sui-tunnel-ts/protocol/blackjack";
 import { blackjackMoveCodec } from "sui-tunnel-ts/protocol/blackjackCodec";
-import { BET_OPTIONS, bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
 import type { MatchSnapshot } from "@/engine/engineApi";
 import type { BlackjackPvpView } from "@/games/blackjack/blackjackPvpView";
-import type { KeyPair } from "sui-tunnel-ts/core/crypto";
-import type { ArenaAllocation } from "@/onchain/arenaEnter";
-import {
-  consumeArenaEntry,
-  subscribeArena,
-} from "@/onchain/arenaAllocationStore";
 
 /** Backend arena/`profile_for` id (= the FE registry id; single token, same both ways). Single source
  *  of truth for the arena-store consumer (below) and `GameModule.arenaGameId` (index.ts). */
@@ -410,7 +409,11 @@ export function usePvpBlackjack(): PvpView {
           (st.phase === "draw_commit" || st.phase === "draw_reveal") &&
           owed === info.role
         ) {
-          const mv = proto.randomMove(st, info.role, Math.random); // mints commit secret / reveals
+          // Commit secrets must come from the CSPRNG (salts are revealed publicly).
+          const mv =
+            st.phase === "draw_commit"
+              ? secureCommitMove(core.randomBytes)
+              : proto.randomMove(st, info.role, Math.random); // reveal only discloses the stored secret
           if (mv)
             setTimeout(
               () => {
@@ -1041,7 +1044,11 @@ export function usePvpBlackjack(): PvpView {
       const owed = actorFor(st, getPlayerParty);
       if (!owed || owed !== roleRef.current) return;
       if (st.phase === "draw_commit" || st.phase === "draw_reveal") {
-        const mv = proto.randomMove(st, roleRef.current, Math.random);
+        // Commit secrets must come from the CSPRNG (salts are revealed publicly).
+        const mv =
+          st.phase === "draw_commit"
+            ? secureCommitMove(core.randomBytes)
+            : proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
           setTimeout(() => {
             try {

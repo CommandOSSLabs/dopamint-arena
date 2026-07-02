@@ -1,9 +1,16 @@
 /**
- * Regular Payments tunnel session — open on Go shop, stream A→B micro-payments on Pay now,
- * settle once, then thank-you. Kept out of React (per windowId) so minimize/reflow does not
- * abort an in-flight pay stream (ADR-0003).
+ * Regular Payments tunnel session (Tunnel Mart / grocery checkout).
+ *
+ * Bot-server target: shopper = seat A, shop bot = seat B, `DistributedTunnel` + `/v1/mp` relay.
+ * Each cart pick = `propose` a catalog-priced payment; Pay now = cooperative settle only.
+ *
+ * Always user vs shop bot (seat A = shopper, seat B = fleet bot). `autoMode` only toggles
+ * the auto-shopping loop — not the opponent.
+ *
+ * Bot entry is arena-only (`arena.join` via `enterArenaMatch`). `queue.join` is not used — that
+ * path is for human PvP matchmaking in other games.
  */
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -14,16 +21,22 @@ import type {
   PaymentMove,
   PaymentsState,
 } from "sui-tunnel-ts/protocol/payments";
-import { createParticipant } from "sui-tunnel-ts/core/keys";
-import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
+import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
+import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
+import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import { paymentsMoveCodec } from "sui-tunnel-ts/protocol/paymentsCodec";
+import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import {
   getControlPlaneClient,
+  resolveBackendUrl,
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
 import { settleViaBackend } from "@/backend/settle";
+import { MpClient, resolveMpWsUrl, type PvpChannel } from "@/pvp/mpClient";
 import {
   closeCooperativeWithRoot,
   readCreatedAt,
@@ -31,10 +44,15 @@ import {
 } from "@/onchain/tunnelTx";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
+import { configureSharedBatcher } from "@/onchain/sharedTunnelOpenBatcher";
+import { allocateArenaGameForPlay } from "@/onchain/arenaPlay";
+import type { ArenaAllocation } from "@/onchain/arenaEnter";
 import {
-  configureSharedBatcher,
-  requestTunnelOpen,
-} from "@/onchain/sharedTunnelOpenBatcher";
+  clearArenaEntry,
+  consumeArenaEntry,
+  getArenaEntry,
+  subscribeArena,
+} from "@/onchain/arenaAllocationStore";
 import type {
   CartFlyCue,
   CartLine,
@@ -45,26 +63,54 @@ import type {
 import { PRODUCTS } from "../utils/catalog";
 import {
   AUTO_ADD_INTERVAL_MS,
+  AUTO_BURST_BUDGET_MS,
   AUTO_TARGET_CHOICES,
-  DEPOSIT_B_DUST,
+  AUTO_UI_BATCH_STEPS,
   DEPOSIT_BUDGET,
-  MICRO_UNIT,
-  STREAM_DURATION_MS,
+  REGULAR_PAYMENTS_ARENA_GAME_ID,
+  REGULAR_PAYMENTS_GAME_ID,
 } from "../utils/constants";
-import {
-  addCartLine,
-  cartTotal,
-  removeCartLine,
-  verifyMove,
-} from "../utils/sessionCore";
+import { addCartLine, cartTotal, verifyMove } from "../utils/sessionCore";
 import { formatMtps } from "../utils";
-
-const GAME_ID = "regular-payments";
 
 const SETTLE_URL = (digest: string) =>
   `https://suiscan.xyz/testnet/tx/${digest}`;
 
+/** Bot graceful settle + relay RTT; Pay now errors instead of hanging forever. */
+const SETTLE_HALF_TIMEOUT_MS = 90_000;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+type RpTunnel = DistributedTunnel<PaymentsState, PaymentMove>;
+
+/** Bot cooperative-close half on the arena wire (`PeerMessage` `settleHalf`). */
+interface SettleHalfWire {
+  sig: string;
+  transcriptRoot: string;
+}
+
+function makeInbox(channel: PvpChannel) {
+  const buf = new Map<string, unknown>();
+  const waiters = new Map<string, (m: unknown) => void>();
+  channel.onPeer((m) => {
+    const w = waiters.get(m.t);
+    if (w) {
+      waiters.delete(m.t);
+      w(m);
+    } else {
+      buf.set(m.t, m);
+    }
+  });
+  return <T = unknown>(t: string): Promise<T> =>
+    new Promise((res) => {
+      const b = buf.get(t);
+      if (b) {
+        buf.delete(t);
+        res(b as T);
+      } else {
+        waiters.set(t, res as (m: unknown) => void);
+      }
+    });
+}
 
 interface SessionDeps {
   report: ReturnType<typeof useTelemetry>["report"];
@@ -93,6 +139,8 @@ interface RegularPaymentsSnapshot {
   autoMode: boolean;
   autoTarget: bigint;
   cartFlyCue: CartFlyCue | null;
+  /** Off-chain pick awaiting bot ACK — blocks another propose, not full-shop dim. */
+  pickInFlight: boolean;
 }
 
 class RegularPaymentsSession {
@@ -111,8 +159,6 @@ class RegularPaymentsSession {
   private settleUrl: string | null = null;
   private error: string | null = null;
 
-  private opening = false;
-  private paying = false;
   private autoMode = true;
   private autoTarget = 0n;
   private autoAbort: AbortController | null = null;
@@ -120,13 +166,23 @@ class RegularPaymentsSession {
   private lastAddMs = 0;
   private cartFlySeq = 0;
   private cartFlyCue: CartFlyCue | null = null;
+  private pickInFlight = false;
+  /** P5: auto time-budget burst — defer cart UI patches between flushes. */
+  private autoBurstActive = false;
+  private burstStepsSinceFlush = 0;
 
-  private tunnel: OffchainTunnel<PaymentsState, PaymentMove> | null = null;
-  private protocol: PaymentsProtocol | null = null;
-  private transcript: Transcript | null = null;
+  private tunnel: RpTunnel | null = null;
   private tunnelId = "";
-  private createdAt = 0n;
+  /** Reset by the hook after a consumed arena entry fails or the round completes. */
+  releaseArenaEntryGate: (() => void) | null = null;
   private moveTs = 1n;
+
+  private mp: MpClient | null = null;
+  private channel: PvpChannel | null = null;
+  private role: "A" | "B" | null = null;
+  /** Early `settleHalf` from the shop bot (mirrors blackjack's `bufferedSettleRef`). */
+  private bufferedSettleHalf: SettleHalfWire | null = null;
+  private settleHalfWaiter: ((half: SettleHalfWire) => void) | null = null;
 
   private cpSession: RegisterSessionResult | null = null;
   private moveCount = 0;
@@ -134,8 +190,8 @@ class RegularPaymentsSession {
   private lastHeartbeat = Date.now();
   private tpsWindowStart = Date.now();
   private tpsWindowSteps = 0;
+  private localTxnSeq = 0;
 
-  /** Cached snapshot — useSyncExternalStore requires referential stability between emits. */
   private snap: RegularPaymentsSnapshot = {
     screen: "lobby",
     phase: "idle",
@@ -150,6 +206,7 @@ class RegularPaymentsSession {
     autoMode: true,
     autoTarget: 0n,
     cartFlyCue: null,
+    pickInFlight: false,
   };
 
   subscribe = (cb: () => void): (() => void) => {
@@ -174,6 +231,7 @@ class RegularPaymentsSession {
       autoMode: this.autoMode,
       autoTarget: this.autoTarget,
       cartFlyCue: this.cartFlyCue,
+      pickInFlight: this.pickInFlight,
     };
     for (const l of this.listeners) l();
   }
@@ -192,11 +250,14 @@ class RegularPaymentsSession {
     if (p.autoMode !== undefined) this.autoMode = p.autoMode;
     if (p.autoTarget !== undefined) this.autoTarget = p.autoTarget;
     if (p.cartFlyCue !== undefined) this.cartFlyCue = p.cartFlyCue;
+    if (p.pickInFlight !== undefined) this.pickInFlight = p.pickInFlight;
     this.emit();
   }
 
   private syncBalance() {
-    if (this.tunnel) this.balanceA = this.tunnel.state.balanceA;
+    const t = this.tunnel;
+    if (!t) return;
+    this.balanceA = t.displayState.balanceA;
   }
 
   private flushHeartbeat(force: boolean) {
@@ -208,7 +269,6 @@ class RegularPaymentsSession {
     const actionsDelta = this.actions;
     this.actions = 0;
     this.lastHeartbeat = now;
-    // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
     this.deps?.report.recordActions(actionsDelta);
     getControlPlaneClient()
       .sendHeartbeat(s.sessionId, s.statsToken, {
@@ -232,12 +292,44 @@ class RegularPaymentsSession {
     }
   }
 
+  private async awaitSettleHalf(timeoutMs: number): Promise<SettleHalfWire> {
+    const buffered = this.bufferedSettleHalf;
+    if (buffered) {
+      this.bufferedSettleHalf = null;
+      return buffered;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        new Promise<SettleHalfWire>((res) => {
+          this.settleHalfWaiter = res;
+        }),
+        new Promise<SettleHalfWire>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`Timed out waiting for peer "settleHalf"`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (this.settleHalfWaiter) this.settleHalfWaiter = null;
+    }
+  }
+
+  private teardownRelay() {
+    this.mp?.close();
+    this.mp = null;
+    this.channel = null;
+    this.role = null;
+    this.bufferedSettleHalf = null;
+    this.settleHalfWaiter = null;
+  }
+
   private abandonTunnel() {
+    this.teardownRelay();
     this.tunnel = null;
-    this.protocol = null;
-    this.transcript = null;
     this.tunnelId = "";
-    this.createdAt = 0n;
     this.moveTs = 1n;
     this.cpSession = null;
     this.moveCount = 0;
@@ -248,16 +340,343 @@ class RegularPaymentsSession {
     this.rollingTps = 0;
     this.tpsWindowStart = Date.now();
     this.tpsWindowSteps = 0;
+    this.cart = [];
+    this.pickInFlight = false;
+    this.autoBurstActive = false;
+    this.burstStepsSinceFlush = 0;
+  }
+
+  private flushBurstUi() {
+    this.burstStepsSinceFlush = 0;
+    this.patch({
+      cart: [...this.cart],
+      paidSoFar: this.paidSoFar,
+      balanceA: this.balanceA,
+      pickInFlight: this.pickInFlight,
+      rollingTps: this.rollingTps,
+    });
+  }
+
+  /** Yield until the current pick ACK lands (auto burst uses sleep(0), not 50ms poll). */
+  private async waitPickIdle(signal: AbortSignal): Promise<boolean> {
+    while (this.pickInFlight) {
+      if (signal.aborted || !this.autoMode) return false;
+      await sleep(0);
+    }
+    return true;
   }
 
   dispose = () => {
     this.gen += 1;
-    this.opening = false;
-    this.paying = false;
     this.stopAutoLoop();
     this.abandonTunnel();
     this.listeners.clear();
     this.deps?.report.setActive(0);
+  };
+
+  /** On-demand arena entry: reserve a shop bot + deposit seat A, then `arena.join`. */
+  private fundArenaAndEnter() {
+    const deps = this.deps;
+    if (!deps?.account) return;
+
+    const myGen = ++this.gen;
+    const wallet = deps.account;
+    this.patch({
+      phase: "opening",
+      error: null,
+      settleDigest: null,
+      settleUrl: null,
+      paidSoFar: 0n,
+      payTarget: 0n,
+      rollingTps: 0,
+    });
+
+    void (async () => {
+      try {
+        const entry = await allocateArenaGameForPlay({
+          arenaGameId: REGULAR_PAYMENTS_ARENA_GAME_ID,
+          wallet,
+          stake: {
+            sponsoredSignExec: deps.sponsoredSignExec,
+            walletSignExec: deps.signExec,
+            prepareStake: deps.prepareStake,
+            selectStakeCoin: deps.selectStakeCoin,
+            ensureStakeBalance: deps.ensureStakeBalance,
+          },
+          label: REGULAR_PAYMENTS_ARENA_GAME_ID,
+          stakePerGame: DEPOSIT_BUDGET,
+        });
+        if (this.gen !== myGen) return;
+        if (!entry) {
+          throw new Error("No shop bot available — try again in a moment.");
+        }
+        this.enterArenaMatch(entry.allocation, entry.keypair);
+      } catch (e) {
+        if (this.gen !== myGen) return;
+        this.releaseArenaEntryGate?.();
+        this.patch({
+          phase: "error",
+          screen: "lobby",
+          error: String((e as Error)?.message ?? e),
+        });
+      }
+    })();
+  }
+
+  private wireDistributedTunnel(
+    dt: RpTunnel,
+    protocol: PaymentsProtocol,
+    tunnelId: string,
+    initialBalanceA: bigint,
+    partyA: string,
+    partyB: string,
+  ) {
+    const deps = this.deps!;
+    this.tunnel = dt;
+    this.tunnelId = tunnelId;
+    this.moveTs = 1n;
+    this.cpSession = null;
+    this.moveCount = 0;
+    this.actions = 0;
+    this.lastHeartbeat = Date.now();
+
+    dt.onConfirmed = () => {
+      this.moveCount += 1;
+      this.actions += 1;
+      deps.report.bumpCounters({
+        updates: 1,
+        signatures: 1,
+        verifications: 1,
+        bytes: 0,
+      });
+      this.bumpTps(1);
+      this.flushHeartbeat(false);
+      this.syncBalance();
+      this.pickInFlight = false;
+
+      if (this.autoBurstActive) {
+        this.burstStepsSinceFlush += 1;
+        if (this.burstStepsSinceFlush >= AUTO_UI_BATCH_STEPS) {
+          this.flushBurstUi();
+        }
+      } else {
+        this.patch({
+          pickInFlight: false,
+          balanceA: this.balanceA,
+        });
+      }
+    };
+
+    getControlPlaneClient()
+      .registerSession({
+        userAddress: deps.account!,
+        game: REGULAR_PAYMENTS_ARENA_GAME_ID,
+        tunnels: [{ tunnelId, partyA, partyB }],
+      })
+      .then((s) => {
+        this.cpSession = s;
+      })
+      .catch((e) =>
+        console.error("[regular-payments] registerSession failed:", e),
+      );
+
+    deps.report.bumpCounters({ tunnelsOpened: 1 });
+    deps.report.setActive(2);
+    deps.report.pushLocalTxn({
+      id: ++this.localTxnSeq,
+      game: REGULAR_PAYMENTS_GAME_ID,
+      address: deps.account,
+      time: new Date().toLocaleTimeString("en-GB"),
+      bot: "Shop",
+      type: "Open shop",
+      status: "Success",
+      amount: formatMtps(initialBalanceA),
+    });
+    this.syncBalance();
+    this.patch({
+      screen: "shop",
+      phase: "shopping",
+      balanceA: initialBalanceA,
+      error: null,
+    });
+  }
+
+  private buildDistributedTunnel(
+    tunnelId: string,
+    wallet: string,
+    tunnelEph: KeyPair,
+    oppWallet: string,
+    oppPub: Uint8Array,
+    role: "A" | "B",
+    channel: PvpChannel,
+    balances: { a: bigint; b: bigint },
+  ): RpTunnel {
+    const backend = defaultBackend();
+    const protocol = new PaymentsProtocol();
+    const dt = new DistributedTunnel<PaymentsState, PaymentMove>(
+      protocol,
+      {
+        tunnelId,
+        self: makeEndpoint(backend, wallet, tunnelEph, true),
+        opponent: makeEndpoint(
+          backend,
+          oppWallet,
+          { publicKey: oppPub, scheme: tunnelEph.scheme },
+          false,
+        ),
+        selfParty: role,
+        moveCodec: paymentsMoveCodec,
+      },
+      channel.transport,
+      balances,
+    );
+    return dt;
+  }
+
+  enterArenaMatch = (allocation: ArenaAllocation, eph: KeyPair) => {
+    const deps = this.deps;
+    if (!deps?.account) {
+      this.patch({
+        phase: "error",
+        error: "Connect a wallet to enter the shop.",
+      });
+      return;
+    }
+
+    const myGen = ++this.gen;
+    this.abandonTunnel();
+    this.patch({
+      error: null,
+    });
+
+    void (async () => {
+      try {
+        if (this.gen !== myGen) return;
+        const wallet = deps.account!;
+        const connEph = generateKeyPair();
+        const mp = new MpClient(
+          resolveMpWsUrl(resolveBackendUrl()),
+          wallet,
+          connEph,
+        );
+        this.mp = mp;
+        await mp.connect();
+
+        const match = await mp.joinMatch(allocation.matchId);
+        if (this.gen !== myGen) return;
+        this.role = match.role;
+
+        const channel = mp.channel(match.matchId);
+        this.channel = channel;
+        this.bufferedSettleHalf = null;
+        this.settleHalfWaiter = null;
+
+        const waitPeer = makeInbox(channel);
+
+        channel.addPeerListener((m) => {
+          if (m.t !== "settleHalf") return;
+          const half: SettleHalfWire = {
+            sig: String(m.sig),
+            transcriptRoot: String(m.transcriptRoot),
+          };
+          if (this.settleHalfWaiter) {
+            this.settleHalfWaiter(half);
+            this.settleHalfWaiter = null;
+          } else {
+            this.bufferedSettleHalf = half;
+          }
+        });
+
+        channel.sendPeer({
+          t: "hello",
+          ephemeralPubkey: toHex(eph.publicKey),
+        });
+        const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
+        const oppPub = fromHex(hello.ephemeralPubkey);
+
+        const stake =
+          allocation.stakeEach != null
+            ? BigInt(allocation.stakeEach)
+            : DEPOSIT_BUDGET;
+        if (match.role !== "A") {
+          throw new Error(
+            "Regular Payments arena matches must seat the shopper as party A.",
+          );
+        }
+        const protocol = new PaymentsProtocol();
+        const dt = this.buildDistributedTunnel(
+          allocation.tunnelId,
+          wallet,
+          eph,
+          match.opponentWallet,
+          oppPub,
+          match.role,
+          channel,
+          { a: stake, b: stake },
+        );
+
+        this.tunnelId = allocation.tunnelId;
+
+        this.wireDistributedTunnel(
+          dt,
+          protocol,
+          allocation.tunnelId,
+          dt.state.balanceA,
+          wallet,
+          match.opponentWallet,
+        );
+      } catch (e) {
+        if (this.gen !== myGen) return;
+        this.releaseArenaEntryGate?.();
+        deps.report.setActive(0);
+        this.abandonTunnel();
+        this.patch({
+          phase: "error",
+          screen: "lobby",
+          error: String((e as Error)?.message ?? e),
+        });
+      }
+    })();
+  };
+
+  findShop = () => {
+    const deps = this.deps;
+    if (!deps?.account) {
+      this.patch({
+        phase: "error",
+        error: "Connect a wallet to find a shop.",
+      });
+      return;
+    }
+    if (
+      this.phase === "opening" ||
+      this.phase === "settling" ||
+      this.pickInFlight
+    ) {
+      return;
+    }
+
+    if (this.tunnel && this.phase === "shopping") {
+      this.syncBalance();
+
+      this.patch({
+        screen: "shop",
+        error: null,
+        paidSoFar: cartTotal(this.cart),
+        payTarget: 0n,
+        balanceA: this.tunnel.state.balanceA,
+      });
+      return;
+    }
+
+    const arenaEntry = getArenaEntry(REGULAR_PAYMENTS_ARENA_GAME_ID);
+    if (arenaEntry) {
+      clearArenaEntry(REGULAR_PAYMENTS_ARENA_GAME_ID);
+      this.enterArenaMatch(arenaEntry.allocation, arenaEntry.keypair);
+      return;
+    }
+
+    this.fundArenaAndEnter();
   };
 
   private stopAutoLoop() {
@@ -321,13 +740,19 @@ class RegularPaymentsSession {
         this.phase === "opening" ||
         this.phase === "error"
       ) {
-        if (!this.opening && !this.paying) {
-          this.goShop();
+        if (
+          this.phase !== "opening" &&
+          this.phase !== "settling" &&
+          !this.pickInFlight
+        ) {
+          this.findShop();
         }
         const shopReady = await this.waitForState(
           signal,
           () =>
-            (this.screen === "shop" && this.phase === "shopping") ||
+            (this.screen === "shop" &&
+              this.phase === "shopping" &&
+              !this.pickInFlight) ||
             this.phase === "error",
         );
         if (!shopReady) return;
@@ -342,18 +767,37 @@ class RegularPaymentsSession {
       const target = this.randomAutoTarget();
       this.patch({ autoTarget: target });
 
-      while (!signal.aborted && this.autoMode && this.phase === "shopping") {
-        const total = cartTotal(this.cart);
-        if (total >= target) break;
+      this.autoBurstActive = true;
+      this.burstStepsSinceFlush = 0;
+      try {
+        const deadline = Date.now() + AUTO_BURST_BUDGET_MS;
+        while (
+          !signal.aborted &&
+          this.autoMode &&
+          this.phase === "shopping" &&
+          Date.now() < deadline
+        ) {
+          const total = cartTotal(this.cart);
+          if (total >= target) break;
 
-        const product = this.pickRandomProduct();
-        if (total + product.priceMtps > DEPOSIT_BUDGET) break;
+          const product = this.pickRandomProduct();
+          const balanceA = this.tunnel?.state.balanceA ?? 0n;
+          if (product.priceMtps > balanceA) break;
 
-        this.addToCart(product, true);
-        await sleep(AUTO_ADD_INTERVAL_MS);
+          this.addToCart(product, true);
+          const ready = await this.waitPickIdle(signal);
+          if (!ready) return;
+          await sleep(0);
+        }
+      } finally {
+        this.autoBurstActive = false;
+        this.flushBurstUi();
       }
 
       if (signal.aborted || !this.autoMode) return;
+
+      const picksDone = await this.waitPickIdle(signal);
+      if (!picksDone) return;
 
       if (this.phase === "shopping" && cartTotal(this.cart) > 0n) {
         this.payNow(true);
@@ -378,15 +822,15 @@ class RegularPaymentsSession {
   toggleAutoMode = () => {
     if (this.autoMode) {
       this.stopAutoLoop();
+      this.autoBurstActive = false;
+      this.flushBurstUi();
       this.patch({ autoMode: false });
       return;
     }
-
     this.patch({ autoMode: true });
     this.startAutoLoop();
   };
 
-  /** Back from shop — UI only; cart persists until trash or round end. */
   goLobby = () => {
     if (this.tunnel) this.syncBalance();
     this.patch({
@@ -402,74 +846,89 @@ class RegularPaymentsSession {
     });
   };
 
-  /** Thank-you → lobby — clears cart and pay state for the next trip. */
   completeRound = () => {
+    this.releaseArenaEntryGate?.();
     this.abandonTunnel();
+
     this.patch({
       screen: "lobby",
       phase: "idle",
-      cart: [],
-      paidSoFar: 0n,
-      payTarget: 0n,
-      rollingTps: 0,
       error: null,
       settleDigest: null,
       settleUrl: null,
-      balanceA: DEPOSIT_BUDGET,
       autoTarget: 0n,
     });
   };
 
   addToCart = (product: Product, fromAuto = false) => {
-    if (this.phase !== "shopping") return;
-    if (!this.tunnel) return;
-
-    const now = Date.now();
-    if (now - this.lastAddMs < AUTO_ADD_INTERVAL_MS) return;
-    this.lastAddMs = now;
-
-    // Check budget locally first
-    if (product.priceMtps > this.tunnel.state.balanceA) {
-      this.patch({ error: "Insufficient budget in your tunnel." });
+    if (this.phase !== "shopping" || this.pickInFlight) return;
+    const tunnel = this.tunnel;
+    if (!tunnel) return;
+    if (this.role !== "A") {
+      this.patch({ error: "Only seat A (shopper) can add items to the cart." });
       return;
     }
 
-    // Prepare and verify move
+    if (!fromAuto) {
+      const now = Date.now();
+      if (now - this.lastAddMs < AUTO_ADD_INTERVAL_MS) return;
+      this.lastAddMs = now;
+    }
+
+    // Cart lines are already paid (balanceA was debited on each confirmed pick).
+    // Compare only the next line price to the remaining shopper balance.
+    if (product.priceMtps > tunnel.state.balanceA) {
+      this.patch({
+        error: `Insufficient balance in your tunnel (${formatMtps(tunnel.state.balanceA)} MTPS left of ${formatMtps(DEPOSIT_BUDGET)}).`,
+      });
+      return;
+    }
+
     const move = { from: "A" as const, amount: product.priceMtps };
-    const verification = verifyMove(this.tunnel.state, move, PRODUCTS);
+    const verification = verifyMove(tunnel.state, move, PRODUCTS);
     if (!verification.valid) {
       this.patch({ error: verification.error ?? "Invalid move." });
       return;
     }
 
-    // Apply the off-chain tunnel step
-    this.tunnel.step(move, "A", { timestamp: this.moveTs++ });
+    try {
+      tunnel.propose(move, this.moveTs++);
+    } catch (e) {
+      this.patch({
+        error: String((e as Error)?.message ?? e),
+      });
+      return;
+    }
     this.syncBalance();
 
+    if (!fromAuto) {
+      this.stopAutoLoop();
+      this.autoMode = false;
+    }
+
     const nextCart = addCartLine(this.cart, product);
+    this.cart = nextCart;
+    this.paidSoFar += product.priceMtps;
+
     const cartFlyCue: CartFlyCue = {
       seq: ++this.cartFlySeq,
       productId: product.id,
       emoji: product.emoji,
     };
+    this.pickInFlight = true;
 
-    if (!fromAuto) {
-      this.stopAutoLoop();
-      this.patch({
-        autoMode: false,
-        cart: nextCart,
-        paidSoFar: (this.paidSoFar += product.priceMtps),
-        cartFlyCue,
-        balanceA: this.balanceA,
-        error: null,
-      });
+    if (fromAuto && this.autoBurstActive) {
+      // Cart/balance stay in memory until flushBurstUi; fly cue patches every pick.
+      this.patch({ cartFlyCue, pickInFlight: true });
       return;
     }
 
     this.patch({
+      pickInFlight: true,
       cart: nextCart,
-      paidSoFar: (this.paidSoFar += product.priceMtps),
+      paidSoFar: this.paidSoFar,
       cartFlyCue,
+      autoMode: this.autoMode,
       balanceA: this.balanceA,
       error: null,
     });
@@ -478,184 +937,25 @@ class RegularPaymentsSession {
   removeFromCart = (productId: string) => {
     if (this.phase !== "shopping") return;
     if (!this.tunnel) return;
+    if (!this.cart.find((l) => l.id === productId)) return;
 
-    // Find the item in the cart to get its price
-    const line = this.cart.find((l) => l.id === productId);
-    if (!line) return;
-
-    // Prepare and verify refund move (from B to A)
-    const move = { from: "B" as const, amount: line.priceMtps };
-    const verification = verifyMove(this.tunnel.state, move, PRODUCTS);
-    if (!verification.valid) {
-      this.patch({ error: verification.error ?? "Invalid refund move." });
-      return;
-    }
-
-    // Apply the off-chain refund step
-    this.tunnel.step(move, "B", { timestamp: this.moveTs++ });
-    this.syncBalance();
-
-    const nextCart = removeCartLine(this.cart, productId);
     this.patch({
-      cart: nextCart,
-      balanceA: this.balanceA,
-      error: null,
+      error:
+        "Remove from cart over relay requires the shop bot to propose refunds (coming soon).",
     });
-  };
-
-  goShop = () => {
-    const deps = this.deps;
-    if (!deps?.account) {
-      this.patch({
-        phase: "error",
-        error: "Connect a wallet to open the shopping tunnel.",
-      });
-      return;
-    }
-    if (this.opening || this.paying) return;
-    if (this.phase === "paying" || this.phase === "settling") return;
-
-    if (this.tunnel && this.phase === "shopping") {
-      this.syncBalance();
-      this.patch({
-        screen: "shop",
-        error: null,
-        paidSoFar: 0n,
-        payTarget: 0n,
-        balanceA: this.tunnel.state.balanceA,
-      });
-      return;
-    }
-
-    this.gen += 1;
-    const myGen = this.gen;
-    this.opening = true;
-    this.abandonTunnel();
-    this.patch({
-      phase: "opening",
-      error: null,
-      settleDigest: null,
-      settleUrl: null,
-      paidSoFar: 0n,
-      payTarget: 0n,
-      rollingTps: 0,
-    });
-
-    void (async () => {
-      try {
-        const a = createParticipant("shopper-a");
-        const b = createParticipant("shop-pos-b");
-        const reads = deps.client as unknown as SuiReads;
-        const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
-        const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-
-        const tunnelId = await requestTunnelOpen({
-          partyA,
-          partyB,
-          aAmount: DEPOSIT_BUDGET,
-          bAmount: DEPOSIT_B_DUST,
-          coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
-          usesAddressBalance: true,
-        });
-        if (this.gen !== myGen) return;
-
-        const createdAt = await readCreatedAt(reads, tunnelId);
-        if (this.gen !== myGen) return;
-
-        const protocol = new PaymentsProtocol();
-        const tunnel = OffchainTunnel.selfPlay(
-          protocol,
-          tunnelId,
-          a.keyPair,
-          b.keyPair,
-          a.address,
-          b.address,
-          { a: DEPOSIT_BUDGET, b: DEPOSIT_B_DUST },
-        );
-        const transcript = new Transcript(tunnelId);
-        tunnel.onUpdate = (u, bytes) => {
-          transcript.append(u);
-          this.moveCount += 1;
-          this.actions += 1;
-          deps.report.bumpCounters({
-            updates: 1,
-            signatures: 2,
-            verifications: 2,
-            bytes,
-          });
-          this.flushHeartbeat(false);
-        };
-
-        this.tunnel = tunnel;
-        this.protocol = protocol;
-        this.transcript = transcript;
-        this.tunnelId = tunnelId;
-        this.createdAt = createdAt;
-        this.moveTs = 1n;
-        this.cpSession = null;
-        this.moveCount = 0;
-        this.actions = 0;
-        this.lastHeartbeat = Date.now();
-
-        getControlPlaneClient()
-          .registerSession({
-            userAddress: deps.account!,
-            game: "regular-payments",
-            tunnels: [{ tunnelId, partyA: a.address, partyB: b.address }],
-          })
-          .then((s) => {
-            this.cpSession = s;
-          })
-          .catch((e) =>
-            console.error("[regular-payments] registerSession failed:", e),
-          );
-
-        deps.report.bumpCounters({ tunnelsOpened: 1 });
-        deps.report.setActive(2);
-        deps.report.pushLocalTxn({
-          id: 0,
-          game: GAME_ID,
-          time: new Date().toLocaleTimeString("en-GB"),
-          bot: "You",
-          type: "Shop open",
-          status: "Success",
-          amount: formatMtps(DEPOSIT_BUDGET),
-        });
-        this.syncBalance();
-        this.opening = false;
-        this.patch({
-          screen: "shop",
-          phase: "shopping",
-          balanceA: tunnel.state.balanceA,
-        });
-      } catch (e) {
-        if (this.gen !== myGen) return;
-        this.opening = false;
-        deps.report.setActive(0);
-        this.abandonTunnel();
-        this.patch({
-          phase: "error",
-          screen: "lobby",
-          error: String((e as Error)?.message ?? e),
-        });
-      }
-    })();
   };
 
   payNow = (_fromAuto = false) => {
     const deps = this.deps;
     const tunnel = this.tunnel;
-    const protocol = this.protocol;
-    const transcript = this.transcript;
-    if (!deps || !tunnel || !protocol || !transcript) return;
-    if (this.paying || this.phase !== "shopping") return;
+    const channel = this.channel;
+    if (!deps?.account || !tunnel || !channel) return;
+    if (this.phase !== "shopping" || this.pickInFlight) return;
 
     const target = cartTotal(this.cart);
     if (target <= 0n) return;
 
-    this.gen += 1;
     const myGen = this.gen;
-    this.paying = true;
 
     this.patch({
       phase: "settling",
@@ -672,57 +972,63 @@ class RegularPaymentsSession {
         deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
         deps.report.setActive(0);
 
-        const settlement = tunnel.buildSettlementWithRoot(
-          this.createdAt,
-          transcript.root(),
-          0n,
+        channel.sendPeer({ t: "stop" });
+
+        const other = await this.awaitSettleHalf(SETTLE_HALF_TIMEOUT_MS);
+
+        const createdAt = await readCreatedAt(
+          deps.client as SuiReads,
+          this.tunnelId,
         );
+        const coSigned = coSignCloseFromPeerRoot(
+          tunnel,
+          createdAt,
+          fromHex(other.transcriptRoot),
+          fromHex(other.sig),
+        );
+
         const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
-        const digest = await settleViaBackend({
-          tunnelId: this.tunnelId,
-          settlement,
-          transcript: transcript.rawEntries(),
-          label: "regular-payments",
-          fallbackClose: () =>
-            closeCooperativeWithRoot({
-              signExec: (isMtpsConfigured
-                ? deps.sponsoredSignExec
-                : deps.signExec) as never,
-              tunnelId: this.tunnelId,
-              settlement,
-              coinType,
-            }),
-        });
+        const digest =
+          this.role === "A"
+            ? await settleViaBackend({
+                tunnelId: this.tunnelId,
+                settlement: coSigned,
+                transcript: [],
+                label: REGULAR_PAYMENTS_GAME_ID,
+                fallbackClose: () =>
+                  closeCooperativeWithRoot({
+                    signExec: (isMtpsConfigured
+                      ? deps.sponsoredSignExec
+                      : deps.signExec) as never,
+                    tunnelId: this.tunnelId,
+                    settlement: coSigned,
+                    coinType,
+                  }),
+              })
+            : undefined;
 
         if (this.gen !== myGen) return;
 
         deps.report.pushLocalTxn({
-          id: 0,
-          game: GAME_ID,
+          id: ++this.localTxnSeq,
+          game: REGULAR_PAYMENTS_GAME_ID,
           digest: digest ?? undefined,
           address: deps.account,
           time: new Date().toLocaleTimeString("en-GB"),
-          bot: "You",
+          bot: "Shop",
           type: "Settled",
           status: "Success",
           amount: formatMtps(target),
         });
 
-        this.abandonTunnel();
-        this.paying = false;
         this.patch({
           screen: "thankYou",
           phase: "idle",
-          cart: [...this.cart],
-          paidSoFar: this.paidSoFar,
-          payTarget: this.paidSoFar,
           settleDigest: digest ?? null,
           settleUrl: digest ? SETTLE_URL(digest) : null,
-          balanceA: DEPOSIT_BUDGET,
         });
       } catch (e) {
         if (this.gen !== myGen) return;
-        this.paying = false;
         this.syncBalance();
         this.patch({
           phase: "shopping",
@@ -750,6 +1056,8 @@ function getSession(windowId: string): RegularPaymentsSession {
 }
 
 export function useRegularPaymentsSession(windowId: string) {
+  const arenaEnteredRef = useRef(false);
+
   const { report } = useTelemetry();
   const account = useCurrentAccount();
   const client = useSuiClient();
@@ -757,6 +1065,9 @@ export function useRegularPaymentsSession(windowId: string) {
   const sponsored = useSponsoredSignExec();
 
   const session = getSession(windowId);
+  session.releaseArenaEntryGate = () => {
+    arenaEnteredRef.current = false;
+  };
   const walletSignExec = useCallback(
     async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
       const r = await signAndExecute({ transaction: tx });
@@ -776,6 +1087,30 @@ export function useRegularPaymentsSession(windowId: string) {
     selectStakeCoin: sponsored.selectStakeCoin,
   };
 
+  const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+  useEffect(() => {
+    const tryEnter = () =>
+      consumeArenaEntry(
+        REGULAR_PAYMENTS_ARENA_GAME_ID,
+        arenaEnteredRef,
+        () => {
+          const s = session.getSnapshot();
+          return s.phase === "idle" && s.screen === "lobby";
+        },
+        (allocation, keypair) => {
+          session.enterArenaMatch(allocation, keypair);
+        },
+      );
+    tryEnter();
+
+    return subscribeArena(tryEnter);
+  }, [session, snap.phase, snap.screen]);
+
+  useEffect(() => {
+    session.bindAutoLoop(Boolean(account?.address));
+  }, [account?.address, session]);
+
   configureSharedBatcher({
     reads: client as never,
     sponsoredSignExec: sponsored.signExec as never,
@@ -785,19 +1120,10 @@ export function useRegularPaymentsSession(windowId: string) {
     selectStakeCoin: sponsored.selectStakeCoin,
   });
 
-  const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
-
-  useEffect(() => {
-    session.bindAutoLoop(Boolean(account?.address));
-  }, [account?.address]);
-
   const itemCount = snap.cart.reduce((n, l) => n + l.qty, 0);
   const cartTotalValue = cartTotal(snap.cart);
   const walletConnected = Boolean(account?.address);
-  const busy =
-    snap.phase === "opening" ||
-    snap.phase === "paying" ||
-    snap.phase === "settling";
+  const busy = snap.phase === "opening" || snap.phase === "settling";
 
   return {
     ...snap,
@@ -807,7 +1133,7 @@ export function useRegularPaymentsSession(windowId: string) {
     busy,
     depositBudget: DEPOSIT_BUDGET,
 
-    goShop: session.goShop,
+    findShop: session.findShop,
     goLobby: session.goLobby,
     completeRound: session.completeRound,
     payNow: session.payNow,

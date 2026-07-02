@@ -9,9 +9,6 @@ interface RegularPaymentsLobbyProps {
 }
 
 export function RegularPaymentsLobby({ session }: RegularPaymentsLobbyProps) {
-  const disabled = !session.walletConnected || session.phase === "opening";
-  const opening = session.phase === "opening";
-
   return (
     <div className="flex h-full min-h-0 items-center justify-center p-6">
       <div className="wal-glow flex w-full max-w-sm flex-col gap-5 rounded-[20px] border border-border bg-card/75 p-6 backdrop-blur-xl">
@@ -27,13 +24,13 @@ export function RegularPaymentsLobby({ session }: RegularPaymentsLobbyProps) {
           <span className="wal-mono text-foreground">
             {formatMtps(session.depositBudget)} MTPS
           </span>
-          . Browse the aisles, add items to your cart, and check out with
-          instant micro-payments.
+          . Each add-to-cart step is a co-signed payment over the relay to the
+          shop bot.
         </p>
 
         {!session.walletConnected && (
           <p className="text-sm text-destructive">
-            Connect your wallet to go shopping.
+            Connect your wallet to find a shop.
           </p>
         )}
 
@@ -44,12 +41,12 @@ export function RegularPaymentsLobby({ session }: RegularPaymentsLobbyProps) {
         <Button
           className="w-full"
           size="lg"
-          disabled={disabled}
-          onClick={session.goShop}
+          disabled={!session.walletConnected || session.busy}
+          onClick={session.findShop}
         >
-          {opening && <Loader2 className="animate-spin" />}
+          {session.busy && <Loader2 className="animate-spin" />}
 
-          {opening ? "Opening tunnel" : "Go shop"}
+          {session.phase === "opening" ? "Opening tunnel" : "Find shop"}
         </Button>
       </div>
     </div>

@@ -48,6 +48,7 @@ export function verifyMove(
   // 2. Price validation: the amount must match a catalog price. A parameter check, so it runs
   // before the balance check — a wrong amount is "invalid price", not "insufficient balance".
   const isValidPrice = catalog.some((p) => p.priceMtps === move.amount);
+  // Catalog allowlist is also enforced on the fleet shop bot (Rust `RegularPayments` protocol).
   if (!isValidPrice) {
     return {
       valid: false,

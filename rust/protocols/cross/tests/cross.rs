@@ -112,14 +112,14 @@ fn terminal_state_rejects_more_moves_and_dead_heat_pushes() {
     dead_heat.tick = 10;
     dead_heat.players[0].lane = WIN_LANE - 1;
     dead_heat.players[0].score = WIN_LANE - 1;
-    dead_heat.players[1].lane = WIN_LANE - 1;
-    dead_heat.players[1].score = WIN_LANE - 1;
+    dead_heat.players[1].lane = WIN_LANE;
+    dead_heat.players[1].score = WIN_LANE;
     let next = protocol
         .apply_move(
             &dead_heat,
             &CrossMove {
                 dir_a: Some(CrossDir::North),
-                dir_b: Some(CrossDir::North),
+                dir_b: None,
             },
             Seat::A,
         )
@@ -127,6 +127,32 @@ fn terminal_state_rejects_more_moves_and_dead_heat_pushes() {
     assert_eq!(next.winner, None);
     assert_eq!(next.balance_a, dead_heat.balance_a);
     assert_eq!(next.balance_b, dead_heat.balance_b);
+}
+
+#[test]
+fn seat_cannot_drive_opponent_chicken() {
+    let protocol = Cross;
+    let state = protocol.initial_state(&ctx());
+    assert!(protocol
+        .apply_move(
+            &state,
+            &CrossMove {
+                dir_a: None,
+                dir_b: Some(CrossDir::North),
+            },
+            Seat::A,
+        )
+        .is_err());
+    assert!(protocol
+        .apply_move(
+            &state,
+            &CrossMove {
+                dir_a: Some(CrossDir::North),
+                dir_b: None,
+            },
+            Seat::B,
+        )
+        .is_err());
 }
 
 #[test]
