@@ -235,3 +235,47 @@ test("bridge: resume path — markActive forwards, resumeOk routes only to the o
   port1.close();
   port2.close();
 });
+
+test("SocketHost.dispose unsubscribes its MpClient events + releases its channels (no leak on close)", async () => {
+  const { port1, port2 } = new MessageChannel();
+  const fake = makeFakeMp();
+  const host = new SocketHost(fake.mp as unknown as MpClient, adapt(port1));
+  const remote = new RemoteMpClient(adapt(port2));
+
+  await remote.joinMatch("mD");
+  remote.channel("mD"); // host now owns match mD (a real relay channel)
+  await tick();
+
+  const events: unknown[] = [];
+  remote.onResumeOk((e) => events.push(e));
+
+  // Before dispose: a resumeOk for the owned match reaches the game worker.
+  fake.deliverResumeOk({
+    matchId: "mD",
+    role: "A",
+    opponentWallet: "0x",
+    game: "caro",
+    peerOnline: true,
+  });
+  await tick();
+  assert.equal(events.length, 1);
+
+  // Window closed → dispose: releases the owned channel + unsubscribes the global event subs.
+  host.dispose();
+  assert.deepEqual(fake.released, ["mD"], "dispose releases the owned match");
+
+  // After dispose the SAME event no longer forwards — the sub was removed, so no dead closure leaks
+  // on the shared MpClient (it would otherwise fire forever + post to a closed port).
+  fake.deliverResumeOk({
+    matchId: "mD",
+    role: "A",
+    opponentWallet: "0x",
+    game: "caro",
+    peerOnline: true,
+  });
+  await tick();
+  assert.equal(events.length, 1, "no forwarding after dispose");
+
+  port1.close();
+  port2.close();
+});

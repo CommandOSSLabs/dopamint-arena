@@ -11,6 +11,10 @@ import type { BridgePort, BridgeRequest } from "./socketBridge";
 export class SocketHost {
   /** Real channels for the matches this worker owns, keyed by matchId (frees on release). */
   readonly #channels = new Map<string, PvpChannel>();
+  /** Unsubscribe fns for this host's GLOBAL MpClient event subs — called on `dispose` so a closed
+   *  game worker doesn't leak dead closures on the shared socket (they'd fire forever + post to a
+   *  dead port on every resume/peer event). */
+  readonly #unsubs: Array<() => void> = [];
 
   constructor(
     private readonly mp: MpClient,
@@ -19,17 +23,30 @@ export class SocketHost {
     port.onmessage = (ev) => this.#onRequest(ev.data as BridgeRequest);
     // The MpClient fires resume/peer events GLOBALLY over the shared socket; forward only the ones
     // for matches THIS worker owns (its `#channels`), so each game worker gets exactly its own.
-    mp.onResumeOk((e) => {
-      if (this.#channels.has(e.matchId)) port.postMessage({ k: "resumeOk", e });
-    });
-    mp.onPeerResumed((e) => {
-      if (this.#channels.has(e.matchId))
-        port.postMessage({ k: "peerResumed", e });
-    });
-    mp.onPeerDropped((e) => {
-      if (this.#channels.has(e.matchId))
-        port.postMessage({ k: "peerDropped", e });
-    });
+    this.#unsubs.push(
+      mp.onResumeOk((e) => {
+        if (this.#channels.has(e.matchId))
+          port.postMessage({ k: "resumeOk", e });
+      }),
+      mp.onPeerResumed((e) => {
+        if (this.#channels.has(e.matchId))
+          port.postMessage({ k: "peerResumed", e });
+      }),
+      mp.onPeerDropped((e) => {
+        if (this.#channels.has(e.matchId))
+          port.postMessage({ k: "peerDropped", e });
+      }),
+    );
+  }
+
+  /** Tear this host down when its game worker closes: unsubscribe the global MpClient event subs and
+   *  release any channels the game didn't (frees their `#relayHandlers` on the shared socket). Does
+   *  NOT close the shared MpClient — other game workers still use it. */
+  dispose(): void {
+    for (const un of this.#unsubs) un();
+    this.#unsubs.length = 0;
+    for (const matchId of this.#channels.keys()) this.mp.releaseMatch(matchId);
+    this.#channels.clear();
   }
 
   /** Open the real relay channel for a match and pump its frames/peer down the port. Idempotent: a

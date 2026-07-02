@@ -1,9 +1,11 @@
 /**
  * The shared SOCKET worker (ADR-0030, Phase 2). Owns the ONE relay {@link MpClient} — a single
  * WebSocket for every PvP window — while each game runs in its own game worker. `engineClient` posts
- * `{type:"config"}` once, then `{type:"attach"}` transferring one end of a `MessageChannel` per game
- * worker; each port gets a {@link SocketHost} that bridges that worker's {@link RemoteMpClient} to the
- * shared socket. The socket's lifecycle is broadcast to every port so each session reflects drop/resume.
+ * `{type:"config"}` once, then `{type:"attach", windowId}` transferring one end of a `MessageChannel`
+ * per game worker; each port gets a {@link SocketHost} that bridges that worker's {@link RemoteMpClient}
+ * to the shared socket. `{type:"detach", windowId}` on window close disposes that host + drops its port
+ * — otherwise its global MpClient event subs leak and `broadcastConn` keeps posting to a dead port.
+ * Socket lifecycle is broadcast to every LIVE port so each session reflects drop/resume.
  *
  * Not a Comlink worker: it speaks the raw {@link BridgePort} protocol (frames/peer are hot-path and
  * want no proxy overhead), so it uses `self.onmessage` directly to receive config + transferred ports.
@@ -17,10 +19,13 @@ import type { ConnStatus, EngineConfig } from "./engineApi";
 let cfg: EngineConfig | null = null;
 let ready: Promise<MpClient> | null = null;
 let connStatus: ConnStatus = "closed";
-const ports: MessagePort[] = [];
+/** One entry per LIVE game worker (removed on detach) — the single source of ports, so a closed
+ *  window leaves nothing behind. `host` is null until the socket connects and the host binds. */
+const hosts = new Map<string, { port: MessagePort; host: SocketHost | null }>();
 
 function broadcastConn(): void {
-  for (const p of ports) p.postMessage({ k: "conn", status: connStatus });
+  for (const { port } of hosts.values())
+    port.postMessage({ k: "conn", status: connStatus });
 }
 
 /** Open the one shared socket (memoized). The connection ephemeral authenticates the socket only —
@@ -46,8 +51,26 @@ function ensureSocket(config: EngineConfig): Promise<MpClient> {
   return ready;
 }
 
+/** Drop a closed game worker's host: dispose it (unsub its MpClient events + release its channels)
+ *  and forget its port. Idempotent; safe if the host hasn't bound yet (attach raced detach). */
+function detach(windowId: string): void {
+  const entry = hosts.get(windowId);
+  if (!entry) return;
+  hosts.delete(windowId);
+  entry.host?.dispose();
+  try {
+    entry.port.close();
+  } catch {
+    /* already gone */
+  }
+}
+
 self.onmessage = (ev: MessageEvent): void => {
-  const m = ev.data as { type?: string; config?: EngineConfig };
+  const m = ev.data as {
+    type?: string;
+    config?: EngineConfig;
+    windowId?: string;
+  };
   if (m?.type === "config") {
     cfg = m.config ?? null;
     if (cfg) void ensureSocket(cfg);
@@ -55,14 +78,24 @@ self.onmessage = (ev: MessageEvent): void => {
   }
   if (m?.type === "attach") {
     const port = ev.ports[0];
-    if (!port || !cfg) return;
-    ports.push(port);
+    if (!port || !cfg || !m.windowId) return;
+    const windowId = m.windowId;
+    const entry: { port: MessagePort; host: SocketHost | null } = {
+      port,
+      host: null,
+    };
+    hosts.set(windowId, entry);
     // Tell the newcomer the current status right away; then bind its host once the socket is up. The
     // port buffers the game worker's early requests until SocketHost sets onmessage, so none are lost.
     port.postMessage({ k: "conn", status: connStatus });
     void ensureSocket(cfg).then((client) => {
-      new SocketHost(client, port as unknown as BridgePort);
+      if (hosts.get(windowId) !== entry) return; // detached before the socket came up
+      entry.host = new SocketHost(client, port as unknown as BridgePort);
     });
+    return;
+  }
+  if (m?.type === "detach") {
+    if (m.windowId) detach(m.windowId);
     return;
   }
 };

@@ -227,9 +227,10 @@ function ensureGameWorker(
   );
   const api = Comlink.wrap<GameWorkerApi>(worker);
   gameWorkers.set(windowId, { worker, api });
-  // Private channel game worker ↔ socket worker: transfer one end to each side.
+  // Private channel game worker ↔ socket worker: transfer one end to each side. `windowId` lets the
+  // socket worker dispose this host on `detach` (disposeWindow) instead of leaking its subs + port.
   const { port1, port2 } = new MessageChannel();
-  sw.postMessage({ type: "attach" }, [port2]);
+  sw.postMessage({ type: "attach", windowId }, [port2]);
   const onSnapshot = (snap: MatchSnapshot): void => {
     const w = pvpWindows.get(windowId);
     if (!w) return;
@@ -293,6 +294,9 @@ function disposeWindow(windowId: string): void {
     const finish = (): void => {
       gw.api[Comlink.releaseProxy]();
       gw.worker.terminate();
+      // Dispose this window's host in the socket worker (unsub its MpClient events, release its
+      // channels, drop its port) so a closed window leaves nothing behind on the shared socket.
+      socketWorker?.postMessage({ type: "detach", windowId });
       if (gameWorkers.size === 0 && socketWorker) {
         socketWorker.terminate();
         socketWorker = null;
