@@ -6,6 +6,7 @@ import {
 import { Board } from "@/games/ticTacToe/app/components/Board";
 import { CaroBoard } from "@/games/ticTacToe/app/components/CaroBoard";
 import { isMtpsConfigured } from "@/onchain/mtps";
+import { ForfeitDialog } from "@/pvp/ForfeitDialog";
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
 const CARO_SIZES = [9, 15, 19];
@@ -68,6 +69,18 @@ export function PvpScene({
   const leave = () => {
     g.leave();
     onBack();
+  };
+
+  // In-match Leave asks first — forfeiting hands the whole pot to the opponent. Gated on being
+  // live so a natural terminal ("done") can't leave the dialog offering a now-stale Forfeit option.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isLiveMatch = g.phase === "playing" || g.phase === "settling";
+  const onInMatchLeave = () => {
+    if (isLiveMatch) {
+      setConfirmOpen(true);
+      return;
+    }
+    leave();
   };
 
   // ---- Lobby / matchmaking (fills the window; sizes scale with the window via cqw) ----------
@@ -214,14 +227,6 @@ export function PvpScene({
             Next →
           </button>
         )}
-      {g.innerOver && g.phase === "playing" && (
-        <button
-          onClick={g.stop}
-          className="qp-btn ttt-ctl-btn w-full uppercase tracking-wider"
-        >
-          Stop &amp; settle
-        </button>
-      )}
       {g.phase === "done" && (
         <button
           onClick={() => {
@@ -292,7 +297,10 @@ export function PvpScene({
         </div>
         <div className="w-full max-w-[480px] flex flex-col items-center gap-2 border-t-2 border-[var(--qp-ink-soft)] pt-2">
           <div className="flex items-stretch gap-3 w-full">
-            <button onClick={leave} className="qp-btn ttt-ctl-btn flex-1">
+            <button
+              onClick={onInMatchLeave}
+              className="qp-btn ttt-ctl-btn flex-1"
+            >
               ← Leave
             </button>
             {autoToggle}
@@ -300,6 +308,15 @@ export function PvpScene({
           <div className="flex items-stretch gap-3 w-full">{actions}</div>
           {gameLog}
         </div>
+        <ForfeitDialog
+          open={isLiveMatch && confirmOpen}
+          stake={`${g.stake} MTPS`}
+          onKeepPlaying={() => setConfirmOpen(false)}
+          onForfeit={() => {
+            setConfirmOpen(false);
+            g.forfeit();
+          }}
+        />
       </div>
     );
   }
@@ -309,7 +326,7 @@ export function PvpScene({
     <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
       {/* Left pane: leave, auto, match-flow actions, status. */}
       <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
-        <button onClick={leave} className="qp-btn ttt-ctl-btn w-full">
+        <button onClick={onInMatchLeave} className="qp-btn ttt-ctl-btn w-full">
           ← Leave
         </button>
         {autoToggle}
@@ -338,6 +355,16 @@ export function PvpScene({
           </div>
         )}
       </aside>
+
+      <ForfeitDialog
+        open={isLiveMatch && confirmOpen}
+        stake={`${g.stake} MTPS`}
+        onKeepPlaying={() => setConfirmOpen(false)}
+        onForfeit={() => {
+          setConfirmOpen(false);
+          g.forfeit();
+        }}
+      />
     </div>
   );
 }

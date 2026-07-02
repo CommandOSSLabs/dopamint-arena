@@ -52,7 +52,9 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  keypairFromSecretHex,
 } from "@/pvp/resume";
+import { buildForfeitHalf } from "@/pvp/forfeit";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
@@ -163,15 +165,18 @@ export interface PvpTttView {
   auto: boolean;
   address: string; // the connected zkLogin wallet (this seat's on-chain party)
   balance: bigint; // the connected wallet's SUI balance (MIST)
+  /** This seat's per-game stake (mode-scaled) — shown in the forfeit confirm. */
+  stake: bigint;
   digests: { create?: string; deposit?: string; close?: string };
   queue: () => void;
   /** On-demand arena entry: reserve a server bot for this variant and play it now. */
   playArena: () => void;
   play: (cell: number) => void;
   next: () => void;
-  stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  /** Concede the live match: forced-half close, opponent takes the whole pot. See `forfeit` below. */
+  forfeit: () => void;
   /** After a per-game settle: clear the closed match + resume record and find a new match. */
   requeue: () => void;
 }
@@ -267,6 +272,11 @@ export function usePvpTicTacToe(
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
   const transcriptRef = useRef<proof.Transcript | null>(null);
+  // This match's per-game ephemeral signing key, rebuilt from `info.selfEphemeralSecretHex` in
+  // `activateTttSession` (live and resumed alike) — `forfeit()` needs it to co-sign the forced
+  // half. NOT the same as the hook-level `eph`: the arena path (the only reachable "Play" entry)
+  // signs with a per-allocate `arenaEph` instead, so this ref tracks whichever key is actually live.
+  const ephRef = useRef<KeyPair | null>(null);
 
   const refreshBalance = useCallback(async () => {
     const addr = walletRef.current.address;
@@ -441,6 +451,7 @@ export function usePvpTicTacToe(
     ) => {
       tunnelRef.current = t;
       channelRef.current = channel;
+      ephRef.current = keypairFromSecretHex(info.selfEphemeralSecretHex);
       // Single source of the seat role for BOTH the match and resume paths. The resume path
       // (reconnect / reload of an active match) skips onMatch, so without setting it here roleRef
       // stays null → myMark 0 → the view shows "◯ (O)" for both seats. A = X, B = O.
@@ -1071,16 +1082,6 @@ export function usePvpTicTacToe(
     }
   }, [proto]);
 
-  const stop = useCallback(() => {
-    const t = tunnelRef.current;
-    const channel = channelRef.current;
-    if (!t || !channel) return;
-    if (t.state.inner.winner === 0) return; // settle cleanly between games
-    stoppingRef.current = true;
-    channel.sendPeer({ t: "stop" });
-    void finishSettle(t, channel, matchIdRef.current);
-  }, [finishSettle]);
-
   const setAuto = useCallback(
     (on: boolean) => {
       autoRef.current = on;
@@ -1145,6 +1146,7 @@ export function usePvpTicTacToe(
       mpRef.current = null;
       channelRef.current = null;
       tunnelRef.current = null;
+      ephRef.current = null;
       setState(null);
       setRole(null);
       setDigests({});
@@ -1198,6 +1200,102 @@ export function usePvpTicTacToe(
     teardownMatch(false);
     setPhase("idle");
   }, [teardownMatch]);
+
+  // Forfeit the live match: concede the whole pot to the opponent. Builds the forced (0,total)
+  // half (`buildForfeitHalf`), sends a `forfeit` peer frame (NOT `settleHalf`, so a natural-terminal
+  // co-sign never mistakes it for the ordinary close), awaits the bot's co-signed `settleHalf` reply
+  // on the SAME buffered-inbox path `finishSettle` uses, combines, and submits exactly like
+  // `finishSettle`. Off a live tunnel it falls back to `leave`; a failed submit falls back to it too.
+  const forfeit = useCallback(() => {
+    const t = tunnelRef.current;
+    const channel = channelRef.current;
+    const eph = ephRef.current;
+    if (
+      !t ||
+      !channel ||
+      !eph ||
+      settledRef.current ||
+      (phase !== "playing" && phase !== "settling")
+    ) {
+      leave();
+      return;
+    }
+    const wallet = walletRef.current.address;
+    if (!wallet) {
+      leave();
+      return;
+    }
+    settledRef.current = true;
+    setPhase("settling");
+    void (async () => {
+      try {
+        const { a, b } = t.protocol.balances(t.state);
+        const total = a + b;
+        const root = transcriptRef.current
+          ? transcriptRef.current.root()
+          : new Uint8Array(32);
+        const { settlement, sig } = buildForfeitHalf({
+          tunnelId: t.tunnelId,
+          total,
+          wallet,
+          eph,
+          timestamp: createdAtRef.current,
+          transcriptRoot: root,
+        });
+        channel.sendPeer({
+          t: "forfeit",
+          partyABalance: settlement.partyABalance.toString(),
+          partyBBalance: settlement.partyBBalance.toString(),
+          finalNonce: settlement.finalNonce.toString(),
+          timestamp: settlement.timestamp.toString(),
+          transcriptRoot: bytesToHex(root),
+          sig: bytesToHex(sig),
+        });
+        const other =
+          bufferedSettleRef.current ??
+          (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
+            settleResolveRef.current = res;
+          }));
+        if (bytesToHex(other.root) !== bytesToHex(root)) {
+          throw new Error("Transcript root mismatch between parties");
+        }
+        const coSigned = t.combineSettlementWithRoot(
+          settlement,
+          sig,
+          other.sig,
+        );
+        // Single submitter = seat A, unified with `finishSettle` and the fleet bot (which co-signs
+        // the `settleHalf` and never submits).
+        if (roleRef.current === "A") {
+          const closeDigest = await settleViaBackend({
+            tunnelId: t.tunnelId,
+            settlement: coSigned as any,
+            transcript: transcriptRef.current
+              ? transcriptRef.current.rawEntries()
+              : [],
+            label: "tictactoe",
+            fallbackClose: async () => {
+              const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+              const res = await (isMtpsConfigured ? submitSponsored : submit)(
+                buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+              );
+              return res.digest;
+            },
+          });
+          if (closeDigest) {
+            setDigests((d) => ({ ...d, close: closeDigest }));
+            channel.sendPeer({ t: "closed", digest: closeDigest });
+          }
+        }
+        await refreshBalance();
+        clearResumeRecord(t.tunnelId);
+        setPhase("done");
+      } catch (e) {
+        console.warn("[ttt pvp] forfeit failed; leaving", e);
+        leave();
+      }
+    })();
+  }, [phase, submit, submitSponsored, refreshBalance, leave]);
 
   // Find a new match after a per-game settle. Reuse the SAME socket (the relay runs many matches
   // per connection): release the settled match and re-quickMatch in place. Tearing the socket
@@ -1304,14 +1402,15 @@ export function usePvpTicTacToe(
     auto,
     address: wallet.address ?? "",
     balance,
+    stake: scaledStake,
     digests,
     queue,
     playArena,
     play,
     next,
-    stop,
     setAuto,
     leave,
+    forfeit,
     requeue,
   };
 }
