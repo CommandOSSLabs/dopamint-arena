@@ -12,7 +12,7 @@ pub mod pipeline;
 pub mod resources;
 pub mod cgroup;
 pub mod stats;
-// pub mod report;
+pub mod report;
 // pub mod heartbeat;
 // pub mod drain;
 
