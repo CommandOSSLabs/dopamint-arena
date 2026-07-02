@@ -508,6 +508,19 @@ fn reached_move_target(samples: &TunnelSamples, moves: Option<MoveTarget>) -> bo
     samples.committed_moves() >= target
 }
 
+/// Tunnels to spawn for the next warm-up open wave. `pool` is a *soft* cap on
+/// concurrently-open tunnels (the open target), not a hard spawn ceiling: this
+/// keys off opens completed, so an open that aborts before `mark_opened` is
+/// refilled even though that pushes total spawns past `pool`. Returns 0 while
+/// the current wave is still resolving (any tunnel in flight) or once the open
+/// target is met, so waves stay batch-after-batch.
+fn next_open_wave(opened: u64, in_flight: u64, pool: u64, cohort: usize) -> usize {
+    if in_flight > 0 {
+        return 0;
+    }
+    (cohort as u64).min(pool.saturating_sub(opened)) as usize
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_lifecycle_pipeline(
     workers: usize,
@@ -793,7 +806,11 @@ pub fn run_lifecycle_pipeline(
     outcome
 }
 
-/// Drains failed opens and respawns until every initial tunnel has opened.
+/// Waits until the warm-up fleet has `pool` opened tunnels, then releases. In
+/// unbounded mode it respawns each failed open immediately; in cohort mode it
+/// spawns opens in spaced, batch-after-batch waves and refills aborts across
+/// waves (see [`next_open_wave`]) so the phase still converges on the soft
+/// `pool` open target.
 #[allow(clippy::too_many_arguments)]
 async fn wait_for_preopen(
     gate: &std::sync::Arc<PreOpenGate>,
@@ -819,14 +836,14 @@ async fn wait_for_preopen(
             return None;
         }
         if let Some(cohort) = open_cohort {
-            let opened_or_aborted = gate.opened() + *tunnels_aborted;
-            let in_flight = next_index.saturating_sub(opened_or_aborted);
-            if *next_index < pool && in_flight == 0 {
+            let opened = gate.opened();
+            let in_flight = next_index.saturating_sub(opened + *tunnels_aborted);
+            let to_spawn = next_open_wave(opened, in_flight, pool, cohort);
+            if to_spawn > 0 {
                 if open_spacing > Duration::ZERO {
                     tokio::time::sleep(open_spacing).await;
                 }
-                let remaining = pool - *next_index;
-                for _ in 0..cohort.min(remaining as usize) {
+                for _ in 0..to_spawn {
                     spawn_tunnel(tasks, *next_index);
                     *next_index += 1;
                 }
@@ -834,6 +851,13 @@ async fn wait_for_preopen(
             }
         }
 
+        // Cohort mode wakes on `opened_progress`, which is edge-triggered and
+        // stores no permit; cap the wait so a missed notification can only
+        // delay the next wave check, never strand the barrier until timeout.
+        let wait = match open_cohort {
+            Some(_) => remaining.min(Duration::from_millis(25)),
+            None => remaining,
+        };
         tokio::select! {
             biased;
 
@@ -854,7 +878,11 @@ async fn wait_for_preopen(
                     None => return Some((Instant::now(), retries)),
                 }
             }
-            _ = tokio::time::sleep(remaining) => return None,
+            _ = tokio::time::sleep(wait) => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+            }
         }
     }
 }
@@ -965,6 +993,22 @@ mod tests {
     use sui_tunnel_anchor::AnchorCostSnapshot;
     use tunnel_core::protocol_id::BLACKJACK_BET_V1;
     use tunnel_telemetry::{CollectingSink, StageId};
+
+    #[test]
+    fn open_wave_targets_opens_not_spawns() {
+        // Fresh start: spawn a full cohort (bounded by the pool).
+        assert_eq!(next_open_wave(0, 0, 8, 4), 4);
+        assert_eq!(next_open_wave(0, 0, 3, 4), 3);
+        // A wave is in flight: hold until it resolves.
+        assert_eq!(next_open_wave(0, 4, 8, 4), 0);
+        assert_eq!(next_open_wave(4, 2, 8, 4), 0);
+        // Soft cap: `pool` is an OPEN target, so aborted opens must be refilled
+        // even though that pushes total spawns past `pool`.
+        assert_eq!(next_open_wave(7, 0, 8, 4), 1);
+        // Target reached: no more waves.
+        assert_eq!(next_open_wave(8, 0, 8, 4), 0);
+        assert_eq!(next_open_wave(9, 0, 8, 4), 0);
+    }
 
     fn sample_with_tps(tps: f64) -> TunnelSample {
         TunnelSample {
