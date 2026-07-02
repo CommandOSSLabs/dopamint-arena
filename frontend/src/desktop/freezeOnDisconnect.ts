@@ -3,7 +3,7 @@
  * thawing them when it reconnects. Side-effect-free so the transition logic and
  * window enumeration are unit-testable without React or dapp-kit. The Desktop
  * effect wires these to `disposeWindow` (freeze) and the per-window `resume()`
- * effect (thaw). See docs/superpowers/specs/2026-07-02-disconnect-freeze-resume-design.md.
+ * effect (thaw).
  */
 
 /** How the connected-wallet address changed between two renders. */

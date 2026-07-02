@@ -373,7 +373,10 @@ export function ArenaView() {
     if (transition === "none") return;
     if (transition === "freeze" || transition === "switch") {
       const { layouts: l, hiddens: h, floatings: f } = floorsRef.current;
-      for (const id of collectGameWindowIds(l, h, f)) disposeWindow(id);
+      // Scope to wallet-gated (arena) games — the same set the scrim covers — so a
+      // disconnect never tears down chat/payment sessions (which have no resume path).
+      for (const id of collectGameWindowIds(l, h, f))
+        if (arenaGameIdForModule(gameOf(id))) disposeWindow(id);
     }
     setFrozen(transition === "freeze");
   }, [arenaOwner]);
