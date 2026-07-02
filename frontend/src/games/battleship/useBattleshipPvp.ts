@@ -6,7 +6,10 @@ import {
 } from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
-import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
+import {
+  makeEndpoint,
+  type CoSignedSettlementWithRoot,
+} from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
@@ -67,14 +70,18 @@ import {
   readResumeRecord,
   listActiveTunnels,
   clearResumeRecord,
+  keypairFromSecretHex,
 } from "@/pvp/resume";
+import { buildForfeitHalf } from "@/pvp/forfeit";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
 /** Backend arena/`profile_for` id (single token, same both ways). Single source of truth for the
  *  arena-store consumer (below) and `GameModule.arenaGameId` (index.ts). */
 export const BATTLESHIP_ARENA_GAME_ID = "battleship";
 
-const STAKE_BALANCE = 1n; // locked per seat: 1 MTPS (0 decimals; ADR-0023)
+/** Locked per seat: 1 MTPS (0 decimals; ADR-0023). Exported so the window can show it in the
+ *  forfeit confirm without re-deriving the stake. */
+export const STAKE_BALANCE = 1n;
 const STAKE_SHIFT = 1n; // winner-take-all: the loser's 1 MTPS stake moves to the winner (0 decimals; ADR-0023)
 /** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
  *  stale/dead match (or a backend that predates resume support) never confirms, so we
@@ -107,9 +114,8 @@ export interface BattleshipPvp {
   /** Toggle autopilot for your seat; flipping it on fires immediately if it's your turn. */
   setAuto: (on: boolean) => void;
   reset: () => void;
-  /** Back / Settle: publish this seat's settlement half and stop (status → settled). Unlike `reset`
-   *  (a bare disconnect), this settles — the staying seat / grace path submits the close. */
-  endMatch: () => void;
+  /** Concede the live match: forced-half close, opponent takes the whole pot. See `forfeit` below. */
+  forfeit: () => void;
 }
 
 type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
@@ -201,8 +207,13 @@ class PvpSession {
   private auto = defaultAuto("battleship");
   // Monotonic id for "My Activity" rows pushed per finished match.
   private txnId = 0;
-  /** Set per live match to `settle(publishOnly)`; lets `endMatch()` publish a half outside `onConfirmed`. */
-  private settleNow: ((publishOnly: boolean) => void) | null = null;
+  /** Live match's peer channel + transcript — promoted from `activateSession` locals so
+   *  `forfeit()` can drive its own settlement exchange from outside that closure. */
+  private channel: PvpChannel | null = null;
+  private transcript: Transcript | null = null;
+  private waitPeer: ReturnType<typeof makeInbox> | null = null;
+  /** This match's per-game ephemeral signing key (see `buildForfeitHalf`'s `eph`). */
+  private selfEph: KeyPair | null = null;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -292,21 +303,11 @@ class PvpSession {
     this.view = null;
     this.opponentWallet = null;
     this.error = null;
-    this.settleNow = null;
+    this.channel = null;
+    this.transcript = null;
+    this.waitPeer = null;
+    this.selfEph = null;
     this.emit();
-  };
-
-  /** End the match now (Back / Settle button): publish this seat's settlement half, then stop — the
-   *  staying seat / 1h grace path submits the cooperative close. Status advances settling→settled, so
-   *  the window can either close (Back) or show the settled screen (Settle). No live match ⇒ no-op
-   *  (the caller resets). Never blocks on a peer that won't co-sign an early end (the fleet bot). */
-  endMatch = () => {
-    if (
-      this.settleNow &&
-      (this.status === "playing" || this.status === "settling")
-    ) {
-      this.settleNow(true);
-    }
   };
 
   dispose = () => {
@@ -353,6 +354,9 @@ class PvpSession {
     // here, so set it here — the resume() path doesn't set it otherwise, which left a
     // resumed match with a null `dt` (no view → stuck at "Setting up…", dead fire).
     this.dt = dt;
+    this.channel = channel;
+    this.waitPeer = waitPeer;
+    this.selfEph = keypairFromSecretHex(info.selfEphemeralSecretHex);
     const deps = this.deps!;
     const signExec = deps.signExec;
     const sponsoredSignExec = deps.sponsoredSignExec;
@@ -362,11 +366,12 @@ class PvpSession {
     const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
     const proto = new BattleshipProtocol(STAKE_SHIFT);
     const transcript = new Transcript(dt.tunnelId);
+    this.transcript = transcript;
     let settling = false;
-    // One cooperative close, guarded to fire once. A natural terminal (all ships sunk) does the full
-    // half-exchange + submit; `publishOnly` (Back / Settle button) publishes our half and stops, so
-    // ending early never blocks on a peer that won't co-sign it (the fleet bot only settles at
-    // terminal). Stored on `settleNow` so `endMatch()` can drive the publish-only path.
+    // One cooperative close, guarded to fire once at the natural terminal (all ships sunk): does
+    // the full half-exchange + submit. `publishOnly` always runs `false` here — it exists so
+    // `settle()` can also serve a publish-and-stop caller, but nothing in this hook drives that
+    // path anymore (that was `endMatch`'s job; `forfeit()` below drives its own exchange instead).
     const triggerSettle = (publishOnly: boolean) => {
       if (settling) return;
       settling = true;
@@ -393,7 +398,6 @@ class PvpSession {
         (e) => this.fail(e),
       );
     };
-    this.settleNow = triggerSettle;
     dt.onConfirmed = (u) => {
       transcript.append(u); // verifiable move log, root-anchored at settle
       const st = dt.state;
@@ -553,6 +557,10 @@ class PvpSession {
     this.status = "idle";
     this.view = null;
     this.error = null;
+    this.channel = null;
+    this.transcript = null;
+    this.waitPeer = null;
+    this.selfEph = null;
     this.emit();
   }
 
@@ -858,6 +866,85 @@ class PvpSession {
       this.fail(e);
     }
   };
+
+  /** Forfeit the live match: concede the whole pot to the opponent. Builds the forced (0,total)
+   *  half (`buildForfeitHalf`), sends a `forfeit` peer frame (NOT `settleHalf`, so a natural-terminal
+   *  co-sign never mistakes it for the ordinary close), awaits the bot's co-signed `settleHalf`
+   *  reply, combines, and submits exactly like the natural close. Off a live tunnel it falls back
+   *  to `reset()` (there is no separate "leave" — a bare disconnect is battleship's equivalent). */
+  forfeit = () => {
+    const dt = this.dt;
+    const channel = this.channel;
+    const transcript = this.transcript;
+    const waitPeer = this.waitPeer;
+    const eph = this.selfEph;
+    const deps = this.deps;
+    if (
+      !dt ||
+      !channel ||
+      !transcript ||
+      !waitPeer ||
+      !eph ||
+      !deps?.account ||
+      (this.status !== "playing" && this.status !== "settling")
+    ) {
+      this.reset();
+      return;
+    }
+    const wallet = deps.account.address;
+    const reads = deps.client as unknown as Parameters<typeof readCreatedAt>[0];
+    const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
+    const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+    this.status = "settling";
+    this.emit();
+    void (async () => {
+      try {
+        const { a, b } = dt.protocol.balances(dt.state);
+        const total = a + b;
+        const createdAt = await readCreatedAt(reads, dt.tunnelId);
+        const root = transcript.root();
+        const { settlement, sig } = buildForfeitHalf({
+          tunnelId: dt.tunnelId,
+          total,
+          wallet,
+          eph,
+          timestamp: createdAt,
+          transcriptRoot: root,
+        });
+        channel.sendPeer({
+          t: "forfeit",
+          partyABalance: settlement.partyABalance.toString(),
+          partyBBalance: settlement.partyBBalance.toString(),
+          finalNonce: settlement.finalNonce.toString(),
+          timestamp: settlement.timestamp.toString(),
+          transcriptRoot: toHex(root),
+          sig: toHex(sig),
+        });
+        const other = await waitPeer<{ sig: string }>("settleHalf");
+        const co = dt.combineSettlementWithRoot(
+          settlement,
+          sig,
+          fromHex(other.sig),
+        );
+        await submitCombinedSettlement(
+          co,
+          dt.tunnelId,
+          transcript,
+          getControlPlaneClient(),
+          signExec as never,
+          sponsoredSignExec as never,
+          coinType,
+        );
+        clearResumeRecord(dt.tunnelId);
+        this.status = "settled";
+        this.emit();
+      } catch (e) {
+        console.warn("[battleship] forfeit submit failed; resetting", e);
+        this.reset();
+      }
+    })();
+  };
 }
 
 const pvpSessions = new Map<string, PvpSession>();
@@ -939,7 +1026,7 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
     auto: snap.auto,
     setAuto: session.setAuto,
     reset: session.reset,
-    endMatch: session.endMatch,
+    forfeit: session.forfeit,
   };
 }
 
@@ -993,6 +1080,29 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
+  await submitCombinedSettlement(
+    co,
+    tunnelId,
+    transcript,
+    cp,
+    signExec,
+    sponsoredSignExec,
+    coinType,
+  );
+}
+
+/** Submit a combined settlement via the backend `/settle`, falling back to a wallet-signed
+ *  `close_cooperative_with_root` when the backend is unreachable. Shared by the natural close
+ *  (`settle`) and `forfeit`. */
+async function submitCombinedSettlement(
+  co: CoSignedSettlementWithRoot,
+  tunnelId: string,
+  transcript: Transcript,
+  cp: ReturnType<typeof getControlPlaneClient>,
+  signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  coinType: string | undefined,
+): Promise<void> {
   try {
     await cp.settle(
       tunnelId,

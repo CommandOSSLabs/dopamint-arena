@@ -7,8 +7,9 @@ import { cn } from "@/lib/utils";
 import type { GameWindowProps } from "../types";
 import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
-import { useBattleshipPvp } from "./useBattleshipPvp";
+import { useBattleshipPvp, STAKE_BALANCE } from "./useBattleshipPvp";
 import { SketchDefs } from "../sketch";
+import { ForfeitDialog } from "@/pvp/ForfeitDialog";
 import "./battleship.css";
 
 // Big pill action in the shared hand-drawn "sketch" skin (matches Quantum Poker):
@@ -175,7 +176,7 @@ function PvpGame({
     auto,
     setAuto,
     reset,
-    endMatch,
+    forfeit,
   } = useBattleshipPvp(windowId);
   const account = useCurrentAccount();
 
@@ -219,10 +220,13 @@ function PvpGame({
     const bail = window.setTimeout(onExit, 8000);
     return () => window.clearTimeout(bail);
   }, [leaving, status, onExit]);
+  // In-match Back asks first — forfeiting hands the whole pot to the opponent. Gated on being
+  // live so a natural terminal (settled) can't leave the dialog offering a now-stale Forfeit option.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isLiveMatch = status === "playing" || status === "settling";
   const back = () => {
-    if (status === "playing" || status === "settling") {
-      setLeaving(true);
-      endMatch(); // publish our half; the leaving effect closes the window on "settled"
+    if (isLiveMatch) {
+      setConfirmOpen(true);
     } else {
       reset();
       onExit();
@@ -259,9 +263,6 @@ function PvpGame({
         view={view}
         statusLabel={settleLabel(status)}
         onFire={fire}
-        // End the match early without leaving the window: publish our half + show the settled screen
-        // (BattleView hides this once settled). Back instead closes the window — same publish path.
-        onSettle={endMatch}
         // "Find next match": after the match settles, reset to placement (stay in PvP)
         // so the next Find Match is one tap away — not back out to the arena.
         onPlayAgain={reset}
@@ -277,8 +278,20 @@ function PvpGame({
       <AutoToggle on={auto} onChange={setAuto} />
     ) : undefined;
   return (
-    <ModeFrame onBack={back} headerExtra={headerExtra}>
-      {content}
-    </ModeFrame>
+    <>
+      <ModeFrame onBack={back} headerExtra={headerExtra}>
+        {content}
+      </ModeFrame>
+      <ForfeitDialog
+        open={isLiveMatch && confirmOpen}
+        stake={`${STAKE_BALANCE} MTPS`}
+        onKeepPlaying={() => setConfirmOpen(false)}
+        onForfeit={() => {
+          setConfirmOpen(false);
+          setLeaving(true);
+          forfeit();
+        }}
+      />
+    </>
   );
 }

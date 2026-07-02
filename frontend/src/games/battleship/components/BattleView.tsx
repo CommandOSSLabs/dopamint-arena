@@ -17,7 +17,6 @@ export function BattleView({
   auto = false,
   score,
   gameNumber,
-  onSettle,
   playAgainLabel,
   playAgainDisabled,
 }: {
@@ -33,9 +32,6 @@ export function BattleView({
   score?: { you: number; foe: number };
   /** 1-based number of the game on screen (bot multi-game). */
   gameNumber?: number;
-  /** Settle + close the tunnel now (bot multi-game). When set, the result card adds
-   *  a Settle action alongside Play Again. */
-  onSettle?: () => void;
   /** Label for the primary post-game action (e.g. "Find next match" in PvP). */
   playAgainLabel?: string;
   /** Disable the post-game action (e.g. while a PvP settle is still in flight). */
@@ -159,21 +155,10 @@ export function BattleView({
               <button
                 onClick={onPlayAgain}
                 disabled={playAgainDisabled}
-                className={cn(
-                  "sketch-btn w-full",
-                  !onSettle && "sketch-btn--go",
-                )}
+                className="sketch-btn sketch-btn--go w-full"
               >
                 {playAgainLabel ?? "Play Again"}
               </button>
-              {onSettle && (
-                <button
-                  onClick={onSettle}
-                  className="sketch-btn sketch-btn--go w-full"
-                >
-                  Settle &amp; cash out
-                </button>
-              )}
             </div>
           </div>
         </div>
