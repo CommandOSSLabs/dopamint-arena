@@ -16,20 +16,24 @@ export function QuantumPokerPvpWindow({
 }: GameWindowProps & { onExit?: () => void }) {
   const g = useRoutedPvpPoker(windowId);
 
-  // Back bails out (auto-fold → publish our settlement half → leave). Exit once the half is published
-  // ("settled") OR if settle errors — a failed/stuck close must never trap the player. A timeout is the
-  // backstop when the hand can't reach a settle boundary (e.g. an unresponsive opponent), so Back always
-  // gets the user out; their half settles via the grace path if it never made the wire.
+  // Back bails out of a live hand (auto-fold → publish our settlement half) and drops back to THIS
+  // window's lobby once the half is on the wire ("settled") or if settle errors — a failed/stuck close
+  // must never trap the player. A timeout backstops a hand that can't reach a settle boundary (e.g. an
+  // unresponsive opponent). The window itself closes only via the title-bar ✕.
   const [leaving, setLeaving] = useState(false);
   useEffect(() => {
     if (!leaving) return;
     if (g.status === "settled" || g.status === "error") {
-      onExit?.();
+      setLeaving(false);
+      g.reset();
       return;
     }
-    const bail = window.setTimeout(() => onExit?.(), 8000);
+    const bail = window.setTimeout(() => {
+      setLeaving(false);
+      g.reset();
+    }, 8000);
     return () => window.clearTimeout(bail);
-  }, [leaving, g.status, onExit]);
+  }, [leaving, g.status, g.reset]);
 
   if (g.status === "idle") {
     return (
@@ -52,11 +56,6 @@ export function QuantumPokerPvpWindow({
             >
               Play
             </button>
-            {onExit && (
-              <button type="button" className="sketch-btn" onClick={onExit}>
-                Back
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -83,11 +82,10 @@ export function QuantumPokerPvpWindow({
               vs {g.opponentWallet.slice(0, 10)}…
             </p>
           )}
-          {onExit && (
-            <button type="button" className="sketch-btn mt-3" onClick={onExit}>
-              Back
-            </button>
-          )}
+          {/* Cancel matchmaking / funding and drop back to the lobby (never closes the window). */}
+          <button type="button" className="sketch-btn mt-3" onClick={g.reset}>
+            Back
+          </button>
         </div>
       </div>
     );
@@ -162,18 +160,16 @@ export function QuantumPokerPvpWindow({
 
       <header className="qp-head">
         <div className="flex min-w-0 items-center gap-[clamp(6px,2.2cqmin,14px)]">
-          {onExit && (
-            <button
-              type="button"
-              className="sketch-btn"
-              onClick={() => {
-                setLeaving(true);
-                g.backOut(); // auto-fold out → settle this hand → leave when settled
-              }}
-            >
-              {leaving ? "Leaving…" : "Back"}
-            </button>
-          )}
+          <button
+            type="button"
+            className="sketch-btn"
+            onClick={() => {
+              setLeaving(true);
+              g.backOut(); // auto-fold out → settle this hand → back to the lobby when settled
+            }}
+          >
+            {leaving ? "Leaving…" : "Back"}
+          </button>
           <div className="flex min-w-0 flex-col leading-none">
             <span className="sketch-eyebrow">
               PvP · you are {self}

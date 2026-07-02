@@ -9,7 +9,7 @@ import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
-import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { coSignCloseFromPeerRoot } from "../../pvp/settleClose";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { defaultAuto, rememberAuto } from "@/pvp/autoPreference";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
@@ -363,7 +363,6 @@ class PvpSession {
     >[0]["reads"];
     const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
     const proto = new BattleshipProtocol(STAKE_SHIFT);
-    const transcript = new Transcript(dt.tunnelId);
     let settling = false;
     // One cooperative close, guarded to fire once. A natural terminal (all ships sunk) does the full
     // half-exchange + submit; `publishOnly` (Back / Settle button) publishes our half and stops, so
@@ -377,13 +376,11 @@ class PvpSession {
       void settle(
         dt,
         info.role,
-        channel,
         waitPeer,
         reads,
         signExec as never,
         sponsoredSignExec as never,
         dt.tunnelId,
-        transcript,
         getControlPlaneClient(),
         coinType,
         publishOnly,
@@ -396,8 +393,7 @@ class PvpSession {
       );
     };
     this.settleNow = triggerSettle;
-    dt.onConfirmed = (u) => {
-      transcript.append(u); // verifiable move log, root-anchored at settle
+    dt.onConfirmed = () => {
       const st = dt.state;
       if (st.pendingShot && st.pendingShot.by !== info.role) {
         this.lastEnemyShot = st.pendingShot.cell;
@@ -889,15 +885,15 @@ function useLegacyBattleshipPvp(windowId: string): BattleshipPvp {
 }
 
 /**
- * Exchange root-anchored settlement halves over the relay, then seat A submits the
- * close via the backend /settle (falling back to a wallet close if it's down). Both
- * seats MUST anchor the same transcript root, else close_cooperative_with_root
- * rebuilds different bytes and on-chain verify fails — so roots are asserted equal.
+ * Wait for the co-located bot's settlement half, sign seat A's half over the root the bot supplied,
+ * and submit the close via the backend /settle (header-only body; the bot's canonical transcript is
+ * archived to S3). The FE keeps NO transcript — every arena match is human-vs-bot, so the bot owns the
+ * root and funds ride on the co-signed balances, not the root (see `coSignCloseFromPeerRoot`).
+ * Fallback: wallet-submitted close_cooperative_with_root (backend down).
  */
 async function settle(
   dt: BattleshipTunnel,
   role: Role,
-  channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
@@ -905,44 +901,26 @@ async function settle(
   // 0 SUI and a wallet-signed close would throw and strand the staked MTPS.
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
-  transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
-  // Leaver (Back): publish our signed half and return WITHOUT waiting on the peer or submitting — the
-  // staying seat / 1h grace path submits. Lets Back settle without blocking on a peer that won't
-  // co-sign an early end (e.g. the fleet bot, which only settles at terminal).
+  // Leaver (Back): the FE has no half to publish (the bot owns the transcript and only settles at its
+  // own terminal), so just return — the bot's terminal / on-chain grace is the settlement floor.
   publishOnly = false,
 ): Promise<void> {
-  const createdAt = await readCreatedAt(reads, tunnelId);
-  const root = transcript.root();
-  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
-  channel.sendPeer({
-    t: "settleHalf",
-    partyABalance: half.settlement.partyABalance.toString(),
-    partyBBalance: half.settlement.partyBBalance.toString(),
-    finalNonce: half.settlement.finalNonce.toString(),
-    timestamp: half.settlement.timestamp.toString(),
-    transcriptRoot: toHex(root),
-    sig: toHex(half.sigSelf),
-  });
   if (publishOnly) return;
+  const createdAt = await readCreatedAt(reads, tunnelId);
   const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
     "settleHalf",
   );
-  if (other.transcriptRoot !== toHex(root)) {
-    throw new Error("settlement transcript-root mismatch between parties");
-  }
-  const co = dt.combineSettlementWithRoot(
-    half.settlement,
-    half.sigSelf,
+  const co = coSignCloseFromPeerRoot(
+    dt,
+    createdAt,
+    fromHex(other.transcriptRoot),
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
   try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleBody(co, transcript.rawEntries()),
-    );
+    await cp.settle(tunnelId, coSignedToSettleBody(co, []));
   } catch (e) {
     console.error(
       "[battleship] backend settle failed; falling back to wallet close:",

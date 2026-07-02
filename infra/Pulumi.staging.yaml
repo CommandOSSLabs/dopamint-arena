@@ -4,6 +4,7 @@ config:
   dopamint:domain: staging.millionstps.io
   dopamint:backend-domain: relay-staging.millionstps.io
   dopamint:certificate-arn: arn:aws:acm:us-east-1:129671602944:certificate/cffc1c65-b146-498e-9e48-eca08bd55164
+  dopamint:cors-allowed-origins: https://staging.millionstps.io
   dopamint:route53-zone-id: "ZXXXXXXXXXXXXX"
   dopamint:db-instance-class: db.r6g.2xlarge
   dopamint:db-serverless: "false"

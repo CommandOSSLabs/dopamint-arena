@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::Router;
 use shared::{LifecycleKind, SettlementQuery, SettlementStore};
-use transcript_store::TranscriptChunkReader;
+use transcript_store::{TranscriptChunkReader, TranscriptReader};
 
 /// Names the transcript wire format so the browser verifier picks the right decode path: the
 /// server-owned streamed chunks are entries-only (root/balances come from the settlement row), while
@@ -27,6 +27,11 @@ pub struct ApiState {
     /// Reassembles the bot-streamed transcript chunks. `None` = no S3 configured; `/transcript`
     /// then serves only the legacy one-object Walrus blob.
     pub chunks: Option<Arc<dyn TranscriptChunkReader>>,
+    /// Reads the one-object S3 settle archive (ADR-0024): the co-signed settle body, keyed by
+    /// `(tunnel_id, tx_digest)`. Same S3 store as `chunks`; the settle path archives every
+    /// cooperative close here, so this is the primary Walrus replacement for closes that carry no
+    /// streamed chunks. `None` = no S3 configured.
+    pub archive: Option<Arc<dyn TranscriptReader>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -77,11 +82,12 @@ async fn detail(State(s): State<ApiState>, Path(digest): Path<String>) -> Respon
     }
 }
 
-/// Serve a settlement's transcript for the in-browser verifier. Prefers the server-owned streamed
-/// chunks (entries-only; the verifier reads root/balances from the settlement row) and falls back to
-/// the legacy one-object Walrus blob (a whole settle body) during the transition. The
-/// `x-transcript-format` header tells the verifier which decode path to take. 404 when neither
-/// source has the transcript.
+/// Serve a settlement's transcript for the in-browser verifier. Source order: server-owned streamed
+/// chunks (entries-only; the verifier reads root/balances from the settlement row) → the one-object
+/// S3 settle archive (a whole settle body) → the legacy Walrus blob (also a whole body). The S3
+/// archive is the primary Walrus replacement; Walrus remains only for closes archived before S3. The
+/// `x-transcript-format` header tells the verifier which decode path to take. 404 when no source has
+/// the transcript.
 async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Response {
     let row = match s.store.get(&digest).await {
         Ok(Some(row)) => row,
@@ -108,9 +114,33 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
                 )
                     .into_response();
             }
-            Ok(None) => {} // no chunks for this tunnel — fall back to the Walrus blob
+            Ok(None) => {} // no chunks for this tunnel — try the one-object archive next
             Err(e) => {
-                tracing::warn!(error = %e, tunnel = %row.tunnel_id, "chunk read failed; trying Walrus");
+                tracing::warn!(error = %e, tunnel = %row.tunnel_id, "chunk read failed; trying archive");
+            }
+        }
+    }
+    // One-object S3 settle archive: the co-signed settle body keyed by (tunnel_id, tx_digest). Same
+    // whole-body wire format as the Walrus blob, so it serves as FORMAT_BODY. A transient S3 error
+    // falls through to Walrus rather than failing.
+    if let Some(archive) = &s.archive {
+        match archive.read(&row.tunnel_id, &digest).await {
+            Ok(Some(bytes)) => {
+                return (
+                    [
+                        (CONTENT_TYPE, "application/octet-stream"),
+                        (
+                            HeaderName::from_static(TRANSCRIPT_FORMAT_HEADER),
+                            FORMAT_BODY,
+                        ),
+                    ],
+                    bytes,
+                )
+                    .into_response();
+            }
+            Ok(None) => {} // not archived here — fall back to the Walrus blob
+            Err(e) => {
+                tracing::warn!(error = %e, tunnel = %row.tunnel_id, "archive read failed; trying Walrus");
             }
         }
     }
@@ -254,6 +284,7 @@ mod tests {
             walrus_aggregator_url: "https://agg.example".into(),
             http: reqwest::Client::new(),
             chunks: None,
+            archive: None,
         }
     }
 
@@ -413,5 +444,40 @@ mod tests {
         );
         let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&body[..], b"co-signed-entry-bytes");
+    }
+
+    // No streamed chunks, but the settle path archived the one-object body under (tunnel_id,
+    // tx_digest): /transcript serves it as a whole body (FORMAT_BODY) from S3, not 404 and not
+    // Walrus. This is the primary Walrus replacement path.
+    #[tokio::test]
+    async fn transcript_serves_archive_body_when_no_chunks() {
+        use transcript_store::testing::FakeReader;
+
+        let mut fake = FakeReader::default();
+        fake.objects.insert(
+            ("0xtun".into(), "a".into()), // (tunnel_id, tx_digest) — matches settled("a") on 0xtun
+            b"co-signed-settle-body".to_vec(),
+        );
+
+        let mut state = state_with(vec![settled("a", 10)]); // no walrus blob, no chunks
+        state.archive = Some(Arc::new(fake) as Arc<dyn TranscriptReader>);
+        let app = router(state);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements/a/transcript")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(TRANSCRIPT_FORMAT_HEADER).unwrap(),
+            FORMAT_BODY
+        );
+        let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"co-signed-settle-body");
     }
 }
