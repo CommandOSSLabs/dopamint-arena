@@ -289,6 +289,10 @@ pub(crate) struct ArenaAllocation {
     /// The reserved bot's on-chain address — tunnel party B's `address` (funds/receives seat B).
     /// Distinct from the ephemeral pubkey; the frontend needs both to build the open PTB's party B.
     bot_address: String,
+    /// Echo of the request's `user_eph_pubkey` (party A's `pk`, baked into THIS tunnel at create). The
+    /// frontend pairs each allocation back to the ephemeral key it minted by this pubkey, so it works
+    /// even if games are served out of order or one is omitted mid-batch — no reliance on array order.
+    user_eph_pubkey: String,
     /// Per-seat stake (smallest MTPS unit) from the game's `GameProfile`. The fleet funded seat B
     /// with exactly this; the user's batched deposit must fund seat A with the SAME amount, or the
     /// off-chain initial balances diverge and co-signing fails. Single source of truth so the FE
@@ -377,7 +381,7 @@ pub(crate) async fn arena_allocate(
             })
             .collect();
         let results = state.arena_opener.open_and_fund_seat_b_many(reqs).await;
-        for ((slot, game, _user_eph_pubkey, stake), result) in chunk.iter().zip(results) {
+        for ((slot, game, user_eph_pubkey, stake), result) in chunk.iter().zip(results) {
             let open = match result {
                 Ok(open) => open,
                 Err(e) => {
@@ -409,6 +413,7 @@ pub(crate) async fn arena_allocate(
                 tunnel_id: open.tunnel_id,
                 bot_eph_pubkey: slot.eph_pubkey.clone(),
                 bot_address: slot.bot_address.clone(),
+                user_eph_pubkey: user_eph_pubkey.clone(),
                 stake_each: *stake,
             });
         }

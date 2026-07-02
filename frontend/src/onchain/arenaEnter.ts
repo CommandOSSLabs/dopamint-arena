@@ -25,6 +25,10 @@ export interface ArenaAllocation {
   botEphPubkey: string;
   /** Tunnel party B's `address` (funds/receives seat B); distinct from the ephemeral pubkey. */
   botAddress: string;
+  /** Echo of the request's `userEphPubkey` (party A's `pk`, baked into THIS tunnel). Present on a
+   *  backend that echoes it (post-ADR-0025 refinement); lets the FE pair each allocation to the exact
+   *  key it minted, independent of array order. Optional so an older backend still pairs by order. */
+  userEphPubkey?: string;
   /** Per-seat stake (smallest MTPS unit) from the game's backend `GameProfile`. The fleet funded
    *  seat B with exactly this; the user's batched deposit funds seat A with the SAME amount, and the
    *  off-chain tunnel inits both balances to it. Single source of truth — the FE never hardcodes it. */
@@ -123,11 +127,19 @@ export async function enterArena(
     opts.userAddress,
     opts,
   );
-  // Pair each returned allocation back to its request by ORDER WITHIN ITS GAME: the backend preserves
-  // request order and omits games it couldn't serve, so the k-th allocation of game G is the k-th
-  // request of G → its key is `keypairs[reqIdx]`. Correct for identical same-game requests (all serve →
-  // in order; bot exhaustion drops the TAIL). A rare mid-run per-game omission mispairs — that window
-  // then can't co-sign and surfaces an error, but no stake is lost (the deposit funds a recoverable tunnel).
+  // Pair each returned allocation back to the ephemeral key baked into ITS tunnel. Prefer an EXACT
+  // match on the echoed `userEphPubkey` (party A's `pk` — uniquely identifies the request), which is
+  // order-independent: correct even if the backend serves games out of order or omits one mid-batch.
+  // Fall back to ORDER WITHIN GAME for a backend that doesn't echo the pubkey yet: the k-th allocation
+  // of game G is the k-th request of G (correct when all serve, or bot exhaustion drops the tail; a
+  // rare mid-run omission mispairs — that window can't co-sign and errors, but no stake is lost).
+  const keyByPubkey = new Map<string, KeyPair>();
+  keypairs.forEach((kp) =>
+    keyByPubkey.set(toHex(kp.publicKey).toLowerCase(), kp),
+  );
+  const pairByPubkey = allocations.every(
+    (a) => typeof a.userEphPubkey === "string",
+  );
   const reqIdxsByGame = new Map<string, number[]>();
   opts.games.forEach((game, i) => {
     const arr = reqIdxsByGame.get(game);
@@ -135,14 +147,21 @@ export async function enterArena(
     else reqIdxsByGame.set(game, [i]);
   });
   const takenByGame = new Map<string, number>();
+  // NB: called synchronously in allocation order (Promise.all's callbacks run to their first await in
+  // order), so the order-within-game counter advances deterministically before any deposit awaits.
+  const resolveKey = (alloc: ArenaAllocation): KeyPair | null => {
+    if (pairByPubkey)
+      return keyByPubkey.get(alloc.userEphPubkey!.toLowerCase()) ?? null;
+    const k = takenByGame.get(alloc.game) ?? 0;
+    takenByGame.set(alloc.game, k + 1);
+    const reqIdx = reqIdxsByGame.get(alloc.game)?.[k];
+    return reqIdx == null ? null : keypairs[reqIdx];
+  };
   const open = opts.open ?? requestTunnelOpen;
   const entered = await Promise.all(
     allocations.map(async (alloc): Promise<ArenaEntered | null> => {
-      const k = takenByGame.get(alloc.game) ?? 0;
-      takenByGame.set(alloc.game, k + 1);
-      const reqIdx = reqIdxsByGame.get(alloc.game)?.[k];
-      if (reqIdx == null) return null; // more allocations than requests for a game (shouldn't happen)
-      const keypair = keypairs[reqIdx];
+      const keypair = resolveKey(alloc);
+      if (keypair == null) return null; // no matching request key (out-of-band allocation) — skip
       const partyA: PartyOnchain = {
         address: opts.userAddress,
         publicKey: keypair.publicKey,

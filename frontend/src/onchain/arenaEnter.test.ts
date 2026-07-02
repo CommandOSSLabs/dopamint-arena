@@ -137,3 +137,61 @@ test("enterArena gives N windows of the SAME game distinct bots, each paired wit
     );
   });
 });
+
+test("enterArena pairs by echoed userEphPubkey — robust to out-of-order serving + a mid-batch omission", async () => {
+  const captured: Captured = {};
+  const opens: TunnelOpenRequest[] = [];
+
+  // A backend that ECHOES userEphPubkey but serves the SAME game's requests out of order and drops the
+  // middle one — the exact case order-within-game pairing mishandles. Position-based pairing would hand
+  // the surviving second allocation request-1's key (wrong tunnel); pubkey pairing must not.
+  const echoingReorderingFetch: typeof fetch = (async (
+    url: string,
+    init?: { body?: string },
+  ) => {
+    const body = init?.body ? JSON.parse(init.body) : undefined;
+    if (String(url).endsWith("/v1/arena/allocate")) {
+      captured.allocate = body;
+      const g = body.games as { id: string; userEphPubkey: string }[];
+      // Serve requests #2 and #0 (reversed, #1 omitted), each echoing its own pubkey + a tunnel keyed
+      // to that pubkey so we can prove the deposit landed in the right tunnel for the right key.
+      const allocations = [g[2], g[0]].map((req) => ({
+        game: req.id,
+        matchId: `m-${req.userEphPubkey.slice(0, 6)}`,
+        tunnelId: `0xt-${req.userEphPubkey.slice(0, 6)}`,
+        botEphPubkey: BOT_EPH,
+        botAddress: BOT_ADDR,
+        userEphPubkey: req.userEphPubkey,
+        stakeEach: 100,
+      }));
+      return { ok: true, json: async () => ({ allocations }) };
+    }
+    if (String(url).endsWith("/v1/arena/opened")) {
+      captured.opened = body;
+      return { ok: true, json: async () => ({}) };
+    }
+    throw new Error(`unexpected url ${url}`);
+  }) as unknown as typeof fetch;
+
+  const matches = await enterArena({
+    games: ["caro", "caro", "caro"],
+    userAddress: "0xuser",
+    apiBase: "",
+    fetchFn: echoingReorderingFetch,
+    open: async (req) => {
+      opens.push(req);
+      return req.tunnelId!;
+    },
+  });
+
+  // Only the two served requests come back — the omitted one is simply absent.
+  assert.equal(matches.length, 2);
+  for (const m of matches) {
+    // Each bundled key is the one for THIS allocation's echoed pubkey — paired by identity, not position.
+    assert.equal(toHex(m.keypair.publicKey), m.allocation.userEphPubkey);
+    // …and the deposit for that allocation's tunnel used that same key (right key → right tunnel).
+    const deposit = opens.find((o) => o.tunnelId === m.allocation.tunnelId);
+    assert.ok(deposit, "a deposit exists for the allocation's tunnel");
+    assert.deepEqual(deposit!.partyA.publicKey, m.keypair.publicKey);
+  }
+});
