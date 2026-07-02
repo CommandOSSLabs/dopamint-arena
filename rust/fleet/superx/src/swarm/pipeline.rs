@@ -98,6 +98,11 @@ pub enum AnchorChoice {
     /// the pipeline's barrier-wait termination on the failure path.
     #[cfg(test)]
     AlwaysFailsOpen,
+    /// Test-only: exactly one tunnel's `open` fails while the rest open, play, and
+    /// settle. Leaves the settle barrier permanently unfillable (the failed tunnel
+    /// never deposits), exercising the partial-failure termination path.
+    #[cfg(test)]
+    FailsFirstTunnelOpen,
 }
 
 /// Everything one `run-swarm` invocation needs to run its staged pipeline.
@@ -150,6 +155,11 @@ struct TunnelResult {
 #[derive(Default)]
 struct DrainTally {
     settled: u64,
+    /// Tunnels reaped as a clean failure (task returned, but a seat errored so it
+    /// never settled). Counted independently of `settled`/`aborted` so the three
+    /// tallies sum to the spawned-task count only when every task is accounted —
+    /// making that sum a real "no task was silently lost" invariant.
+    failed: u64,
     aborted: u64,
     moves: u64,
     bytes: u64,
@@ -165,6 +175,8 @@ impl DrainTally {
             Ok(result) => {
                 if result.settled {
                     self.settled += 1;
+                } else {
+                    self.failed += 1;
                 }
                 self.moves += result.moves;
                 self.bytes += result.bytes;
@@ -284,12 +296,21 @@ where
         AnchorChoice::Memory => Some(Arc::new(InnerAnchor::Memory(InMemoryAnchor::new()))),
         #[cfg(test)]
         AnchorChoice::AlwaysFailsOpen => Some(Arc::new(InnerAnchor::AlwaysFailsOpen)),
+        #[cfg(test)]
+        AnchorChoice::FailsFirstTunnelOpen => Some(Arc::new(InnerAnchor::FailsFirstTunnelOpen {
+            memory: InMemoryAnchor::new(),
+            doomed: Arc::new(std::sync::Mutex::new(None)),
+        })),
         AnchorChoice::Sui(_) => None,
     };
     let settle_inner: Arc<InnerAnchor> = match &params.anchor {
         AnchorChoice::Memory => Arc::clone(shared_memory.as_ref().expect("memory inner")),
         #[cfg(test)]
         AnchorChoice::AlwaysFailsOpen => Arc::clone(shared_memory.as_ref().expect("shared inner")),
+        #[cfg(test)]
+        AnchorChoice::FailsFirstTunnelOpen => {
+            Arc::clone(shared_memory.as_ref().expect("shared inner"))
+        }
         AnchorChoice::Sui(ctx) => Arc::new(InnerAnchor::Sui(
             ctx.scoped(&format!("{}-s{}-settle", params.run_id, params.swarm_index)),
         )),
@@ -335,6 +356,10 @@ where
                 AnchorChoice::Memory => Arc::clone(shared_memory.as_ref().expect("memory inner")),
                 #[cfg(test)]
                 AnchorChoice::AlwaysFailsOpen => {
+                    Arc::clone(shared_memory.as_ref().expect("shared inner"))
+                }
+                #[cfg(test)]
+                AnchorChoice::FailsFirstTunnelOpen => {
                     Arc::clone(shared_memory.as_ref().expect("shared inner"))
                 }
                 AnchorChoice::Sui(ctx) => {
@@ -419,39 +444,60 @@ where
     let expected_seats = tunnels.saturating_mul(2);
     let play_deadline =
         (params.duration_secs > 0).then(|| open_done + Duration::from_secs(params.duration_secs));
+    // Absolute cap on the play/settle barrier wait, mirroring the open barrier's
+    // `open_barrier_deadline`. The barrier only fills once every tunnel deposits
+    // both seats; if a tunnel failed (before/during open, or during play) it is
+    // permanently unfillable, and with no `duration` deadline and no external stop
+    // nothing else would break the loop. This cap — plus the live degraded-open
+    // check below — make termination independent of the edge-triggered
+    // failed-task signal, so a partial open failure still terminates.
+    let play_barrier_deadline = open_done
+        + if params.duration_secs > 0 {
+            Duration::from_secs(params.duration_secs)
+        } else {
+            TUNNEL_DRAIN_TIMEOUT
+        };
     // Wait for the settle barrier (all seats parked) — the play / settle phase
     // boundary. Escapes, so a never-depositing seat degrades rather than hangs:
     //  - happy: every seat deposits (`deposited == expected_seats`);
-    //  - failure: a tunnel that errored before settle finishes without depositing,
-    //    so the barrier can never fill — reap finished tasks to detect it;
+    //  - unfillable: the open phase ended degraded (`open_gate.opened() < tunnels`,
+    //    so fewer than `expected_seats` can ever deposit), a tunnel finished
+    //    without depositing, or the absolute cap elapsed;
     //  - stop / deadline: nudge a graceful close.
-    // Once any of those fires we allow a short grace for in-flight seats to arrive,
-    // then force the settle barrier so deposited seats drain (complete pairs
-    // settle, lone seats error) instead of parking forever, and fall through to the
-    // bounded drain.
+    // Any trigger latches `abandon_at`; once the grace elapses we force the settle
+    // barrier so deposited seats drain (complete pairs settle, lone seats error)
+    // instead of parking forever, and fall through to the bounded drain.
     let mut abandon_at: Option<Instant> = None;
     loop {
         if settle_mgr.deposited().await >= expected_seats {
             break;
         }
         // A finished task during the settle wait is a failed tunnel (a healthy one
-        // does not finish until after its settle resolves).
-        let mut failed = false;
+        // does not finish until after its settle resolves); reap so it is counted.
         while let Some(joined) = tasks.try_join_next() {
-            failed = true;
             tally.reap(joined);
         }
         if tasks.is_empty() {
             settle_mgr.force_release().await;
             break;
         }
-        let deadline_hit = play_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        let now = Instant::now();
+        let deadline_hit = play_deadline.is_some_and(|deadline| now >= deadline);
         let stopping = stop.load(Ordering::Relaxed);
         if stopping || deadline_hit {
             run_control.request_stop();
         }
-        if failed || stopping || deadline_hit {
-            let at = *abandon_at.get_or_insert_with(|| Instant::now() + BARRIER_GRACE);
+        // `open_gate.opened() < tunnels` means fewer than `tunnels` seat-A opens
+        // landed, so the barrier's `expected_seats` target is unreachable — checked
+        // live and independent of whether a task happened to finish this iteration,
+        // which is the partial-open-failure case the edge-triggered signal misses.
+        let unfillable = open_gate.opened() < tunnels;
+        if unfillable || stopping || deadline_hit || now >= play_barrier_deadline {
+            abandon_at.get_or_insert(now + BARRIER_GRACE);
+        }
+        // Latched: once scheduled, force the barrier as soon as the grace elapses,
+        // regardless of which trigger fired or whether it still holds this iteration.
+        if let Some(at) = abandon_at {
             if Instant::now() >= at {
                 settle_mgr.force_release().await;
                 break;
@@ -490,14 +536,14 @@ where
     let elapsed_ms = ended.duration_since(started).as_millis().max(1);
 
     let tunnels_opened = open_gate.opened().min(tunnels);
-    let tunnels_failed = tunnels
-        .saturating_sub(tally.settled)
-        .saturating_sub(tally.aborted);
 
     SwarmOutcome {
         tunnels_opened,
         tunnels_settled: tally.settled,
-        tunnels_failed,
+        // Independently counted (not derived from settled/aborted) so a lost task
+        // shows up as `settled + failed + aborted < tunnels` instead of being
+        // silently absorbed into the failed count.
+        tunnels_failed: tally.failed,
         tunnels_aborted: tally.aborted,
         moves: tally.moves,
         bytes: tally.bytes,
@@ -638,9 +684,20 @@ mod tests {
         Arc::new(AtomicBool::new(false))
     }
 
+    /// Run the (blocking) pipeline on a watchdog thread so a liveness regression
+    /// fails the test with a clear message instead of hanging the whole suite.
+    fn run_bounded(params: SwarmParams) -> SwarmOutcome {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_swarm_pipeline(params, stop()));
+        });
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("pipeline must terminate within 30s, not hang")
+    }
+
     #[test]
-    fn play_never_starts_before_all_open_and_settle_after_all_play() {
-        let out = run_swarm_pipeline(golden_params(4), stop());
+    fn all_four_tunnels_open_play_and_settle() {
+        let out = run_bounded(golden_params(4));
         // Load-bearing: every tunnel opened, then played, then settled. A broken
         // open barrier that let play/settle race ahead of a slow open would leave
         // `tunnels_opened < 4` or a tunnel unsettled; a broken settle barrier would
@@ -654,7 +711,7 @@ mod tests {
 
     #[test]
     fn all_tunnels_settle_with_memory_anchor() {
-        let out = run_swarm_pipeline(golden_params(6), stop());
+        let out = run_bounded(golden_params(6));
         assert_eq!(out.tunnels_opened, 6);
         assert_eq!(out.tunnels_settled, 6);
         assert_eq!(out.tunnels_failed, 0);
@@ -662,9 +719,9 @@ mod tests {
         assert!(out.moves > 0);
     }
 
-    /// Regression: a swarm whose tunnels never open (a never-depositing seat) must
-    /// terminate via the barrier-wait escapes and the bounded drain, not hang. The
-    /// failed tunnels are accounted rather than lost.
+    /// Regression: a swarm whose tunnels *all* fail to open must terminate via the
+    /// barrier-wait escapes and the bounded drain, not hang, with every task
+    /// accounted rather than lost.
     #[test]
     fn pipeline_terminates_when_tunnels_never_open() {
         let mut params = golden_params(4);
@@ -673,13 +730,51 @@ mod tests {
         // relies solely on failure detection (finished tasks) + forced barriers.
         params.duration_secs = 0;
 
-        let out = run_swarm_pipeline(params, stop());
+        let out = run_bounded(params);
 
         assert_eq!(out.tunnels_opened, 0, "no tunnel opens");
         assert_eq!(out.tunnels_settled, 0, "nothing settles");
+        // Independently-counted tallies: this sum equals `tunnels` only if every
+        // spawned task was reaped exactly once, so it fails loudly if a task were
+        // silently lost rather than being masked by a derived failed count.
+        assert_eq!(
+            out.tunnels_settled + out.tunnels_failed + out.tunnels_aborted,
+            4,
+            "every task accounted: settled={} failed={} aborted={}",
+            out.tunnels_settled,
+            out.tunnels_failed,
+            out.tunnels_aborted,
+        );
+    }
+
+    /// Regression (the liveness bug this pipeline must not have): a *partial* open
+    /// failure — one tunnel fails while the rest open, play, and settle — leaves
+    /// the settle barrier (`2 * tunnels` seats) permanently unfillable. With
+    /// `duration_secs = 0` and no stop there is no deadline or external nudge and
+    /// the failed tunnel is reaped at the *open* barrier (never during the settle
+    /// wait), so termination cannot rely on the edge-triggered failed-task signal —
+    /// only on detecting the unfillable barrier. Must terminate, fully accounted.
+    #[test]
+    fn pipeline_terminates_on_partial_open_failure() {
+        let mut params = golden_params(4);
+        params.anchor = AnchorChoice::FailsFirstTunnelOpen;
+        params.duration_secs = 0;
+
+        let out = run_bounded(params);
+
+        // Exactly one tunnel is doomed at open; the other three are unaffected.
+        assert_eq!(out.tunnels_opened, 3, "one tunnel never opens");
         assert!(
-            out.tunnels_failed + out.tunnels_aborted >= 4,
-            "every tunnel must be accounted as failed or aborted, got failed={} aborted={}",
+            out.tunnels_failed >= 1,
+            "the doomed tunnel is counted as failed, got failed={}",
+            out.tunnels_failed,
+        );
+        // Independently-counted tallies sum to `tunnels` iff no task was lost.
+        assert_eq!(
+            out.tunnels_settled + out.tunnels_failed + out.tunnels_aborted,
+            4,
+            "every task accounted: settled={} failed={} aborted={}",
+            out.tunnels_settled,
             out.tunnels_failed,
             out.tunnels_aborted,
         );

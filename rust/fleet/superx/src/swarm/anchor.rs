@@ -29,6 +29,16 @@ pub enum InnerAnchor {
     /// waits terminate on a never-depositing seat instead of hanging.
     #[cfg(test)]
     AlwaysFailsOpen,
+    /// Test-only backend for a *partial* open failure: `open` fails for exactly the
+    /// first distinct tunnel it sees (keyed by the canonical party-key pair, which
+    /// both seats submit identically) and delegates every other tunnel to a shared
+    /// in-memory anchor. Exercises settle-barrier termination when it is
+    /// permanently unfillable because some — but not all — tunnels never deposit.
+    #[cfg(test)]
+    FailsFirstTunnelOpen {
+        memory: InMemoryAnchor,
+        doomed: Arc<std::sync::Mutex<Option<[u8; 64]>>>,
+    },
 }
 
 impl InnerAnchor {
@@ -40,6 +50,8 @@ impl InnerAnchor {
             Self::Sui(a) => a.settlement_mode(),
             #[cfg(test)]
             Self::AlwaysFailsOpen => SettlementMode::Rootless,
+            #[cfg(test)]
+            Self::FailsFirstTunnelOpen { memory, .. } => memory.settlement_mode(),
         }
     }
 
@@ -54,6 +66,32 @@ impl InnerAnchor {
             Self::AlwaysFailsOpen => Err(TunnelAnchorError::Unavailable(
                 "test: forced open failure".into(),
             )),
+            #[cfg(test)]
+            Self::FailsFirstTunnelOpen { memory, doomed } => {
+                // Both seats submit the same canonical (party_a, party_b) pair, so
+                // it identifies the tunnel. Doom the first distinct pair seen; fail
+                // both of its seats and delegate every other tunnel to memory.
+                let mut key = [0u8; 64];
+                key[..32].copy_from_slice(&request.party_a);
+                key[32..].copy_from_slice(&request.party_b);
+                let doomed_tunnel = {
+                    let mut first = doomed.lock().expect("doomed lock");
+                    match *first {
+                        Some(existing) => existing == key,
+                        None => {
+                            *first = Some(key);
+                            true
+                        }
+                    }
+                };
+                if doomed_tunnel {
+                    Err(TunnelAnchorError::Unavailable(
+                        "test: forced partial open failure".into(),
+                    ))
+                } else {
+                    memory.open(request).await
+                }
+            }
         }
     }
 
@@ -68,6 +106,8 @@ impl InnerAnchor {
             Self::AlwaysFailsOpen => Err(TunnelAnchorError::Unavailable(
                 "test: forced settle failure".into(),
             )),
+            #[cfg(test)]
+            Self::FailsFirstTunnelOpen { memory, .. } => memory.settle(request).await,
         }
     }
 }
