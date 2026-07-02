@@ -189,6 +189,8 @@ export function usePvpBlackjack(): PvpView {
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(defaultAuto("blackjack", true));
+  // Points at the latest requeue() so finishSettle (defined earlier) can recover on a settle throw.
+  const requeueRef = useRef<(() => void) | null>(null);
   const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
@@ -395,7 +397,12 @@ export function usePvpBlackjack(): PvpView {
         }
         if (stoppingRef.current) return; // a stop/settle is in progress
         if (proto.isTerminal(st)) {
-          void finishSettle(t, channel, info.matchId);
+          // On a settle throw, don't strand at "settling" — recover into the next match (these
+          // arena games self-play); the on-chain grace floor still protects the stake.
+          finishSettle(t, channel, info.matchId).catch((e) => {
+            console.error("[blackjack pvp] settle failed:", e);
+            requeueRef.current?.();
+          });
           return;
         }
         const owed = actorFor(st, getPlayerParty); // PvP: default rotation
@@ -1181,13 +1188,17 @@ export function usePvpBlackjack(): PvpView {
     })();
   }, [queue]);
 
-  // After a match settles ("done"), auto-find the next match when Auto is on. A short pause lets
-  // the result show before re-queuing.
   useEffect(() => {
-    if (phase !== "done" || !autoRef.current) return;
-    const id = setTimeout(() => {
-      if (autoRef.current) requeue();
-    }, AUTO_REQUEUE_MS);
+    requeueRef.current = requeue;
+  }, [requeue]);
+
+  // After a match settles ("done"), always auto-find the next match — these are self-playing
+  // arena games (parity with poker); an explicit Leave() → "idle" stops the loop. Auto only
+  // governs whether the bot or you plays, not whether one is found. A short pause lets the result
+  // show before re-queuing.
+  useEffect(() => {
+    if (phase !== "done") return;
+    const id = setTimeout(() => requeue(), AUTO_REQUEUE_MS);
     return () => clearTimeout(id);
   }, [phase, requeue]);
 

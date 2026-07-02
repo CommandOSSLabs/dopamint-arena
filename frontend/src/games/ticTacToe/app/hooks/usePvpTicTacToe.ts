@@ -1144,13 +1144,13 @@ export function usePvpTicTacToe(
     requeueRef.current = requeue;
   }, [requeue]);
 
-  // After a per-game match settles ("done"), auto-find the next match when Auto is on. A short
+  // After a per-game match settles ("done"), always auto-find the next match — these are
+  // self-playing arena games (parity with poker); an explicit Leave() → "idle" stops the loop.
+  // Auto only governs whether the bot or you plays the match, not whether one is found. A short
   // pause lets the result show before re-queuing.
   useEffect(() => {
-    if (phase !== "done" || !autoRef.current) return;
-    const id = setTimeout(() => {
-      if (autoRef.current) requeue();
-    }, NEXT_MS);
+    if (phase !== "done") return;
+    const id = setTimeout(() => requeue(), NEXT_MS);
     return () => clearTimeout(id);
   }, [phase, requeue]);
 
