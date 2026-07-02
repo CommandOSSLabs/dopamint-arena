@@ -1,6 +1,6 @@
 // Dev utility: print canonical golden hex vectors shared by the TS tests and
 // the Move cross-checks (sui_tunnel/tests/wire_format_tests.move, and
-// example_agent_allowance_tests.move for the spend-authorization vector). Run:
+// agent_allowance_tests.move for the spend-authorization vector). Run:
 //   node --import tsx src/core/golden.gen.ts
 import { buildPublicInputs } from "../zk/cardCircuit";
 import { toHex } from "./bytes";
@@ -101,7 +101,7 @@ const settleV2 = serializeSettlementWithRoot({
 });
 console.log("SETTLE_V2      ", toHex(settleV2), `(${settleV2.length} B)`);
 
-// Agent-allowance spend voucher. Asserted by example_agent_allowance_tests.move
+// Agent-allowance spend voucher. Asserted by agent_allowance_tests.move
 // (not wire_format_tests.move) since serialize_spend_authorization lives in the
 // example module. allowance_id=0xab, authorized_total=1000.
 const spendAuth = serializeSpendAuthorization({

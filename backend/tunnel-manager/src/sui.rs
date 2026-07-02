@@ -73,7 +73,7 @@ const SPONSOR_TUNNEL_FNS: &[&str] = &[
     "entry_close_cooperative_with_root",
 ];
 
-/// `example_agent_allowance` ops a 0-SUI player may have gas-sponsored. Same safety model as the
+/// `agent_allowance` ops a 0-SUI player may have gas-sponsored. Same safety model as the
 /// tunnel allowlist: the escrow comes from the user's OWN input coins, so the settler only pays gas.
 const SPONSOR_AGENT_ALLOWANCE_FNS: &[&str] = &[
     "entry_create_and_share",
@@ -296,7 +296,7 @@ impl SuiSettler {
         let mut example_packages: Vec<ExampleModule> = Vec::new();
         if let Some(s) = agent_allowance_package_id {
             let pkg = Address::from_str(s).context("bad AGENT_ALLOWANCE_PACKAGE_ID")?;
-            example_packages.push((pkg, "example_agent_allowance", SPONSOR_AGENT_ALLOWANCE_FNS));
+            example_packages.push((pkg, "agent_allowance", SPONSOR_AGENT_ALLOWANCE_FNS));
         }
         if let Some(s) = streaming_payment_package_id {
             let pkg = Address::from_str(s).context("bad STREAMING_PAYMENT_PACKAGE_ID")?;
@@ -1635,11 +1635,8 @@ mod tests {
         let tunnel_pkg = Address::from_str("0xabc").unwrap();
         let agent_pkg = Address::from_str("0xa9e").unwrap();
         let stream_pkg = Address::from_str("0x57ea").unwrap();
-        let agent_mods: Vec<ExampleModule> = vec![(
-            agent_pkg,
-            "example_agent_allowance",
-            SPONSOR_AGENT_ALLOWANCE_FNS,
-        )];
+        let agent_mods: Vec<ExampleModule> =
+            vec![(agent_pkg, "agent_allowance", SPONSOR_AGENT_ALLOWANCE_FNS)];
         let stream_mods: Vec<ExampleModule> = vec![(
             stream_pkg,
             "streaming_payment",
@@ -1657,7 +1654,7 @@ mod tests {
         let check = |cmd: Command, mods: &[ExampleModule]| {
             validate_sponsorable_inner(&ptb(vec![cmd]), tunnel_pkg, &coin, mods)
         };
-        let agent = |f: &str, ta: Vec<TypeTag>| call(agent_pkg, "example_agent_allowance", f, ta);
+        let agent = |f: &str, ta: Vec<TypeTag>| call(agent_pkg, "agent_allowance", f, ta);
 
         // Agent allowance create + claim accepted with the package configured.
         assert!(check(
@@ -1680,12 +1677,7 @@ mod tests {
         // A different package with the same module name is refused.
         let other = Address::from_str("0xbad").unwrap();
         assert!(check(
-            call(
-                other,
-                "example_agent_allowance",
-                "entry_claim",
-                vec![coin.clone()]
-            ),
+            call(other, "agent_allowance", "entry_claim", vec![coin.clone()]),
             &agent_mods
         )
         .is_err());

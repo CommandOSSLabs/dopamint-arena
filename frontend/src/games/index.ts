@@ -14,7 +14,7 @@ import "./chat";
 import "./chat";
 import "./regularPayments";
 // Hidden for now — re-enable by uncommenting.
-// import "./agentAllowance";
+import "./agentAllowance";
 import "./streamingPayment";
 // import "./apiCredits";
 // import "./coinFlip";

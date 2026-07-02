@@ -432,7 +432,7 @@ findCreatedStreamId(client, digest)
 | Regular Payments | `tunnel::Tunnel` | Cart → settle | `payments.v1` steps |
 | **Streaming Payments** | `streaming_payment` | Clock vest + pull/cancel | `streaming.v1` ticks (attest) |
 | Agent micropayments | `example_agent_micropayments` | M2M tunnel steps | Co-signed charges |
-| Agent allowance (future) | `example_agent_allowance` | Cap + rate pull | Vouchers / on-chain accrual |
+| Agent allowance (future) | `agent_allowance` | Cap + rate pull | Vouchers / on-chain accrual |
 
 ---
 

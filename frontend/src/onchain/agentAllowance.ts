@@ -1,14 +1,15 @@
 // Agent Allowance — a delegated, capped, rate-limited, pull-based payment mandate
-// (the on-chain `example_agent_allowance` module). A principal escrows MTPS payable
+// (the on-chain `agent_allowance` module). A principal escrows MTPS payable
 // only to a fixed payee; the payee/delegate PULLS what's owed with no per-charge
 // co-signature, bounded by `min(spendCap, max(rateAccrual, voucher))` and the escrow.
 //
-// Published as a SLIM standalone package (signature + errors + example_agent_allowance)
+// Published as a SLIM standalone package (signature + errors + agent_allowance)
 // because the full sui_tunnel framework exceeds the 128KB single-tx publish limit.
 // Funds are denominated in MTPS so the app shares the arena's free stake token.
 import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { MTPS_COIN_TYPE } from "./mtps";
+import { redeemStakeFromBalance, type StakeFromBalance } from "./tunnelTx";
 
 export const AGENT_ALLOWANCE_PACKAGE_ID =
   import.meta.env?.VITE_AGENT_ALLOWANCE_PACKAGE_ID ?? "";
@@ -18,7 +19,7 @@ export const isAgentAllowanceConfigured = Boolean(
   AGENT_ALLOWANCE_PACKAGE_ID && MTPS_COIN_TYPE,
 );
 
-const MODULE = "example_agent_allowance";
+const MODULE = "agent_allowance";
 const target = (fn: string) =>
   `${AGENT_ALLOWANCE_PACKAGE_ID}::${MODULE}::${fn}`;
 
@@ -43,12 +44,13 @@ export function allowanceStatusName(status: number): string {
 // ============================================
 
 /**
- * Build the create+share tx: split `fundAmount` MTPS off `fundsCoinId` as escrow,
- * then `entry_create_and_share` (the entry variant shares the `Allowance` itself).
- * Leave `principalPublicKey` empty for a pure rate-authorized mandate (no vouchers).
+ * Build the create+share tx: withdraw `fundAmount` MTPS from the sender's SIP-58
+ * address balance (ADR-0013) as escrow, then `entry_create_and_share`. Pair with
+ * {@link ensureMtpsAddressBalance} off the hot path. Leave `principalPublicKey` empty
+ * for a pure rate-authorized mandate (no vouchers).
  */
 export function buildCreateAllowanceTx(opts: {
-  fundsCoinId: string;
+  stakeFromBalance: StakeFromBalance;
   fundAmount: bigint;
   payee: string;
   delegate?: string | null;
@@ -59,9 +61,7 @@ export function buildCreateAllowanceTx(opts: {
   signatureType?: number;
 }): Transaction {
   const tx = new Transaction();
-  const [funds] = tx.splitCoins(tx.object(opts.fundsCoinId), [
-    tx.pure.u64(opts.fundAmount),
-  ]);
+  const funds = redeemStakeFromBalance(tx, opts.stakeFromBalance);
   tx.moveCall({
     target: target("entry_create_and_share"),
     typeArguments: [MTPS_COIN_TYPE],
@@ -98,18 +98,18 @@ export function buildClaimTx(allowanceId: string, amount: bigint): Transaction {
   return tx;
 }
 
-/** Add escrow to a live allowance (principal only). */
-export function buildTopUpTx(
-  allowanceId: string,
-  fundsCoinId: string,
-  amount: bigint,
-): Transaction {
+/** Add escrow to a live allowance (principal only). Stakes from address balance (ADR-0013). */
+export function buildTopUpTx(opts: {
+  allowanceId: string;
+  stakeFromBalance: StakeFromBalance;
+  amount: bigint;
+}): Transaction {
   const tx = new Transaction();
-  const [funds] = tx.splitCoins(tx.object(fundsCoinId), [tx.pure.u64(amount)]);
+  const funds = redeemStakeFromBalance(tx, opts.stakeFromBalance);
   tx.moveCall({
     target: target("entry_top_up"),
     typeArguments: [MTPS_COIN_TYPE],
-    arguments: [tx.object(allowanceId), funds],
+    arguments: [tx.object(opts.allowanceId), funds],
   });
   return tx;
 }
@@ -235,6 +235,28 @@ export async function fetchAllowance(
     createdAt: parseU64ish(f.created_at),
     escrowBalance: parseU64ish(f.escrow),
   };
+}
+
+/**
+ * Poll `fetchAllowance` until `predicate` passes — fullnode/indexer often lags right
+ * after a write.
+ */
+export async function fetchAllowanceAfterMutation(
+  client: AllowanceReader,
+  id: string,
+  predicate: (fields: AllowanceFields) => boolean,
+  opts?: { attempts?: number; delayMs?: number },
+): Promise<AllowanceFields | null> {
+  const attempts = opts?.attempts ?? 10;
+  const delayMs = opts?.delayMs ?? 600;
+
+  for (let i = 0; i < attempts; i++) {
+    const fresh = await fetchAllowance(client, id);
+    if (fresh && predicate(fresh)) return fresh;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  return fetchAllowance(client, id);
 }
 
 /**
