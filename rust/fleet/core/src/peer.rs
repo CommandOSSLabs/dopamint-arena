@@ -7,10 +7,10 @@
 //! protocol. A `payload` is therefore one of:
 //!   * `{"t":"frame", "kind":..., "data":...}` — a game move/ack (handled by the seat runtime
 //!     via [`crate::relay_envelope`]); classified here as [`Incoming::Frame`].
-//!   * a control [`PeerMsg`]: `hello` / `stake` / `opened` / `settle` / `closed`.
+//!   * a control [`PeerMsg`]: `hello` / `stake` / `opened` / `settle` / `closed` / `stop`.
 //!
-//! The FE also sends `stop` (user abort); the bot has no variant for it, so [`classify`] returns an
-//! error and the demux drops it — the match ends on terminal state regardless.
+//! The FE also sends `{t:"stop"}` (Pay now / leave); [`PeerMsg::Stop`] is handled in [`play_match`]'s
+//! graceful-stop listener and requests cooperative settle for non-terminal protocols.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,8 @@ pub enum PeerMsg {
     Settle { sig: String, root: String },
     /// The cooperative-close digest, sent after one side submits the settle on-chain.
     Closed { digest: String },
+    /// Human Pay now / leave: request graceful cooperative settle when the protocol allows it.
+    Stop,
 }
 
 impl PeerMsg {
@@ -119,6 +121,25 @@ mod tests {
             Incoming::Peer(PeerMsg::Hello {
                 ephemeral_pubkey: "ab".into()
             })
+        );
+    }
+
+    #[test]
+    fn stop_matches_the_fe_wire_shape() {
+        let m = PeerMsg::Stop;
+        let s = m.to_payload();
+        assert!(s.contains(r#""t":"stop""#), "{s}");
+        assert_eq!(
+            serde_json::from_str::<PeerMsg>(r#"{"t":"stop"}"#).unwrap(),
+            PeerMsg::Stop
+        );
+    }
+
+    #[test]
+    fn classify_routes_stop_as_control() {
+        assert_eq!(
+            classify(br#"{"t":"stop"}"#).unwrap(),
+            Incoming::Peer(PeerMsg::Stop)
         );
     }
 

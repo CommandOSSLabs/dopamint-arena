@@ -27,175 +27,212 @@ const EStateHashMismatch: vector<u8> = b"The proof state hash does not match the
 #[error]
 const EInvalidProof: vector<u8> = b"The Groth16 proof is invalid.";
 
+#[error]
+const EUntrustedRegistry: vector<u8> = b"The circuit registry was not created through the package trust anchor.";
+
+#[error]
+const ESchemaMismatch: vector<u8> = b"The circuit input schema does not match the poker session.";
+
+#[error]
+const EParamsNotAgreed: vector<u8> = b"Both parties must agree on the circuit parameters before resolving.";
+
 const HASH_LEN: u64 = 32;
 
 public struct QuantumPokerDisputeResolved has copy, drop {
-    tunnel_id: ID,
-    session_id: ID,
-    hand_id: u64,
-    winner: u64,
-    party_a_balance: u64,
-    party_b_balance: u64,
+  tunnel_id: ID,
+  session_id: ID,
+  hand_id: u64,
+  winner: u64,
+  party_a_balance: u64,
+  party_b_balance: u64,
 }
 
 public fun field_safe_scalar(hash32: vector<u8>): vector<u8> {
-    assert!(hash32.length() == HASH_LEN, EInvalidHash);
-    let mut scalar = hash32;
-    let last = scalar[31];
-    *scalar.borrow_mut(31) = last & 0x1f;
-    scalar
+  assert!(hash32.length() == HASH_LEN, EInvalidHash);
+  let mut scalar = hash32;
+  let last = scalar[31];
+  *scalar.borrow_mut(31) = last & 0x1f;
+  scalar
 }
 
 public fun tunnel_id_hash<T>(tunnel_obj: &tunnel::Tunnel<T>): vector<u8> {
-    let id = tunnel::id(tunnel_obj);
-    let id_bytes = id.to_bytes();
-    hash::blake2b256(&id_bytes)
+  let id = tunnel::id(tunnel_obj);
+  let id_bytes = id.to_bytes();
+  hash::blake2b256(&id_bytes)
 }
 
 public fun build_public_inputs(
-    rules_hash: vector<u8>,
-    tunnel_id_hash: vector<u8>,
-    state_hash: vector<u8>,
-    hand_id: u64,
-    winner: u64,
-    party_a_balance: u64,
-    party_b_balance: u64,
-    result_hash: vector<u8>,
+  rules_hash: vector<u8>,
+  tunnel_id_hash: vector<u8>,
+  state_hash: vector<u8>,
+  hand_id: u64,
+  winner: u64,
+  party_a_balance: u64,
+  party_b_balance: u64,
+  result_hash: vector<u8>,
 ): vector<u8> {
-    assert!(winner <= quantum_poker::winner_tie(), EInvalidWinner);
-    zk_verifier::concat_scalars(vector[
-        field_safe_scalar(rules_hash),
-        field_safe_scalar(tunnel_id_hash),
-        field_safe_scalar(state_hash),
-        zk_verifier::u64_to_scalar(hand_id),
-        zk_verifier::u64_to_scalar(winner),
-        zk_verifier::u64_to_scalar(party_a_balance),
-        zk_verifier::u64_to_scalar(party_b_balance),
-        field_safe_scalar(result_hash),
-    ])
+  assert!(winner <= quantum_poker::winner_tie(), EInvalidWinner);
+  zk_verifier::concat_scalars(vector[
+    field_safe_scalar(rules_hash),
+    field_safe_scalar(tunnel_id_hash),
+    field_safe_scalar(state_hash),
+    zk_verifier::u64_to_scalar(hand_id),
+    zk_verifier::u64_to_scalar(winner),
+    zk_verifier::u64_to_scalar(party_a_balance),
+    zk_verifier::u64_to_scalar(party_b_balance),
+    field_safe_scalar(result_hash),
+  ])
 }
 
 public fun build_public_inputs_for_tunnel<T>(
-    session: &quantum_poker::PokerSession,
-    tunnel_obj: &tunnel::Tunnel<T>,
-    state_hash: vector<u8>,
-    hand_id: u64,
-    winner: u64,
-    party_a_balance: u64,
-    party_b_balance: u64,
-    result_hash: vector<u8>,
+  session: &quantum_poker::PokerSession,
+  tunnel_obj: &tunnel::Tunnel<T>,
+  state_hash: vector<u8>,
+  hand_id: u64,
+  winner: u64,
+  party_a_balance: u64,
+  party_b_balance: u64,
+  result_hash: vector<u8>,
 ): vector<u8> {
-    assert!(quantum_poker::session_tunnel_id(session) == tunnel::id(tunnel_obj), EWrongTunnel);
-    build_public_inputs(
-        *quantum_poker::session_rules_hash(session),
-        tunnel_id_hash(tunnel_obj),
-        state_hash,
-        hand_id,
-        winner,
-        party_a_balance,
-        party_b_balance,
-        result_hash,
-    )
+  assert!(
+    quantum_poker::session_tunnel_id(session) == tunnel::id(tunnel_obj),
+    EWrongTunnel,
+  );
+  build_public_inputs(
+    *quantum_poker::session_rules_hash(session),
+    tunnel_id_hash(tunnel_obj),
+    state_hash,
+    hand_id,
+    winner,
+    party_a_balance,
+    party_b_balance,
+    result_hash,
+  )
 }
 
 public fun verify_result_proof<T>(
-    session: &quantum_poker::PokerSession,
-    registry: &zk_verifier::CircuitRegistry,
-    tunnel_obj: &tunnel::Tunnel<T>,
-    proof_bytes: vector<u8>,
-    state_hash: vector<u8>,
-    hand_id: u64,
-    winner: u64,
-    party_a_balance: u64,
-    party_b_balance: u64,
-    result_hash: vector<u8>,
+  session: &quantum_poker::PokerSession,
+  registry: &zk_verifier::CircuitRegistry,
+  tunnel_obj: &tunnel::Tunnel<T>,
+  proof_bytes: vector<u8>,
+  state_hash: vector<u8>,
+  hand_id: u64,
+  winner: u64,
+  party_a_balance: u64,
+  party_b_balance: u64,
+  result_hash: vector<u8>,
 ): bool {
-    let current_state_hash = tunnel::state_hash(tunnel::state(tunnel_obj));
-    assert!(&state_hash == current_state_hash, EStateHashMismatch);
-    let public_inputs = build_public_inputs_for_tunnel(
-        session,
-        tunnel_obj,
-        state_hash,
-        hand_id,
-        winner,
-        party_a_balance,
-        party_b_balance,
-        result_hash,
-    );
-    zk_verifier::verify_circuit_proof(
-        registry,
-        quantum_poker::session_circuit_id(session),
-        &public_inputs,
-        &proof_bytes,
-    )
+  let current_state_hash = tunnel::state_hash(tunnel::state(tunnel_obj));
+  assert!(&state_hash == current_state_hash, EStateHashMismatch);
+
+  // Reject any registry not bound to the package trust anchor: otherwise an
+  // attacker resolves against a self-registered, forgeable verifying key.
+  assert!(zk_verifier::is_trusted_registry(registry), EUntrustedRegistry);
+
+  // The circuit's committed input schema must match the one both parties agreed
+  // to on the session, binding the proof to the agreed input layout.
+  let circuit = zk_verifier::get_circuit(
+    registry,
+    quantum_poker::session_circuit_id(session),
+  );
+  assert!(
+    zk_verifier::circuit_input_schema_hash(circuit)
+            == quantum_poker::session_input_schema_hash(session),
+    ESchemaMismatch,
+  );
+
+  let public_inputs = build_public_inputs_for_tunnel(
+    session,
+    tunnel_obj,
+    state_hash,
+    hand_id,
+    winner,
+    party_a_balance,
+    party_b_balance,
+    result_hash,
+  );
+  zk_verifier::verify_circuit_proof(
+    registry,
+    quantum_poker::session_circuit_id(session),
+    &public_inputs,
+    &proof_bytes,
+  )
 }
 
 public fun resolve_with_proof<T>(
-    session: &quantum_poker::PokerSession,
-    registry: &zk_verifier::CircuitRegistry,
-    tunnel_obj: &mut tunnel::Tunnel<T>,
-    proof_bytes: vector<u8>,
-    state_hash: vector<u8>,
-    hand_id: u64,
-    winner: u64,
-    party_a_balance: u64,
-    party_b_balance: u64,
-    result_hash: vector<u8>,
-    clock: &Clock,
-    ctx: &mut TxContext,
+  session: &quantum_poker::PokerSession,
+  registry: &zk_verifier::CircuitRegistry,
+  tunnel_obj: &mut tunnel::Tunnel<T>,
+  proof_bytes: vector<u8>,
+  state_hash: vector<u8>,
+  hand_id: u64,
+  winner: u64,
+  party_a_balance: u64,
+  party_b_balance: u64,
+  result_hash: vector<u8>,
+  clock: &Clock,
+  ctx: &mut TxContext,
 ) {
-    let verified = verify_result_proof(
-        session,
-        registry,
-        tunnel_obj,
-        proof_bytes,
-        state_hash,
-        hand_id,
-        winner,
-        party_a_balance,
-        party_b_balance,
-        result_hash,
-    );
-    assert!(verified, EInvalidProof);
+  assert!(quantum_poker::circuit_params_agreed(session), EParamsNotAgreed);
 
-    tunnel::resolve_dispute_verified(tunnel_obj, party_a_balance, party_b_balance, clock, ctx);
+  let verified = verify_result_proof(
+    session,
+    registry,
+    tunnel_obj,
+    proof_bytes,
+    state_hash,
+    hand_id,
+    winner,
+    party_a_balance,
+    party_b_balance,
+    result_hash,
+  );
+  assert!(verified, EInvalidProof);
 
-    event::emit(QuantumPokerDisputeResolved {
-        tunnel_id: tunnel::id(tunnel_obj),
-        session_id: object::id(session),
-        hand_id,
-        winner,
-        party_a_balance,
-        party_b_balance,
-    });
+  tunnel::resolve_dispute_verified(
+    tunnel_obj,
+    party_a_balance,
+    party_b_balance,
+    clock,
+    ctx,
+  );
+
+  event::emit(QuantumPokerDisputeResolved {
+    tunnel_id: tunnel::id(tunnel_obj),
+    session_id: object::id(session),
+    hand_id,
+    winner,
+    party_a_balance,
+    party_b_balance,
+  });
 }
 
 entry fun entry_resolve_with_proof<T>(
-    session: &quantum_poker::PokerSession,
-    registry: &zk_verifier::CircuitRegistry,
-    tunnel_obj: &mut tunnel::Tunnel<T>,
-    proof_bytes: vector<u8>,
-    state_hash: vector<u8>,
-    hand_id: u64,
-    winner: u64,
-    party_a_balance: u64,
-    party_b_balance: u64,
-    result_hash: vector<u8>,
-    clock: &Clock,
-    ctx: &mut TxContext,
+  session: &quantum_poker::PokerSession,
+  registry: &zk_verifier::CircuitRegistry,
+  tunnel_obj: &mut tunnel::Tunnel<T>,
+  proof_bytes: vector<u8>,
+  state_hash: vector<u8>,
+  hand_id: u64,
+  winner: u64,
+  party_a_balance: u64,
+  party_b_balance: u64,
+  result_hash: vector<u8>,
+  clock: &Clock,
+  ctx: &mut TxContext,
 ) {
-    resolve_with_proof(
-        session,
-        registry,
-        tunnel_obj,
-        proof_bytes,
-        state_hash,
-        hand_id,
-        winner,
-        party_a_balance,
-        party_b_balance,
-        result_hash,
-        clock,
-        ctx,
-    )
+  resolve_with_proof(
+    session,
+    registry,
+    tunnel_obj,
+    proof_bytes,
+    state_hash,
+    hand_id,
+    winner,
+    party_a_balance,
+    party_b_balance,
+    result_hash,
+    clock,
+    ctx,
+  )
 }

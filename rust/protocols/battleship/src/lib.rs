@@ -20,6 +20,7 @@ const SERIES_DOMAIN: &[u8] = b"sui_tunnel::proto::battleship.series.v1";
 pub enum BattleshipPhase {
     AwaitingCommits,
     Playing,
+    AwaitingBoardReveal,
     Over,
 }
 
@@ -29,6 +30,7 @@ impl BattleshipPhase {
             BattleshipPhase::AwaitingCommits => 0,
             BattleshipPhase::Playing => 1,
             BattleshipPhase::Over => 2,
+            BattleshipPhase::AwaitingBoardReveal => 3,
         }
     }
 }
@@ -98,6 +100,12 @@ pub enum BattleshipMove {
         salt: [u8; 32],
         #[serde(with = "tunnel_harness::wire_hex::vec_array32")]
         proof: Vec<[u8; 32]>,
+    },
+    /// Terminal proof: the party that sank the opponent reveals its OWN full board
+    /// so the protocol can re-derive the commitment and check the fleet is legal.
+    RevealBoard {
+        cells: Vec<u8>,
+        salts: Vec<[u8; 32]>,
     },
 }
 
@@ -280,6 +288,106 @@ fn shots_at(state: &BattleshipState, defender: Seat) -> &[ShotResult] {
     }
 }
 
+/// Standard fleet ship sizes (5 ships, 17 cells), used to validate a revealed board.
+const FLEET_SIZES: [usize; 5] = [5, 4, 3, 3, 2];
+
+/// The seat that must reveal its board to finalize a win, or `None` when no reveal
+/// is owed. The prospective winner is whoever sank the opponent's whole fleet;
+/// gating on its OWN board's legality is what blocks an unsinkable all-water commit.
+pub fn pending_board_reveal(state: &BattleshipState) -> Option<Seat> {
+    if state.phase != BattleshipPhase::AwaitingBoardReveal {
+        return None;
+    }
+    if state.hits_on_b == FLEET_CELLS {
+        return Some(Seat::A);
+    }
+    if state.hits_on_a == FLEET_CELLS {
+        return Some(Seat::B);
+    }
+    None
+}
+
+fn legality_diagonal_neighbors(cell: usize) -> Vec<usize> {
+    let row = (cell / BOARD_SIZE) as i32;
+    let col = (cell % BOARD_SIZE) as i32;
+    let mut out = Vec::with_capacity(4);
+    for (dr, dc) in [(-1, -1), (-1, 1), (1, -1), (1, 1)] {
+        let (r, c) = (row + dr, col + dc);
+        if r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32 {
+            out.push((r as usize) * BOARD_SIZE + c as usize);
+        }
+    }
+    out
+}
+
+fn legality_ortho_neighbors(cell: usize) -> Vec<usize> {
+    let row = (cell / BOARD_SIZE) as i32;
+    let col = (cell % BOARD_SIZE) as i32;
+    let mut out = Vec::with_capacity(4);
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let (r, c) = (row + dr, col + dc);
+        if r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32 {
+            out.push((r as usize) * BOARD_SIZE + c as usize);
+        }
+    }
+    out
+}
+
+/// Validate a revealed board without trusting its origin: exactly FLEET_CELLS ship
+/// cells, decomposing into the fleet's exact ship sizes, each a straight contiguous
+/// run, none touching (incl. diagonally). Mirrors `frontend` `isLegalBoard`.
+fn is_legal_board(board: &[u8]) -> bool {
+    if board.len() != CELL_COUNT {
+        return false;
+    }
+    if board.iter().filter(|&&c| c != 0).count() != FLEET_CELLS as usize {
+        return false;
+    }
+    // No diagonal contact between any two ship cells (separates ships cleanly).
+    for cell in 0..CELL_COUNT {
+        if board[cell] == 0 {
+            continue;
+        }
+        for d in legality_diagonal_neighbors(cell) {
+            if board[d] != 0 {
+                return false;
+            }
+        }
+    }
+    // Flood-fill 4-connected components; each must be a straight line.
+    let mut seen = [false; CELL_COUNT];
+    let mut sizes: Vec<usize> = Vec::new();
+    for start in 0..CELL_COUNT {
+        if board[start] == 0 || seen[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        seen[start] = true;
+        let mut comp: Vec<usize> = Vec::new();
+        while let Some(cur) = stack.pop() {
+            comp.push(cur);
+            for n in legality_ortho_neighbors(cur) {
+                if board[n] != 0 && !seen[n] {
+                    seen[n] = true;
+                    stack.push(n);
+                }
+            }
+        }
+        let rows: std::collections::BTreeSet<usize> =
+            comp.iter().map(|&c| c / BOARD_SIZE).collect();
+        let cols: std::collections::BTreeSet<usize> =
+            comp.iter().map(|&c| c % BOARD_SIZE).collect();
+        if rows.len() != 1 && cols.len() != 1 {
+            return false; // not a straight line
+        }
+        sizes.push(comp.len());
+    }
+    sizes.sort_unstable();
+    let mut want = FLEET_SIZES.to_vec();
+    want.sort_unstable();
+    sizes == want
+}
+
 fn push_length_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&u64_to_be_bytes(bytes.len() as u64));
     out.extend_from_slice(bytes);
@@ -331,6 +439,9 @@ impl Protocol for Battleship {
                 salt,
                 proof,
             } => self.apply_reveal(state, *cell, *is_ship, salt, proof, by),
+            BattleshipMove::RevealBoard { cells, salts } => {
+                self.apply_reveal_board(state, cells, salts, by)
+            }
         }
     }
 
@@ -627,29 +738,81 @@ impl Battleship {
                 }
             }
         }
-        if next.hits_on_b == FLEET_CELLS {
-            next.winner = BattleshipWinner::A;
-        } else if next.hits_on_a == FLEET_CELLS {
-            next.winner = BattleshipWinner::B;
-        }
-        if next.winner != BattleshipWinner::None {
-            match next.winner {
-                BattleshipWinner::A => {
-                    let shift = next.stake.min(next.balance_b);
-                    next.balance_a += shift;
-                    next.balance_b -= shift;
-                }
-                BattleshipWinner::B => {
-                    let shift = next.stake.min(next.balance_a);
-                    next.balance_a -= shift;
-                    next.balance_b += shift;
-                }
-                BattleshipWinner::None => {}
-            }
-            next.phase = BattleshipPhase::Over;
-        }
+        // Sinking a fleet no longer decides the game: the prospective winner must
+        // reveal a legal board matching its commitment (apply_reveal_board) before the
+        // stake moves. Until then balances stay even, so a stalled/illegal winner
+        // can never profit.
+        let fleet_destroyed = next.hits_on_b == FLEET_CELLS || next.hits_on_a == FLEET_CELLS;
         next.pending_shot = None;
-        next.turn = by;
+        if fleet_destroyed {
+            next.phase = BattleshipPhase::AwaitingBoardReveal;
+            // The prospective winner owes the board reveal, so the turn is theirs.
+            next.turn = by.other();
+        } else {
+            // The defender fires next.
+            next.turn = by;
+        }
+        Ok(next)
+    }
+
+    fn apply_reveal_board(
+        &self,
+        state: &BattleshipState,
+        cells: &[u8],
+        salts: &[[u8; 32]],
+        by: Seat,
+    ) -> Result<BattleshipState, ProtocolError> {
+        let winner_seat = pending_board_reveal(state)
+            .ok_or_else(|| ProtocolError("no board reveal is due".into()))?;
+        if by != winner_seat {
+            return Err(ProtocolError(
+                "only the prospective winner reveals its board".into(),
+            ));
+        }
+        if cells.len() != CELL_COUNT {
+            return Err(ProtocolError(format!("board must be {CELL_COUNT} cells")));
+        }
+        if salts.len() != CELL_COUNT {
+            return Err(ProtocolError(format!("need {CELL_COUNT} salts")));
+        }
+        let commit = commit_for(state, by)
+            .ok_or_else(|| ProtocolError("revealer has not committed".into()))?;
+        let layers = commit_board(cells, salts).map_err(ProtocolError)?;
+        let root = commitment_root(&layers)
+            .ok_or_else(|| ProtocolError("could not derive root".into()))?;
+        if root != commit {
+            return Err(ProtocolError(
+                "revealed board does not match the commitment".into(),
+            ));
+        }
+
+        // The win stands only if the winner's own committed fleet is legal; an illegal
+        // fleet (e.g. all-water to be unsinkable) forfeits the stake to the opponent.
+        let beneficiary = if is_legal_board(cells) {
+            winner_seat
+        } else {
+            winner_seat.other()
+        };
+        let winner = match beneficiary {
+            Seat::A => BattleshipWinner::A,
+            Seat::B => BattleshipWinner::B,
+        };
+        let mut next = state.clone();
+        match winner {
+            BattleshipWinner::A => {
+                let shift = next.stake.min(next.balance_b);
+                next.balance_a += shift;
+                next.balance_b -= shift;
+            }
+            BattleshipWinner::B => {
+                let shift = next.stake.min(next.balance_a);
+                next.balance_a -= shift;
+                next.balance_b += shift;
+            }
+            BattleshipWinner::None => {}
+        }
+        next.winner = winner;
+        next.phase = BattleshipPhase::Over;
         Ok(next)
     }
 }
@@ -730,6 +893,204 @@ mod tests {
             .encode_state(&state)
             .starts_with(b"sui_tunnel::proto::battleship.series.v1"));
         assert_eq!(protocol.balances(&state).sum(), 2000);
+    }
+
+    /// Five ships on separate even rows: a legal fleet (mirrors the bench board).
+    fn legal_board() -> Vec<u8> {
+        let mut board = vec![0u8; CELL_COUNT];
+        for (start, len) in [(0usize, 5usize), (20, 4), (40, 3), (60, 3), (80, 2)] {
+            for cell in board.iter_mut().skip(start).take(len) {
+                *cell = 1;
+            }
+        }
+        board
+    }
+
+    fn ship_cells(board: &[u8]) -> Vec<u8> {
+        (0..CELL_COUNT as u8)
+            .filter(|&c| board[c as usize] == 1)
+            .collect()
+    }
+
+    fn water_cells(board: &[u8]) -> Vec<u8> {
+        (0..CELL_COUNT as u8)
+            .filter(|&c| board[c as usize] == 0)
+            .collect()
+    }
+
+    /// Drive A to sink B's whole fleet (B firing harmlessly at A's water), returning
+    /// the state pending A's board reveal. A's board may be legal or all-water.
+    fn a_sinks_b(a_board: &[u8], b_board: &[u8]) -> (Battleship, BattleshipState) {
+        let protocol = Battleship::new(100);
+        let a_salts = vec![[1u8; 32]; CELL_COUNT];
+        let b_salts = vec![[2u8; 32]; CELL_COUNT];
+        let a_layers = commit_board(a_board, &a_salts).unwrap();
+        let b_layers = commit_board(b_board, &b_salts).unwrap();
+        let mut state = protocol.initial_state(&ctx());
+        state = protocol
+            .apply_move(
+                &state,
+                &BattleshipMove::Commit {
+                    root: commitment_root(&a_layers).unwrap(),
+                },
+                Seat::A,
+            )
+            .unwrap();
+        state = protocol
+            .apply_move(
+                &state,
+                &BattleshipMove::Commit {
+                    root: commitment_root(&b_layers).unwrap(),
+                },
+                Seat::B,
+            )
+            .unwrap();
+
+        let b_ships = ship_cells(b_board);
+        let a_water = water_cells(a_board);
+        for (i, &target) in b_ships.iter().enumerate() {
+            state = protocol
+                .apply_move(&state, &BattleshipMove::Shoot { cell: target }, Seat::A)
+                .unwrap();
+            state = protocol
+                .apply_move(
+                    &state,
+                    &BattleshipMove::Reveal {
+                        cell: target,
+                        is_ship: true,
+                        salt: b_salts[target as usize],
+                        proof: prove_cell(&b_layers, target).unwrap(),
+                    },
+                    Seat::B,
+                )
+                .unwrap();
+            if state.phase == BattleshipPhase::AwaitingBoardReveal {
+                break;
+            }
+            let wcell = a_water[i];
+            state = protocol
+                .apply_move(&state, &BattleshipMove::Shoot { cell: wcell }, Seat::B)
+                .unwrap();
+            state = protocol
+                .apply_move(
+                    &state,
+                    &BattleshipMove::Reveal {
+                        cell: wcell,
+                        is_ship: false,
+                        salt: a_salts[wcell as usize],
+                        proof: prove_cell(&a_layers, wcell).unwrap(),
+                    },
+                    Seat::A,
+                )
+                .unwrap();
+        }
+        (protocol, state)
+    }
+
+    #[test]
+    fn is_legal_board_accepts_legal_and_rejects_illegal() {
+        assert!(is_legal_board(&legal_board()));
+        assert!(!is_legal_board(&[0u8; CELL_COUNT])); // all-water: 0 ship cells
+        let mut blob = vec![0u8; CELL_COUNT];
+        for cell in blob.iter_mut().take(FLEET_CELLS as usize) {
+            *cell = 1; // 17 contiguous cells: ships touch, not the standard fleet
+        }
+        assert!(!is_legal_board(&blob));
+    }
+
+    #[test]
+    fn sinking_pends_until_legal_board_reveal_then_winner_claims() {
+        let (protocol, state) = a_sinks_b(&legal_board(), &legal_board());
+        // Reaching 17 hits no longer ends the game: the pot is even and nothing is final.
+        assert_eq!(state.phase, BattleshipPhase::AwaitingBoardReveal);
+        assert_eq!(state.winner, BattleshipWinner::None);
+        assert!(!protocol.is_terminal(&state));
+        assert_eq!(state.turn, Seat::A); // the prospective winner owes the reveal
+        assert_eq!(state.balance_a, 1000);
+        assert_eq!(state.balance_b, 1000);
+
+        let salts = vec![[1u8; 32]; CELL_COUNT];
+        let next = protocol
+            .apply_move(
+                &state,
+                &BattleshipMove::RevealBoard {
+                    cells: legal_board(),
+                    salts,
+                },
+                Seat::A,
+            )
+            .unwrap();
+        assert_eq!(next.winner, BattleshipWinner::A);
+        assert_eq!(next.phase, BattleshipPhase::Over);
+        assert!(protocol.is_terminal(&next));
+        assert_eq!(next.balance_a, 1100);
+        assert_eq!(next.balance_b, 900);
+        assert_eq!(protocol.balances(&next).sum(), 2000);
+    }
+
+    #[test]
+    fn all_water_board_forfeits_to_the_honest_opponent() {
+        let all_water = vec![0u8; CELL_COUNT];
+        let (protocol, state) = a_sinks_b(&all_water, &legal_board());
+        assert_eq!(state.phase, BattleshipPhase::AwaitingBoardReveal);
+        assert_eq!(state.balance_a, 1000);
+        assert_eq!(state.balance_b, 1000);
+
+        // Revealing the all-water board matches the commitment but fails the fleet check.
+        let salts = vec![[1u8; 32]; CELL_COUNT];
+        let next = protocol
+            .apply_move(
+                &state,
+                &BattleshipMove::RevealBoard {
+                    cells: all_water,
+                    salts,
+                },
+                Seat::A,
+            )
+            .unwrap();
+        assert_eq!(next.winner, BattleshipWinner::B); // forfeit: the honest opponent wins
+        assert_eq!(next.phase, BattleshipPhase::Over);
+        assert_eq!(next.balance_b, 1100);
+        assert_eq!(next.balance_a, 900);
+        assert_eq!(protocol.balances(&next).sum(), 2000);
+    }
+
+    #[test]
+    fn reveal_board_rejected_for_wrong_revealer_and_tampered_board() {
+        let (protocol, state) = a_sinks_b(&legal_board(), &legal_board());
+        let salts = vec![[1u8; 32]; CELL_COUNT];
+
+        // Wrong revealer: B is the loser, not the prospective winner.
+        assert!(protocol
+            .apply_move(
+                &state,
+                &BattleshipMove::RevealBoard {
+                    cells: legal_board(),
+                    salts: salts.clone(),
+                },
+                Seat::B,
+            )
+            .is_err());
+
+        // Tampered board: recomputed root no longer equals A's commitment.
+        let mut tampered = legal_board();
+        let water = tampered.iter().position(|&c| c == 0).unwrap();
+        tampered[water] = 1;
+        assert!(protocol
+            .apply_move(
+                &state,
+                &BattleshipMove::RevealBoard {
+                    cells: tampered,
+                    salts,
+                },
+                Seat::A,
+            )
+            .is_err());
+
+        // No further play is possible while the reveal is owed.
+        assert!(protocol
+            .apply_move(&state, &BattleshipMove::Shoot { cell: 50 }, Seat::A)
+            .is_err());
     }
 }
 

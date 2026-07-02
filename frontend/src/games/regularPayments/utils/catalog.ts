@@ -5,6 +5,9 @@ import type { Product, ProductCategory } from "../types";
 export const PRICE_LO = mtps(1n);
 export const PRICE_HI = mtps(2n);
 
+/** Allowed line-item prices — keep in sync with `tunnel-payments` `catalog.rs`. */
+export const CATALOG_PRICE_AMOUNTS = [PRICE_LO, PRICE_HI] as const;
+
 export const CATEGORIES: { id: ProductCategory; label: string }[] = [
   { id: "fresh", label: "Fresh" },
   { id: "snacks", label: "Snacks" },

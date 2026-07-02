@@ -17,23 +17,32 @@
  */
 
 import {
-  Protocol,
-  Party,
+  bytesEqual,
+  concatBytes,
+  fromHex,
+  toHex,
+} from "sui-tunnel-ts/core/bytes";
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
+import { u64ToBeBytes } from "sui-tunnel-ts/core/wire";
+import {
   Balances,
+  Party,
+  Protocol,
   ProtocolContext,
+  lengthPrefixedConcat,
   otherParty,
   protocolDomain,
-  lengthPrefixedConcat,
 } from "sui-tunnel-ts/protocol/Protocol";
-import { concatBytes, fromHex, toHex } from "sui-tunnel-ts/core/bytes";
-import { u64ToBeBytes } from "sui-tunnel-ts/core/wire";
-import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
-import { CELL_COUNT, FLEET_CELLS } from "../engine/fleet";
-import { SALT_BYTES, verifyCell } from "../engine/merkle";
+import { CELL_COUNT, FLEET_CELLS, isLegalBoard } from "../engine/fleet";
+import { SALT_BYTES, commitBoard, verifyCell } from "../engine/merkle";
 
 /** Winner codes: 0 none, 1 A, 2 B. (Battleship has no draw.) */
 export type Winner = 0 | 1 | 2;
-export type Phase = "awaitingCommits" | "playing" | "over";
+export type Phase =
+  | "awaitingCommits"
+  | "playing"
+  | "awaitingBoardReveal"
+  | "over";
 
 export interface ShotResult {
   cell: number;
@@ -72,7 +81,10 @@ export type BattleshipMove =
       isShip: boolean;
       salt: Uint8Array;
       proof: Uint8Array[];
-    };
+    }
+  // Terminal proof: the party that sank the opponent reveals its OWN full board so
+  // the protocol can re-derive the commitment and check the fleet is legal.
+  | { type: "reveal_board"; cells: Uint8Array; salts: Uint8Array[] };
 
 const DOMAIN = protocolDomain("battleship.v1");
 const COMMIT_BYTES = 32;
@@ -81,10 +93,42 @@ const PHASE_CODE: Record<Phase, number> = {
   awaitingCommits: 0,
   playing: 1,
   over: 2,
+  awaitingBoardReveal: 3,
 };
 
 function commitFor(state: BattleshipState, party: Party): Uint8Array | null {
   return party === "A" ? state.commitA : state.commitB;
+}
+
+/**
+ * The seat that must reveal its board to finalize a win, or null when no reveal is
+ * owed. The prospective winner is whoever sank the opponent's whole fleet; gating
+ * on its OWN board's legality is what blocks an unsinkable all-water commitment.
+ */
+export function pendingBoardReveal(state: BattleshipState): Party | null {
+  if (state.phase !== "awaitingBoardReveal") return null;
+  if (state.hitsOnB === FLEET_CELLS) return "A";
+  if (state.hitsOnA === FLEET_CELLS) return "B";
+  return null;
+}
+
+/** Move `stake` from the loser to the winner, clamped so a balance never goes negative. */
+function shiftStake(
+  state: BattleshipState,
+  winner: Winner,
+): { balanceA: bigint; balanceB: bigint } {
+  let { balanceA, balanceB } = state;
+  if (winner === 0) return { balanceA, balanceB };
+  const loserBal = winner === 1 ? balanceB : balanceA;
+  const shift = state.stake < loserBal ? state.stake : loserBal;
+  if (winner === 1) {
+    balanceA += shift;
+    balanceB -= shift;
+  } else {
+    balanceA -= shift;
+    balanceB += shift;
+  }
+  return { balanceA, balanceB };
 }
 
 /** Shots already fired at `defender`'s board. */
@@ -145,6 +189,8 @@ export class BattleshipProtocol implements Protocol<
         return this.applyShoot(state, move.cell, by);
       case "reveal":
         return this.applyReveal(state, move, by);
+      case "reveal_board":
+        return this.applyRevealBoard(state, move, by);
       default: {
         const exhaustive: never = move;
         throw new Error(`unknown move: ${JSON.stringify(exhaustive)}`);
@@ -231,23 +277,10 @@ export class BattleshipProtocol implements Protocol<
     const hitsOnB =
       by === "B" && move.isShip ? state.hitsOnB + 1 : state.hitsOnB;
 
-    let winner: Winner = 0;
-    if (hitsOnB === FLEET_CELLS)
-      winner = 1; // B's fleet destroyed -> A wins
-    else if (hitsOnA === FLEET_CELLS) winner = 2; // A's fleet destroyed -> B wins
-
-    let { balanceA, balanceB } = state;
-    if (winner !== 0) {
-      const loserBal = winner === 1 ? state.balanceB : state.balanceA;
-      const shift = state.stake < loserBal ? state.stake : loserBal;
-      if (winner === 1) {
-        balanceA += shift;
-        balanceB -= shift;
-      } else {
-        balanceA -= shift;
-        balanceB += shift;
-      }
-    }
+    // Sinking a fleet no longer decides the game: the prospective winner must reveal
+    // a legal board matching its commitment (applyRevealBoard) before the stake moves.
+    // Until then balances stay even, so a stalled/illegal winner can never profit.
+    const fleetDestroyed = hitsOnB === FLEET_CELLS || hitsOnA === FLEET_CELLS;
 
     return {
       ...state,
@@ -255,14 +288,44 @@ export class BattleshipProtocol implements Protocol<
       shotsAtB,
       hitsOnA,
       hitsOnB,
-      winner,
-      balanceA,
-      balanceB,
-      phase: winner !== 0 ? "over" : "playing",
-      // The defender fires next; clear the pending shot.
+      phase: fleetDestroyed ? "awaitingBoardReveal" : "playing",
+      // Clear the pending shot. On a normal reveal the defender fires next; on the
+      // sinking reveal the prospective winner owes the board reveal, so turn is theirs.
       pendingShot: null,
-      turn: by,
+      turn: fleetDestroyed ? otherParty(by) : by,
     };
+  }
+
+  private applyRevealBoard(
+    state: BattleshipState,
+    move: Extract<BattleshipMove, { type: "reveal_board" }>,
+    by: Party,
+  ): BattleshipState {
+    const winnerSeat = pendingBoardReveal(state);
+    if (!winnerSeat) throw new Error("no board reveal is due");
+    if (by !== winnerSeat)
+      throw new Error("only the prospective winner reveals its board");
+    if (move.cells.length !== CELL_COUNT)
+      throw new Error(`board must be ${CELL_COUNT} cells`);
+    if (move.salts.length !== CELL_COUNT)
+      throw new Error(`need ${CELL_COUNT} salts`);
+
+    const commit = commitFor(state, by)!;
+    const root = commitBoard(move.cells, move.salts).root;
+    if (!bytesEqual(root, commit))
+      throw new Error("revealed board does not match the commitment");
+
+    // The win stands only if the winner's own committed fleet is legal; an illegal
+    // fleet (e.g. all-water to be unsinkable) forfeits the stake to the opponent.
+    const winner: Winner = isLegalBoard(move.cells)
+      ? winnerSeat === "A"
+        ? 1
+        : 2
+      : winnerSeat === "A"
+        ? 2
+        : 1;
+    const { balanceA, balanceB } = shiftStake(state, winner);
+    return { ...state, winner, balanceA, balanceB, phase: "over" };
   }
 
   encodeState(state: BattleshipState): Uint8Array {
@@ -343,6 +406,12 @@ export const battleshipMoveCodec: MoveCodec<BattleshipMove> = {
   encode(m) {
     if (m.type === "commit") return { type: "commit", root: toHex(m.root) };
     if (m.type === "shoot") return { type: "shoot", cell: m.cell };
+    if (m.type === "reveal_board")
+      return {
+        type: "reveal_board",
+        cells: toHex(m.cells),
+        salts: m.salts.map(toHex),
+      };
     return {
       type: "reveal",
       cell: m.cell,
@@ -359,6 +428,8 @@ export const battleshipMoveCodec: MoveCodec<BattleshipMove> = {
       isShip?: boolean;
       salt?: string;
       proof?: string[];
+      cells?: string;
+      salts?: string[];
     };
     if (o.type === "commit") return { type: "commit", root: fromHex(o.root!) };
     if (o.type === "shoot") return { type: "shoot", cell: o.cell! };
@@ -369,6 +440,12 @@ export const battleshipMoveCodec: MoveCodec<BattleshipMove> = {
         isShip: o.isShip!,
         salt: fromHex(o.salt!),
         proof: (o.proof ?? []).map(fromHex),
+      };
+    if (o.type === "reveal_board")
+      return {
+        type: "reveal_board",
+        cells: fromHex(o.cells ?? ""),
+        salts: (o.salts ?? []).map(fromHex),
       };
     throw new Error(`unknown battleship move: ${o.type}`);
   },

@@ -186,7 +186,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
           {
             name: "FLEET_COLOCATED_GAMES",
             value:
-              "quantum_poker,bomb_it,chicken_cross,world_canvas,blackjack,tic_tac_toe,caro,battleship",
+              "quantum_poker,bomb_it,chicken_cross,world_canvas,blackjack,tic_tac_toe,caro,battleship,regular_payments",
           },
           { name: "WALLET_POOL_ID", value: "wp_cjmok4DQgZDpAooCGNjmqg" },
           {

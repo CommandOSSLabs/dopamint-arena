@@ -20,15 +20,15 @@
  * Commit-reveal is reserved for hidden-information games (see docs/decisions/0010).
  */
 
+import { concatBytes } from "../core/bytes";
+import { u64ToBeBytes } from "../core/wire";
 import {
-  Protocol,
-  Party,
   Balances,
+  Party,
+  Protocol,
   ProtocolContext,
   protocolDomain,
 } from "./Protocol";
-import { concatBytes } from "../core/bytes";
-import { u64ToBeBytes } from "../core/wire";
 
 // ============================================
 // CONFIG
@@ -343,10 +343,15 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
     };
   }
 
-  applyMove(state: CrossState, move: CrossMove, _by: Party): CrossState {
+  applyMove(state: CrossState, move: CrossMove, by: Party): CrossState {
     if (this.isTerminal(state)) {
       throw new Error("game over: the race is already decided");
     }
+    // Integrity: a seat may only carry its OWN hop (hardens vs a forged opponent move).
+    if (by === "A" && move.dirB !== undefined)
+      throw new Error("A cannot submit B's direction");
+    if (by === "B" && move.dirA !== undefined)
+      throw new Error("B cannot submit A's direction");
     const tick = state.tick + 1n;
     const players: [CrossPlayer, CrossPlayer] = [
       stepPlayer(state.seed, state.players[0], move.dirA, tick),
