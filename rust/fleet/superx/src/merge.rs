@@ -7,6 +7,7 @@
 //! as separate processes sharing a machine — the high-water mark, not a sum);
 //! throughput is recomputed against the run's wall clock.
 
+use crate::proto::RunAggregateWire;
 use crate::swarm::report::{SwarmReport, move_tps};
 
 /// Aggregated result of a run's swarm reports. The daemon fills this once every
@@ -27,6 +28,24 @@ pub struct RunAggregate {
     pub cpu_cores_avg: f64,
     /// Peak resident-set size across swarms (max, not sum).
     pub rss_peak_bytes: u64,
+}
+
+impl RunAggregate {
+    /// Project onto the serde wire type carried in `List`/`Watch` responses.
+    pub fn to_wire(&self) -> RunAggregateWire {
+        RunAggregateWire {
+            swarms: self.swarms,
+            tunnels_opened: self.tunnels_opened,
+            tunnels_settled: self.tunnels_settled,
+            tunnels_failed: self.tunnels_failed,
+            tunnels_aborted: self.tunnels_aborted,
+            moves: self.moves,
+            wall_ms: self.wall_ms,
+            wall_move_tps: self.wall_move_tps,
+            cpu_cores_avg: self.cpu_cores_avg,
+            rss_peak_bytes: self.rss_peak_bytes,
+        }
+    }
 }
 
 /// Fold per-swarm reports into a fleet-level aggregate against the run's wall

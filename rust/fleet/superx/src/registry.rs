@@ -35,6 +35,18 @@ pub enum RunState {
 }
 
 impl RunState {
+    /// Lowercase wire name carried in [`crate::proto::RunSummary::state`] and
+    /// run-state events. Stable across versions — clients match on it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunState::Starting => "starting",
+            RunState::Running => "running",
+            RunState::Stopping => "stopping",
+            RunState::Finished => "finished",
+            RunState::Failed => "failed",
+        }
+    }
+
     /// Whether the run has reached a terminal state and can no longer advance.
     fn is_terminal(self) -> bool {
         matches!(self, RunState::Finished | RunState::Failed)
