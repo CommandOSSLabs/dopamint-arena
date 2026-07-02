@@ -3128,6 +3128,7 @@ dependencies = [
  "tunnel-harness",
  "tunnel-payments",
  "tunnel-telemetry",
+ "wiremock",
 ]
 
 [[package]]

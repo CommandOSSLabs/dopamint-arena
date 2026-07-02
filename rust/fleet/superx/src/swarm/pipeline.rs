@@ -26,6 +26,7 @@ use tunnel_telemetry::CollectingSink;
 
 use crate::swarm::anchor::{InnerAnchor, StagingAnchor, SuiContext};
 use crate::swarm::gates::{PreOpenGate, SettleWaveGate};
+use crate::swarm::heartbeat::{HeartbeatConfig as HeartbeatClient, HeartbeatSetup};
 use crate::swarm::protocol::{ProtocolKind, Scenario, SeededStrategy, play_seed};
 use crate::swarm::settle_manager::SettleManager;
 use crate::swarm::stats::{Distribution, summarize};
@@ -359,6 +360,32 @@ where
         b: params.initial_balance,
     };
 
+    // Register live telemetry, if configured, before opening. Heartbeats are
+    // best-effort: a sink that is down or slow must degrade the run to silent
+    // telemetry, never fail or stall it, so registration errors are logged and
+    // dropped. The phase advances (open -> play -> settle) below let the daemon's
+    // sink render staged progress across the swarm.
+    let heartbeat: Option<HeartbeatClient> = match &params.heartbeat {
+        Some(cfg) => {
+            let setup = HeartbeatSetup {
+                base_url: cfg.url.clone(),
+                flush_interval_ms: cfg.flush_ms,
+            };
+            match setup.register(params.protocol.id()).await {
+                Ok(client) => {
+                    client.set_phase_progress(0, tunnels);
+                    client.set_phase("open");
+                    Some(client)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "heartbeat registration failed; running without live telemetry");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let started = Instant::now();
     let mut tasks: JoinSet<TunnelResult> = JoinSet::new();
     // Accounts every task exactly once across the barrier-wait early reaps and the
@@ -412,6 +439,7 @@ where
                 run_control.tunnel(),
                 initial,
                 settlement_mode,
+                heartbeat.clone(),
             ));
         }
         if spawned < tunnels {
@@ -471,6 +499,10 @@ where
     // Open complete, play begins: signal readiness so a supervisor's later stop
     // drains genuinely-open tunnels instead of racing this swarm's startup.
     on_playing();
+    if let Some(client) = &heartbeat {
+        client.set_phase_progress(open_gate.opened().min(tunnels), tunnels);
+        client.set_phase("play");
+    }
 
     // Play + settle barrier. The drain loop settles pairs in waves once every
     // seat has deposited; begin it now so it is ready the instant play completes.
@@ -543,6 +575,12 @@ where
     let play_done = Instant::now();
     let play_ms = play_done.duration_since(open_done).as_millis().max(1);
 
+    // Play complete, pairs drain: advance the reported phase so the daemon sink
+    // shows settlement progress rather than a stalled play phase.
+    if let Some(client) = &heartbeat {
+        client.set_phase("settle");
+    }
+
     // Settle drain: tasks complete only after their settle resolves (or errors).
     // Bound the wait so a stuck seat aborts rather than hangs.
     let drain_deadline = Instant::now() + TUNNEL_DRAIN_TIMEOUT;
@@ -604,6 +642,7 @@ async fn run_one_tunnel<P>(
     tunnel_control: DriverRunControl,
     initial: Balances,
     settlement_mode: SettlementMode,
+    heartbeat: Option<HeartbeatClient>,
 ) -> TunnelResult
 where
     P: Protocol + Clone + Send + 'static,
@@ -634,7 +673,7 @@ where
     );
     let anchor_b = StagingAnchor::new(inner, Seat::B, open_gate, settle_mgr);
 
-    let driver_a = PartyDriver::new(
+    let mut driver_a = PartyDriver::new(
         SeatParts {
             protocol: protocol.clone(),
             signer: signer_a,
@@ -648,6 +687,11 @@ where
         recorder_for::<P::Move>(settlement_mode),
     )
     .with_run_control(tunnel_control.clone());
+    // One reporter per tunnel (seat A only) so a tunnel's moves aren't
+    // double-counted; the reporter shares the run's cadence + phase.
+    if let Some(client) = heartbeat {
+        driver_a = driver_a.observe(Box::new(client.reporter()));
+    }
     let driver_b = PartyDriver::new(
         SeatParts {
             protocol,

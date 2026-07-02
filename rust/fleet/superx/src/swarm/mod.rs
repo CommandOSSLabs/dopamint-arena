@@ -14,7 +14,7 @@ pub mod cgroup;
 pub mod stats;
 pub mod report;
 pub mod drain;
-// pub mod heartbeat;
+pub mod heartbeat;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
