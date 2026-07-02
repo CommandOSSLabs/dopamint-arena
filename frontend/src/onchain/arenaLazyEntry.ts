@@ -5,26 +5,27 @@
 // `setArenaEntry` wakes that game's window consumer (via `subscribeArena`) to `enterArenaMatch`. No-op
 // if already allocated or in flight, or with no wallet (then the connect batch covers it on connect).
 import { enterArena } from "@/onchain/arenaEnter";
-import { getArenaEntry, setArenaEntry } from "@/onchain/arenaAllocationStore";
+import { setArenaEntry } from "@/onchain/arenaAllocationStore";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { resolveBackendUrl } from "@/backend/controlPlane";
 
-/** Games with an allocate in flight, so a window remount (or a sibling consumer) can't double-deposit
- *  the same game before its store entry lands. Cleared when the allocate settles. */
+/** WINDOWS with an allocate in flight (keyed by window instance id, NOT game), so a re-fire for the
+ *  same window can't double-deposit before its store entry lands. Keying by window is what lets N
+ *  windows of the SAME game each get their own bot — game-keyed dedup would allocate only the first. */
 const inFlight = new Set<string>();
 
-/** Allocate + deposit seat A for one arena game opened after the connect-time batch. Idempotent: a
- *  no-op if the game already has a store entry or an allocate is in flight. Requires the connected
- *  wallet's address; safe to call repeatedly (e.g. from a mount effect). */
+/** Allocate + deposit seat A for ONE game window opened after the connect-time batch. Idempotent per
+ *  window (in-flight guard). Requires the connected wallet's address; a reopen retries on failure. */
 export async function requestArenaGame(
+  windowId: string,
   arenaGameId: string,
   ownerAddress: string,
 ): Promise<void> {
-  if (getArenaEntry(arenaGameId) || inFlight.has(arenaGameId)) return;
-  inFlight.add(arenaGameId);
+  if (inFlight.has(windowId)) return;
+  inFlight.add(windowId);
   try {
     // `enterArena` mints the ephemeral key, allocates the bot, deposits seat A, and returns the
-    // {allocation, keypair}; publish it so this game's window consumes it.
+    // {allocation, keypair}; publish it under the game so THIS window's consumer pops it.
     const matches = await enterArena({
       games: [arenaGameId],
       userAddress: ownerAddress,
@@ -34,8 +35,11 @@ export async function requestArenaGame(
     for (const m of matches) setArenaEntry(m.allocation.game, m);
   } catch (e) {
     // No free bot / deposit rejected — the window just shows its normal lobby; a reopen retries.
-    console.warn(`[arena] late allocate failed for ${arenaGameId}`, e);
+    console.warn(
+      `[arena] late allocate failed for ${arenaGameId} (${windowId})`,
+      e,
+    );
   } finally {
-    inFlight.delete(arenaGameId);
+    inFlight.delete(windowId);
   }
 }

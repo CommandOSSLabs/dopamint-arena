@@ -445,10 +445,11 @@ export function ArenaView() {
       ...prev,
       [workspace]: tile([...prev[workspace], { id, x: 0, y: 0, ...TILE }]),
     }));
-    // Fund this game's arena seat on the spot (idempotent + coalesced by the shared batcher). No-op if
-    // not arena-wired or no wallet yet — in the latter case the connect-time batch picks it up.
+    // Fund THIS window's arena seat on the spot (idempotent per window + coalesced by the shared
+    // batcher). Keyed by the new instance `id` so opening N of the same game gets N bots. No-op if not
+    // arena-wired or no wallet yet — in the latter case the connect-time batch picks it up.
     const arenaId = arenaGameIdForModule(gameId);
-    if (arenaId && arenaOwner) void requestArenaGame(arenaId, arenaOwner);
+    if (arenaId && arenaOwner) void requestArenaGame(id, arenaId, arenaOwner);
     return id;
   };
 
@@ -465,28 +466,33 @@ export function ArenaView() {
 
   // One window per module not already open, across every target floor.
   const addAll = () => {
+    // Compute the new windows (with instance ids) up front, so we both ADD them and FUND each by its
+    // own id — funding by window id is what lets same-game duplicates each reserve their own bot.
+    const additions: { ws: Workspace; id: string; moduleId: string }[] = [];
+    for (const ws of toolTargets) {
+      const present = new Set(layouts[ws].map((w) => gameOf(w.id)));
+      for (const m of listByWorkspace(ws))
+        if (!present.has(m.id))
+          additions.push({ ws, id: newInstanceId(m.id), moduleId: m.id });
+    }
+    if (additions.length === 0) return;
     setLayouts((prev) => {
       const next = { ...prev };
       for (const ws of toolTargets) {
-        const present = new Set(prev[ws].map((w) => gameOf(w.id)));
-        const adds = listByWorkspace(ws)
-          .filter((m) => !present.has(m.id))
-          .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...TILE }));
-        next[ws] = tile([...prev[ws], ...adds]);
+        const adds = additions
+          .filter((a) => a.ws === ws)
+          .map((a) => ({ id: a.id, x: 0, y: 0, ...TILE }));
+        if (adds.length) next[ws] = tile([...prev[ws], ...adds]);
       }
       return next;
     });
-    // Fund each newly-added arena game (best-effort coalesce; addAll isn't the one-popup connect path).
-    if (arenaOwner) {
-      for (const ws of toolTargets) {
-        const present = new Set(layouts[ws].map((w) => gameOf(w.id)));
-        for (const m of listByWorkspace(ws)) {
-          if (present.has(m.id)) continue;
-          const arenaId = arenaGameIdForModule(m.id);
-          if (arenaId) void requestArenaGame(arenaId, arenaOwner);
-        }
+    // Fund each newly-added arena window by its instance id (best-effort coalesce; addAll isn't the
+    // one-popup connect path).
+    if (arenaOwner)
+      for (const a of additions) {
+        const arenaId = arenaGameIdForModule(a.moduleId);
+        if (arenaId) void requestArenaGame(a.id, arenaId, arenaOwner);
       }
-    }
   };
 
   // Tear down every open/hidden/floating window's live session (sockets, timers) across
