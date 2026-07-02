@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SuiClient } from "@mysten/sui/client";
+import type { SuiClient } from "./suiClient";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Ed25519Keypair as KP } from "@mysten/sui/keypairs/ed25519";
 import { makeSeats, playMatch, type MatchResult } from "./match";

@@ -227,6 +227,45 @@ the real engine functions over the captured artifacts. Prints an
 Informational sub-measures (move-codec share, bigint-vs-number delta, GC pause,
 native-vs-noble crypto) overlap the buckets and are not added to the subtotal.
 
+### `bun run bench --probe` — measure on-chain open/close limits, throughput & gas
+
+A real-transaction measurement probe (NOT a game run). It opens and
+cooperatively settles real tunnels on a localnet to isolate what the swarm
+benchmark can't, in three phases (`--phase open-knee|throughput|gas|all`,
+default `all`):
+
+- **open-knee** — sweeps `--batch-sizes` ascending to find the most tunnels
+  openable in ONE PTB, bisects to pin the exact knee, and classifies which
+  ceiling binds (the 1024-event budget at N≈256, tx-size, command/arg, or gas).
+  Every probe tx sets a gas budget (`min(50 SUI, ceil(N · open · 1.5))`) — the
+  default 100M budget would otherwise cap a batch at ~22 opens.
+- **throughput** — sweeps `--batch-sizes` × `--pool-sizes` (signers from
+  `keys.json`), each signer funding its own opens from its own gas coin, and
+  reports sustained opens/s and closes/s. Closed-loop by default; pass
+  `--target-rate` (with `--rate-steps`) for an open-loop pacer.
+- **gas** — one open + one close, median over `--samples`, as net SUI vs the
+  testnet reference (open 0.004374, close 0.003809).
+
+```bash
+# everything (stack must be up; settler key in $SUI_SETTLER_KEY / .env.local):
+bun run bench --probe
+# just the opens-per-PTB knee:
+bun run bench --probe --phase open-knee --batch-sizes 1,64,256,320
+# throughput only, explicit pool sizes:
+bun run bench --probe --phase throughput --pool-sizes 1,4,8
+# per-tx gas, 9 samples:
+bun run bench --probe --phase gas --samples 9
+```
+
+Infra resolves flag → `.env.local` → env (`--rpc-url`, `--package-id`). The
+settler key is read by env-var **name** only (`--settler-key-env`, default
+`SUI_SETTLER_KEY`) — never passed on argv, never printed. Writes
+`reports/probe-<env>-<stamp>.json` plus a markdown twin. SUI-only on the stock
+stack; SIP-58 address-balance gas is not measured (the SDK signs with owned gas
+coins). The co-signed settlements use self-play purely as a measurement helper —
+the probe mints both ephemeral party keys and only needs valid cooperative
+closes; this is not the genuine-two-party demo path.
+
 ### `bun test` — the unit + smoke suite
 
 ```bash
@@ -374,6 +413,11 @@ the redis path.
 | `src/games.ts` | game → kit registry (6 games; drives real FE protocol classes) |
 | `src/resourceMonitor.ts` | process CPU + RSS sampling; `resources:` line |
 | `src/onchain.ts` | open / settle bookends |
+| `src/probe.ts` | `--probe` entry: arg parse, infra resolve, phase orchestration |
+| `src/probeOpen.ts` | one-PTB batch open with a gas budget set (`openBatch`) |
+| `src/probeClose.ts` | opening-balance co-signed settlement + round-robin closes |
+| `src/probeLimits.ts` | pure: gas-budget sizer, failure classifier, predicted ceilings |
+| `src/probeReport.ts` | `--probe` JSON shape + markdown twin |
 | `src/stack.ts` + `docker-compose.yml` | localnet + valkey + publish + funding |
 | `src/relayProcess.ts` | relay spawn + health gate |
 | `src/runMatch.ts` | composes channel + anchor into one full match |

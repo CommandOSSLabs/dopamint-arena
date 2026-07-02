@@ -222,6 +222,28 @@ CONTAINER — run isolated inside the loadbench Docker service
   --cpus N           CPU limit for the container run.
   --memory Ng        memory limit for the container run.
 
+PROBE — measure real on-chain open/close limits, throughput, and gas
+  --probe            measurement mode (not a game run): opens + cooperatively
+                     settles real tunnels on a localnet to find the opens- and
+                     closes-per-PTB knees, sustained opens/s & closes/s, and per-tx
+                     gas. Needs the stack up + a funded settler. Writes
+                     reports/probe-<env>-<stamp>.{json,md}.
+  --phase P          open-knee | close-knee | throughput | gas | all (default all).
+  --batch-sizes L    opens-per-PTB sweep (default 1,8,32,64,128,256,320).
+  --pool-sizes L     concurrent signer-pool sizes (default 1,4,8; from keys.json).
+  --close-working-set N  closes staged+settled per lane in the close-throughput
+                     phase (default 32; one batched PTB when ≤ the close knee).
+  --target-rate R    open-loop pacer at R opens/s (default: closed-loop).
+  --rate-steps N     ramp steps up to --target-rate (default 4 when paced).
+  --stake-mist N     per-seat stake (default 1000 — tiny so funding lasts).
+  --coin-type T      Move coin type (default SUI; SUI-only on the stock stack).
+  --samples N        per-tx gas median sample count (default 5).
+  --gas-budget-mist N  override the auto budget (default min(50 SUI, 1.5x cost)).
+  --settler-key-env NAME  env var NAME holding the settler key (default
+                     SUI_SETTLER_KEY); the key value is never read from argv.
+  --keys-file PATH   funded signer pool (default ../keys.json).
+  --out PATH         report path (default reports/probe-<env>-<stamp>.json).
+
   -h, --help         show this help and exit.
 
 EXAMPLES
@@ -235,6 +257,8 @@ EXAMPLES
   bun run bench --channel local --duration 15
   # all-games report isolated in a container capped at 8 cores:
   bun run bench --game all --container --cpus 8 --offchain --channel local
+  # measure on-chain open/close limits, throughput + gas (stack must be up):
+  bun run bench --probe --phase all
 `;;
 
 function main(): void {
@@ -246,6 +270,15 @@ function main(): void {
   if (argv.includes("--ablation")) {
     import("./ablationRun")
       .then((m) => m.runAblation(argv))
+      .catch((e: unknown) => {
+        console.error(String((e as Error)?.message ?? e));
+        process.exit(1);
+      });
+    return;
+  }
+  if (argv.includes("--probe")) {
+    import("./probe")
+      .then((m) => m.runProbe(argv))
       .catch((e: unknown) => {
         console.error(String((e as Error)?.message ?? e));
         process.exit(1);

@@ -1,4 +1,4 @@
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import { SuiClient, getFullnodeUrl } from "./suiClient";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { isPlayable, PLAYABLE } from "./games";

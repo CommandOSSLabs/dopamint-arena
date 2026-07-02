@@ -1,5 +1,5 @@
 import { Transaction } from "@mysten/sui/transactions";
-import type { SuiClient } from "@mysten/sui/client";
+import type { SuiClient } from "./suiClient";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
   buildOpenAndFundMany,

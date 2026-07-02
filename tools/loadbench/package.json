@@ -5,7 +5,8 @@
   "scripts": {
     "bench": "bun run src/cli.ts",
     "stack": "bun run src/stack.ts",
+    "plan": "bun run src/mixPlan.ts",
     "test": "bun test"
   },
-  "dependencies": { "@mysten/sui": "1.28.1" }
+  "dependencies": { "@mysten/sui": "2.18.0" }
 }
