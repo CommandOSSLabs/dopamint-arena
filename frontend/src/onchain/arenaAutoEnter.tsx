@@ -11,70 +11,84 @@ import {
   useSignAndExecuteTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
-import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { list, arenaGameIdForModule } from "@/games/registry";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { configureSharedBatcher } from "@/onchain/sharedTunnelOpenBatcher";
-import { enterArena, type MakeUserParty } from "@/onchain/arenaEnter";
+import { enterArena } from "@/onchain/arenaEnter";
 import { setArenaEntry } from "@/onchain/arenaAllocationStore";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { resolveBackendUrl } from "@/backend/controlPlane";
 import { listActiveTunnels, readResumeRecord } from "@/pvp/resume";
-import {
-  arenaIdsExcludingResuming,
-  resumingGameKeysOf,
-} from "@/onchain/arenaAllocationSkip";
-import type { PartyOnchain } from "@/onchain/tunnelTx";
+import { resumingGameKeysOf } from "@/onchain/arenaAllocationSkip";
 
 /** localStorage key the desktop persists its window layout under (`Desktop.tsx`). */
 const LAYOUT_KEY = "mtps.desktop.layouts.v1";
 
-/** Module ids that currently have an open window, read from the persisted desktop layout. Instance
- *  ids (`module#uuid`, for duplicate windows) are stripped to the base module id. Empty ⇒ unknown
- *  (e.g. a brand-new load before the desktop persisted) → the caller falls back to all arena games so
- *  the floor still comes alive. Defensive: any parse error ⇒ empty (treated as unknown). */
-function openModuleIds(): Set<string> {
+/** Open game windows (instance id + base module id) from the persisted layout, WITHOUT deduping — so
+ *  N windows of the same game are each counted. Empty ⇒ unknown (caller falls back to all defaults). */
+function openWindowInstances(): { windowId: string; moduleId: string }[] {
   try {
-    if (typeof localStorage === "undefined") return new Set();
+    if (typeof localStorage === "undefined") return [];
     const raw = localStorage.getItem(LAYOUT_KEY);
-    if (!raw) return new Set();
+    if (!raw) return [];
     const layouts = JSON.parse(raw) as Record<string, Array<{ id?: unknown }>>;
-    const ids = new Set<string>();
+    const out: { windowId: string; moduleId: string }[] = [];
     for (const items of Object.values(layouts)) {
       if (!Array.isArray(items)) continue;
-      for (const it of items) {
-        if (typeof it?.id === "string") ids.add(it.id.split("#")[0]);
-      }
+      for (const it of items)
+        if (typeof it?.id === "string")
+          out.push({ windowId: it.id, moduleId: it.id.split("#")[0] });
     }
-    return ids;
+    return out;
   } catch {
-    return new Set();
+    return [];
   }
 }
 
-/** Arena ids to deposit at connect: the DEFAULT (first) arena id of each arena-wired module whose
- *  window is open (per the persisted layout) — so we only fund games the user is actually showing,
- *  not all 8. A multi-protocol module (tic-tac-toe + caro) lists its default variant FIRST (caro), so
- *  only that one is funded, not both. When the open set is unknown (empty localStorage) we fall back
- *  to every arena module's default, so a fresh desktop still comes alive. */
-function arenaGameIdsForOpenWindows(): string[] {
-  const open = openModuleIds();
-  const ids: string[] = [];
-  for (const m of list()) {
-    if (open.size > 0 && !open.has(m.id)) continue; // scope to open windows once we know them
-    const arenaId = arenaGameIdForModule(m.id);
-    if (arenaId) ids.push(arenaId);
+/** Canonicalize a game id for comparison (resume keys are kebab `chicken-cross`, arena ids underscore
+ *  `chicken_cross`); strip both separators. Mirrors `arenaAllocationSkip`. */
+const canonGameId = (id: string): string => id.replace(/[-_]/g, "");
+
+/** Remove ONE `games` entry per resuming record whose game matches, so a window that will resume its
+ *  in-flight tunnel isn't also handed a fresh allocation (which would strand a second stake). */
+function subtractResumingPerGame(
+  games: string[],
+  resumingGameKeys: string[],
+): string[] {
+  const remaining = [...games];
+  for (const key of resumingGameKeys) {
+    const idx = remaining.findIndex((g) => canonGameId(g) === canonGameId(key));
+    if (idx >= 0) remaining.splice(idx, 1);
   }
-  // Skip any game the resume flow will restore: on a reload each open window's PvP hook resumes its
-  // persisted IN-FLIGHT tunnel, so re-allocating (and depositing a fresh stake into) a second tunnel
-  // for the same game would strand that stake in an abandoned match. A FINISHED (terminal) record is
-  // excluded from this suppression so a settle+reload allocates a new game instead of stalling on the
-  // settled board — resume clears that record, but this read has no protocol to judge terminality, so
-  // it trusts the record's stamped flag (keeping allocate and resume consistent order-independently).
+  return remaining;
+}
+
+/** Arena ids to allocate at connect, WITH MULTIPLICITY — one per open window (3 caro tabs → 3 caro
+ *  requests), minus the windows that will RESUME an in-flight tunnel instead. A multi-protocol module
+ *  (tic-tac-toe + caro) resolves to its DEFAULT arena id (caro). When the open set is unknown (empty
+ *  layout) we fall back to one of each arena module's default so a fresh desktop still comes alive. */
+function arenaGamesForOpenWindows(): string[] {
+  const wins = openWindowInstances();
+  const games: string[] = [];
+  if (wins.length > 0) {
+    for (const w of wins) {
+      const arenaId = arenaGameIdForModule(w.moduleId);
+      if (arenaId) games.push(arenaId);
+    }
+  } else {
+    for (const m of list()) {
+      const arenaId = arenaGameIdForModule(m.id);
+      if (arenaId) games.push(arenaId);
+    }
+  }
+  // Subtract windows that will RESUME instead: each open window's PvP hook re-attaches its persisted
+  // IN-FLIGHT tunnel, so allocating a second one would strand its stake. A FINISHED (terminal) record
+  // does NOT suppress (settle+reload should allocate a new game) — `resumingGameKeysOf` trusts the
+  // record's stamped flag, keeping allocate and resume consistent order-independently.
   const resumingGameKeys = resumingGameKeysOf(
     listActiveTunnels().map((id) => readResumeRecord(id)),
   );
-  return arenaIdsExcludingResuming(ids, resumingGameKeys);
+  return subtractResumingPerGame(games, resumingGameKeys);
 }
 
 export function useArenaAutoEnter(): void {
@@ -106,34 +120,26 @@ export function useArenaAutoEnter(): void {
       ensureStakeBalance: sponsored.ensureStakeBalance,
     });
 
-    const games = arenaGameIdsForOpenWindows();
+    // Guard AFTER `configureSharedBatcher` (PR #178) so lazy add-a-game deposits still have a signer
+    // even when no arena window was open at connect. Uses the per-window enumeration (multiplicity):
+    // N windows of the same game each get their own bot.
+    const games = arenaGamesForOpenWindows();
     if (games.length === 0) return;
     if (entered.current === owner) return;
     entered.current = owner;
 
-    // One ephemeral key per game; its pubkey is baked into the tunnel at allocate and the SAME key
-    // co-signs moves later (via the store → enterArenaMatch), so stash the full keypair as it's minted.
-    const keypairs = new Map<string, KeyPair>();
-    const makeUserParty: MakeUserParty = async (game: string) => {
-      const eph = generateKeyPair();
-      keypairs.set(game, eph);
-      const party: PartyOnchain = { address: owner, publicKey: eph.publicKey };
-      return party;
-    };
-
     void (async () => {
       try {
-        const allocations = await enterArena({
+        // `enterArena` mints one ephemeral key PER request (games may repeat — one per open window),
+        // allocates a bot each, deposits all seat-A's in ONE batched PTB, and returns each match's
+        // {allocation, keypair}. Publish each under its game so every same-game window claims one.
+        const matches = await enterArena({
           games,
           userAddress: owner,
-          makeUserParty,
           coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
           apiBase: resolveBackendUrl(),
         });
-        for (const allocation of allocations) {
-          const keypair = keypairs.get(allocation.game);
-          if (keypair) setArenaEntry(allocation.game, { allocation, keypair });
-        }
+        for (const m of matches) setArenaEntry(m.allocation.game, m);
       } catch (e) {
         // A failed batch (no free bot, deposit rejected) leaves the store empty — games just show
         // their normal lobby. Re-arm so the user can retry on reconnect.

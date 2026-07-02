@@ -1,13 +1,22 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Maximize2, Minimize2, Minus, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { engineClient } from "@/engine/engineClient";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { GridDragHandleProps } from "@/components/ui/grid-layout";
+import type { Workspace } from "../games/types";
+import { CATEGORY_STYLE } from "./categoryStyle";
+
+/** Pre-render band (IntersectionObserver `rootMargin`) outside the viewport: a window within this
+ *  distance of being revealed keeps painting, so it's already live the instant it scrolls into view —
+ *  no catch-up frame. ~one game-window tall: big enough to hide the reveal, small enough that far-off
+ *  windows in a many-window "All view" still virtualize (the whole point of ADR-0030). */
+const RENDER_PRERENDER_MARGIN = "600px";
 
 /** Small header action; stops pointer-down so it doesn't start a window drag. */
 function HeaderButton({
@@ -54,6 +63,7 @@ export function GameWindow({
   title,
   icon,
   domId,
+  category,
   dragHandleProps,
   isActive = false,
   onMinimize,
@@ -67,6 +77,9 @@ export function GameWindow({
   icon?: ReactNode;
   /** Marks the root with `data-window` so the parent can read its rect (minimize flight). */
   domId?: string;
+  /** The game's workspace, for the category identity tint (top accent bar + faint header wash).
+   *  Omitted ⇒ neutral chrome. */
+  category?: Workspace;
   dragHandleProps?: GridDragHandleProps;
   isActive?: boolean;
   onMinimize?: () => void;
@@ -76,8 +89,35 @@ export function GameWindow({
   className?: string;
   children: ReactNode;
 }) {
+  const cat = category ? CATEGORY_STYLE[category] : null;
+  // Render virtualization (ADR-0030): report on-screen/off-screen to the engine so an off-screen
+  // window (hidden workspace `display:none`, minimized, or scrolled away — all collapse to a single
+  // IntersectionObserver signal) keeps its match running in the worker but stops painting. `domId`
+  // is the engine window id (WorkspaceFloor passes `item.id` to both `domId` and `windowId`).
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!domId || !el || typeof IntersectionObserver === "undefined") return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries)
+          engineClient.setWindowVisible(domId, e.isIntersecting);
+      },
+      // Pre-render a band just outside the viewport (`rootMargin`) so a window is already LIVE by the
+      // time it scrolls into view — no visible catch-up frame when the user reveals it. Only windows
+      // well off-screen stay virtualized; `threshold: 0` still resumes on the first exposed pixel.
+      { threshold: 0, rootMargin: RENDER_PRERENDER_MARGIN },
+    );
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+      engineClient.setWindowVisible(domId, true); // unmount: don't strand the slot as hidden
+    };
+  }, [domId]);
+
   return (
     <div
+      ref={rootRef}
       data-window={domId}
       className={cn(
         "group/window flex h-full min-h-0 w-full flex-col overflow-hidden rounded-none border bg-card shadow-lg transition-shadow",
@@ -87,17 +127,21 @@ export function GameWindow({
         className,
       )}
     >
+      {/* The title bar carries the category identity as one cohesive band: a soft accent wash, a
+          soft accent underline, and the title in the accent color — echoing the workspace-tab chip.
+          Body stays neutral for readability. */}
       <header
         {...dragHandleProps}
         className={cn(
-          "relative flex h-9 shrink-0 items-center justify-center border-b border-border bg-secondary/40 px-2 text-xs font-semibold text-foreground",
+          "relative flex h-9 shrink-0 items-center justify-center border-b border-border px-2 text-xs font-semibold text-foreground",
+          cat ? cat.tint : "bg-secondary/40",
           dragHandleProps &&
             "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
         )}
       >
         <span className="flex max-w-[60%] items-center gap-1.5">
           {icon}
-          <span className="truncate">{title}</span>
+          <span className={cn("truncate", cat?.text)}>{title}</span>
         </span>
 
         <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/window:opacity-100 focus-within:opacity-100 max-sm:opacity-100">

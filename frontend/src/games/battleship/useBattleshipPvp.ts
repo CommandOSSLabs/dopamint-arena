@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -69,6 +69,11 @@ import {
   clearResumeRecord,
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
+import type { MatchSnapshot } from "@/engine/engineApi";
 
 /** Backend arena/`profile_for` id (single token, same both ways). Single source of truth for the
  *  arena-store consumer (below) and `GameModule.arenaGameId` (index.ts). */
@@ -810,7 +815,7 @@ function getPvpSession(windowId: string): PvpSession {
   return session;
 }
 
-export function useBattleshipPvp(windowId: string): BattleshipPvp {
+function useLegacyBattleshipPvp(windowId: string): BattleshipPvp {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
@@ -926,3 +931,65 @@ async function settle(
     });
   }
 }
+
+/** Worker path (`?engine=worker`): the tunnel client + fleet secret run in a dedicated Web
+ *  Worker; this hook only renders snapshots and forwards commands. */
+function useWorkerBattleship(windowId: string): BattleshipPvp {
+  const snap = useGameMatch(windowId, "battleship") as MatchSnapshot<
+    BattleshipView,
+    BattleshipState["winner"]
+  >;
+  // One "My Activity" row per finished match, driven off the snapshot (the engine is
+  // telemetry-free; the legacy path pushes the same row from its session).
+  const { report } = useTelemetry();
+  const rowFired = useRef(false);
+  useEffect(() => {
+    if (snap.status === "idle" || snap.status === "matching")
+      rowFired.current = false;
+    if (snap.status === "settled" && !rowFired.current && snap.role) {
+      rowFired.current = true;
+      const iWon = snap.winner === (snap.role === "A" ? 1 : 2);
+      report.pushLocalTxn({
+        id: Date.now(),
+        game: "battleship",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: "You",
+        type: iWon ? "PvP Win" : "PvP Loss",
+        status: "Success",
+        amount: "",
+      });
+    }
+  }, [snap.status, snap.winner, snap.role, report]);
+  // Arena one-sig auto-enter (ADR-0028): consume this game's fleet allocation from the store and join
+  // it in the worker. Arena has no placement UI, so — like the legacy `enterArenaMatch` — the seat
+  // auto-places a random fleet (stable across renders so the one-shot entry uses a fixed board) and
+  // plays on autopilot (`auto` defaults on) vs the fleet bot. No "Find match" click.
+  const arenaFleet = useMemo(() => placeFleetRandom(Math.random), []);
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "battleship",
+    arenaGameId: BATTLESHIP_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+    setup: arenaFleet,
+  });
+  return {
+    status: snap.status,
+    role: snap.role,
+    view: snap.view,
+    opponentWallet: snap.opponentWallet,
+    error: snap.error,
+    auto: snap.auto,
+    findMatch: (placements: Placement[]) =>
+      engineClient.findMatch(windowId, "battleship", placements),
+    fire: (cell: number) => engineClient.submitInput(windowId, cell),
+    setAuto: (on: boolean) => engineClient.setAuto(windowId, on),
+    reset: () => engineClient.reset(windowId),
+    // Settle + close now: the worker settles automatically on terminal, so end = tear down.
+    endMatch: () => engineClient.reset(windowId),
+  };
+}
+
+/** `?engine=worker` runs battleship in a Web Worker; default keeps the main-thread path.
+ *  Bound once at module load so the hook identity is stable per session (rules-of-hooks). */
+export const useBattleshipPvp: (windowId: string) => BattleshipPvp =
+  engineEnabled() ? useWorkerBattleship : useLegacyBattleshipPvp;

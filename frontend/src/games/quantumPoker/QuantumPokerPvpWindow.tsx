@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
-import { HAND_CAP, usePvpQuantumPoker } from "./usePvpQuantumPoker";
+import { HAND_CAP, useRoutedPvpPoker } from "./usePvpQuantumPoker";
 import { POKER_BUYIN } from "./constants";
 import { QuantumPokerTable, PHASE_LABEL } from "./QuantumPokerTable";
 import { SketchDefs } from "../sketch";
@@ -10,8 +10,11 @@ import { PokerActionBar } from "./PokerActionBar";
 
 /** Heads-up Quantum Poker vs a real opponent over the relay: matchmaking + co-sign + on-chain stakes,
  *  in the shared hand-drawn skin. An in-game Auto toggle lets a persona bot make this seat's bets. */
-export function QuantumPokerPvpWindow(_props: GameWindowProps) {
-  const g = usePvpQuantumPoker();
+export function QuantumPokerPvpWindow({
+  windowId,
+  onExit,
+}: GameWindowProps & { onExit?: () => void }) {
+  const g = useRoutedPvpPoker(windowId);
 
   // Back bails out of a live hand (auto-fold → publish our settlement half) and drops back to THIS
   // window's lobby once the half is on the wire ("settled") or if settle errors — a failed/stuck close

@@ -43,7 +43,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import { enterArena, type MakeUserParty } from "../../onchain/arenaEnter";
+import { enterArena } from "../../onchain/arenaEnter";
 import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
 import {
   consumeArenaEntry,
@@ -67,6 +67,12 @@ import {
 } from "./pokerSelfPlay";
 import { POKER_BUYIN, QUANTUM_POKER_ANTE } from "./constants";
 import type { BotContext } from "@/agent/gameKit";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
+import type { MatchSnapshot } from "@/engine/engineApi";
+import type { PokerPvpView } from "./quantumPokerPvpView";
 
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
@@ -980,13 +986,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       try {
         setError(null);
         setStatus("funding");
-        // One ephemeral key for this game: its pubkey is baked into the tunnel as party A at allocate,
-        // and the SAME key co-signs every move via `enterArenaMatch` (a different key rejects sigs).
-        const eph = generateKeyPair();
-        const makeUserParty: MakeUserParty = async () => ({
-          address: wallet,
-          publicKey: eph.publicKey,
-        });
         // Deposit seat A into the fleet-pre-created tunnel (seat B already funded by the bot). Reuses
         // the SAME staked-deposit primitive `findMatch` uses, so sponsorship + top-up are identical.
         const open = async (req: TunnelOpenRequest): Promise<string> => {
@@ -1000,22 +999,23 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           });
           return tunnelId;
         };
-        const allocations = await enterArena({
+        // `enterArena` mints the ephemeral key (baked into the tunnel as party A + co-signs every
+        // move), allocates the bot, deposits seat A, and returns the {allocation, keypair}.
+        const matches = await enterArena({
           games: [ARENA_GAME_ID],
           userAddress: wallet,
           stakePerGame: POKER_BUYIN,
-          makeUserParty,
           open,
           coinType,
           apiBase: resolveBackendUrl(),
         });
-        const alloc = allocations.find((a) => a.game === ARENA_GAME_ID);
-        if (!alloc) {
+        const match = matches.find((m) => m.allocation.game === ARENA_GAME_ID);
+        if (!match) {
           setError("no opponent available — try again in a moment");
           setStatus("error");
           return;
         }
-        enterArenaMatch(alloc, eph);
+        enterArenaMatch(match.allocation, match.keypair);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");
@@ -1273,3 +1273,84 @@ async function settle(
     });
   }
 }
+
+// --- Worker adapter (routes PvP through the shared hub when engine=worker) --------
+
+/** Map the worker hub's PvP snapshot into the legacy `PvpQuantumPoker` shape the
+ *  `QuantumPokerPvpWindow` already renders. Selected at module load by `engineEnabled()`. */
+function useWorkerPvpPoker(windowId: string): PvpQuantumPoker {
+  const snap = useGameMatch(
+    windowId,
+    "quantum-poker",
+  ) as MatchSnapshot<PokerPvpView>;
+  const v = snap.view;
+  const s = v?.state ?? null;
+  const self: Party | null = snap.role;
+  const phase: PvpPokerStatus = snap.status;
+
+  // Arena one-sig auto-enter (ADR-0028), same as caro/blackjack: claim quantum-poker's fleet-bot
+  // allocation from the store and join it in the worker on wallet-connect (allocate → join → play, the
+  // dev-raid flow) — replacing the quickMatch path that had no bot and hung at "finding opponent".
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "quantum-poker",
+    arenaGameId: "quantum_poker",
+    isIdle: () => snap.status === "idle",
+  });
+
+  const myTurnToBet = v?.myTurnToBet ?? false;
+  const myHole = v?.myHole ?? null;
+  const legal: PvpPokerLegal | null = v?.legal
+    ? {
+        canCheck: v.legal.canCheck,
+        canCall: v.legal.canCall,
+        callAmount: v.legal.callAmount,
+        canBet: v.legal.canBet,
+        minBet: v.legal.minBet,
+        maxBet: v.legal.maxBet,
+      }
+    : null;
+
+  return {
+    status: phase,
+    role: snap.role,
+    selfParty: self,
+    state: s,
+    myHole,
+    myTurnToBet,
+    secondsLeft: null, // turn timer is legacy-only; auto-play handles timeouts in the worker
+    legal,
+    opponentWallet: snap.opponentWallet,
+    error: snap.error,
+    findMatch: () => engineClient.findMatch(windowId, "quantum-poker"),
+    fold: () => engineClient.submitInput(windowId, { type: "fold" }),
+    check: () => engineClient.submitInput(windowId, { type: "check" }),
+    call: () => engineClient.submitInput(windowId, { type: "call" }),
+    bet: (amount: bigint) =>
+      engineClient.submitInput(windowId, { type: "bet", amount }),
+    endRequested: v?.endRequested ?? false,
+    requestSettle: () => engineClient.submitInput(windowId, { type: "settle" }),
+    backOut: () => {
+      // In worker mode, settle request handles both graceful end and bail-out
+      engineClient.submitInput(windowId, { type: "settle" });
+    },
+    auto: snap.auto,
+    setAuto: (on: boolean) => engineClient.setAuto(windowId, on),
+    reset: () => engineClient.reset(windowId),
+    // Arena/fleet one-signature auto-entry is legacy-only; the worker joins via quickMatch, so the
+    // "Play" button (playArena) routes to findMatch and the auto-enter hook (enterArenaMatch) no-ops.
+    playArena: () => engineClient.findMatch(windowId, "quantum-poker"),
+    enterArenaMatch: () => {},
+  };
+}
+
+/** Legacy path wraps the bespoke hook (windowId unused). */
+function useLegacyPvpPokerAdapter(_windowId: string): PvpQuantumPoker {
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return usePvpQuantumPoker();
+}
+
+/** The worker path routes poker PvP through the shared hub; `?engine=legacy` keeps the
+ *  bespoke hook. Selected once at module load (rules-of-hooks: a stable hook per session). */
+export const useRoutedPvpPoker: (windowId: string) => PvpQuantumPoker =
+  engineEnabled() ? useWorkerPvpPoker : useLegacyPvpPokerAdapter;

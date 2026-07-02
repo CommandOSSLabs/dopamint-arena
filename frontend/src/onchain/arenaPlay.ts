@@ -8,7 +8,7 @@
 // game-local sponsored deposit (`depositStakeStaked`) instead of the shared batcher — the same staked
 // primitive `findMatch` uses, so sponsorship + top-up behave identically — and does NOT depend on the
 // batcher having been configured on connect.
-import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
+import { type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { enterArena, type ArenaAllocation } from "@/onchain/arenaEnter";
 import { depositStakeStaked, type StakeStrategy } from "@/onchain/stakeTunnel";
 import type { TunnelOpenRequest } from "@/onchain/tunnelOpenBatcher";
@@ -29,7 +29,6 @@ export async function allocateArenaGameForPlay(opts: {
   label: string;
   stakePerGame?: bigint;
 }): Promise<{ allocation: ArenaAllocation; keypair: KeyPair } | null> {
-  const eph = generateKeyPair();
   const open = async (req: TunnelOpenRequest): Promise<string> => {
     const tunnelId = req.tunnelId;
     if (!tunnelId) throw new Error("arena deposit missing tunnelId");
@@ -41,18 +40,18 @@ export async function allocateArenaGameForPlay(opts: {
     });
     return tunnelId;
   };
-  const allocations = await enterArena({
+  // `enterArena` mints the per-game ephemeral key itself and returns it baked into the allocation
+  // (new API: no `makeUserParty` callback), so the caller hands both straight to `enterArenaMatch`.
+  const matches = await enterArena({
     games: [opts.arenaGameId],
     userAddress: opts.wallet,
     stakePerGame: opts.stakePerGame,
-    makeUserParty: async () => ({
-      address: opts.wallet,
-      publicKey: eph.publicKey,
-    }),
     open,
     coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
     apiBase: resolveBackendUrl(),
   });
-  const allocation = allocations.find((a) => a.game === opts.arenaGameId);
-  return allocation ? { allocation, keypair: eph } : null;
+  const match = matches.find((m) => m.allocation.game === opts.arenaGameId);
+  return match
+    ? { allocation: match.allocation, keypair: match.keypair }
+    : null;
 }

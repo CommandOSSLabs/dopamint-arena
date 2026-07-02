@@ -16,7 +16,12 @@ import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { decideReconcile } from "sui-tunnel-ts/core/reconcile";
 import type { ReconcileAction, ResyncView } from "sui-tunnel-ts/core/reconcile";
-import type { MpClient, PvpChannel, PeerMessage } from "./mpClient";
+import type {
+  MpClient,
+  RelayClient,
+  PvpChannel,
+  PeerMessage,
+} from "./mpClient";
 import {
   clearResumeRecord,
   evictExpiredRecords,
@@ -60,13 +65,16 @@ export interface ResumeIdentity {
 }
 
 export interface AttachResumeArgs<State, Move> {
-  mp: MpClient;
+  mp: RelayClient;
   channel: PvpChannel;
   tunnel: DistributedTunnel<State, Move>;
   adapter: ResumeAdapter<State, Move>;
   identity: ResumeIdentity;
   graceMs?: number;
   onGraceExpired?: (latest: CoSignedUpdate | null) => void;
+  /** Where to persist records. Defaults to localStorage (`writeResumeRecord`); the worker
+   *  engine injects an IndexedDB sink so the record never leaves the worker thread. */
+  persist?: (rec: ResumeRecord) => void;
   /** Injectable for tests; defaults to the globals. */
   timers?: {
     setTimeout: (fn: () => void, ms: number) => unknown;
@@ -167,7 +175,7 @@ function balancesFromCheckpoint(record: ResumeRecord): {
  * the attached driver once the peer is reachable) closes any ≤1-move gap.
  */
 export function rebuildTunnel<State, Move>(
-  mp: MpClient,
+  mp: RelayClient,
   record: ResumeRecord,
   spec: RebuildSpec<State, Move>,
   ctx: ResumeContext,
@@ -220,6 +228,10 @@ export function resumeActiveTunnels<State, Move>(
   for (const tunnelId of listActiveTunnels()) {
     const record = readResumeRecord(tunnelId);
     if (!record || record.game !== gameId) continue;
+    // A disputed record is STATUS_DISPUTED on-chain — rebuilding it would drive a channel that can no
+    // longer advance. The hook's own resume() sweep finalizes it (force_close) once matured; skip it
+    // here either way so it never seats a stuck "playing" tunnel.
+    if (record.disputedAt != null) continue;
     try {
       // A record whose persisted state is already terminal is a finished match: settle either
       // completed (record is stale) or was interrupted. Rebuilding it seats a live "playing"
@@ -309,26 +321,29 @@ export function attachResume<State, Move>(
   args: AttachResumeArgs<State, Move>,
 ): () => void {
   const { mp, channel, tunnel, identity } = args;
+  const persist = args.persist ?? writeResumeRecord;
 
   // Persist on confirm, preserving any game-set onConfirmed.
   const prevConfirmed = tunnel.onConfirmed;
   tunnel.onConfirmed = (u) => {
     prevConfirmed?.(u);
     const rec = buildRecord(tunnel, args.adapter, identity);
-    if (rec) writeResumeRecord(rec);
+    if (rec) persist(rec);
   };
 
-  // Persist on propose too, preserving any game-set onProposed. `onConfirmed` fires only AFTER the
-  // pending clears, so it can NEVER capture a still-in-flight move; without this the proposer's
-  // pending is lost on reload. That matters against the co-located bot, whose resync-less resume
-  // relies on the restored pending: `resume()` re-sends it and the bot's replayed ACK then finds a
-  // matching pending instead of throwing "unexpected ACK". Debounced/coalesced with the confirm
-  // write; the pagehide flush persists it before a reload.
+  // Persist on PROPOSE too, preserving any game-set onProposed. `onConfirmed` fires only AFTER the
+  // pending clears, so it can never capture a still-in-flight move — without this the proposer's
+  // pending is lost on reload. Two things ride on that pending surviving: a commit-reveal seat's
+  // fresh secret lives only in the pending proposal until the ACK (captureSecret reads the pending/
+  // display state), so a reload in the propose→ACK window would strand the seat at draw_reveal with
+  // no matching pre-image; and the co-located bot's resync-less resume relies on the restored pending,
+  // which `resumeKick` re-sends so the bot's replayed ACK finds a match instead of throwing "unexpected
+  // ACK". Uses the injected `persist` sink (IndexedDB in the worker engine, localStorage otherwise).
   const prevProposed = tunnel.onProposed;
   tunnel.onProposed = () => {
     prevProposed?.();
     const rec = buildRecord(tunnel, args.adapter, identity);
-    if (rec) writeResumeRecord(rec);
+    if (rec) persist(rec);
   };
 
   // Route the peer's resync through the channel's existing onPeer; preserve any prior handler.

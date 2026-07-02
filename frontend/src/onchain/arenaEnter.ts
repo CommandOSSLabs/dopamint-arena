@@ -3,6 +3,7 @@
 // deposit seat A into every pre-opened tunnel in ONE batched PTB (the batcher's deposit mode). The
 // tunnel activates on that single signature; each game then plays genuine two-party over the relay.
 import { fromHex, toHex } from "@mysten/sui/utils";
+import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { requestTunnelOpen } from "./sharedTunnelOpenBatcher";
 import type { TunnelOpenRequest } from "./tunnelOpenBatcher";
 import type { PartyOnchain } from "./tunnelTx";
@@ -24,6 +25,10 @@ export interface ArenaAllocation {
   botEphPubkey: string;
   /** Tunnel party B's `address` (funds/receives seat B); distinct from the ephemeral pubkey. */
   botAddress: string;
+  /** Echo of the request's `userEphPubkey` (party A's `pk`, baked into THIS tunnel). Present on a
+   *  backend that echoes it (post-ADR-0025 refinement); lets the FE pair each allocation to the exact
+   *  key it minted, independent of array order. Optional so an older backend still pairs by order. */
+  userEphPubkey?: string;
   /** Per-seat stake (smallest MTPS unit) from the game's backend `GameProfile`. The fleet funded
    *  seat B with exactly this; the user's batched deposit funds seat A with the SAME amount, and the
    *  off-chain tunnel inits both balances to it. Single source of truth — the FE never hardcodes it. */
@@ -37,10 +42,13 @@ export interface ArenaOpened {
   tunnelId: string;
 }
 
-/** Mint the user's party A for one game's tunnel: `address` is the connected wallet (funds seat A,
- *  receives winnings); `publicKey` is a fresh per-game ephemeral that co-signs moves. Called BEFORE
- *  allocate (ADR-0025) — the pubkey is sent so the fleet can bake it into the tunnel at create. */
-export type MakeUserParty = (game: string) => Promise<PartyOnchain>;
+/** One entered arena match: the allocation (bot keys + live tunnel) and the ephemeral key whose pubkey
+ *  is baked into THAT tunnel and co-signs its moves. Returned per request so N same-game windows each
+ *  get a distinct {bot, tunnel, key} triple. */
+export interface ArenaEntered {
+  allocation: ArenaAllocation;
+  keypair: KeyPair;
+}
 
 interface ArenaApi {
   /** Backend base URL; "" (same-origin) by default. Mirrors `resolveBackendUrl` in controlPlane. */
@@ -87,69 +95,89 @@ export async function reportArenaOpened(
 }
 
 /**
- * One-signature arena entry (ADR-0025). Generates a per-game ephemeral key, reserves a bot per game
- * (the fleet pre-creates each tunnel + funds seat B), then deposits seat A into every pre-opened
- * tunnel in ONE batched PTB (the batcher's deposit mode coalesces them — one wallet popup), and
- * reports the user joined. `open` and the API are injectable for tests; production uses the shared
- * batcher + live `fetch`.
+ * One-signature arena entry (ADR-0025). `games` may REPEAT — N windows of the same game each get their
+ * own bot. Mints one ephemeral key PER REQUEST, reserves a bot per request (the fleet pre-creates each
+ * tunnel + funds seat B), then deposits seat A into every pre-opened tunnel in ONE batched PTB (the
+ * batcher's deposit mode coalesces them — one wallet popup), and reports the user joined. `open` and
+ * the API are injectable for tests; production uses the shared batcher + live `fetch`.
  *
- * Returns the full [`ArenaAllocation`]s (with the bot's eph pubkey + address + the live tunnelId),
- * not just the opened match ids — the caller needs the bot keys to verify the bot's move signatures
- * when it wires the relay + engine via `enterArenaMatch`.
+ * Returns one {@link ArenaEntered} per SUCCESSFUL request (allocation + its baked-in keypair), so a
+ * caller can hand each to `enterArenaMatch`. Games the backend couldn't serve are simply absent.
  */
 export async function enterArena(
   opts: {
     games: string[];
     userAddress: string;
     /** Fallback per-seat stake if an allocation omits `stakeEach` (back-compat). Each game's
-     *  deposit prefers `allocation.stakeEach` — the backend's single source of truth — so games
-     *  with different stakes batch correctly into ONE PTB. */
+     *  deposit prefers `allocation.stakeEach` — the backend's single source of truth. */
     stakePerGame?: bigint;
-    makeUserParty: MakeUserParty;
     open?: (req: TunnelOpenRequest) => Promise<string>;
     coinType?: string;
     usesAddressBalance?: boolean;
   } & ArenaApi,
-): Promise<ArenaAllocation[]> {
-  // A fresh ephemeral key per game, BEFORE allocate — its pubkey is baked into the tunnel at create.
-  const parties = new Map<string, PartyOnchain>();
-  await Promise.all(
-    opts.games.map(async (game) => {
-      parties.set(game, await opts.makeUserParty(game));
-    }),
-  );
+): Promise<ArenaEntered[]> {
+  // A fresh ephemeral key PER REQUEST (games may repeat), aligned to the input order — its pubkey is
+  // baked into that request's tunnel at allocate and the SAME key co-signs that match's moves.
+  const keypairs = opts.games.map(() => generateKeyPair());
   const allocations = await allocateArenaBots(
-    opts.games.map((game) => ({
+    opts.games.map((game, i) => ({
       id: game,
-      userEphPubkey: toHex(parties.get(game)!.publicKey),
+      userEphPubkey: toHex(keypairs[i].publicKey),
     })),
     opts.userAddress,
     opts,
   );
+  // Pair each returned allocation back to the ephemeral key baked into ITS tunnel. Prefer an EXACT
+  // match on the echoed `userEphPubkey` (party A's `pk` — uniquely identifies the request), which is
+  // order-independent: correct even if the backend serves games out of order or omits one mid-batch.
+  // Fall back to ORDER WITHIN GAME for a backend that doesn't echo the pubkey yet: the k-th allocation
+  // of game G is the k-th request of G (correct when all serve, or bot exhaustion drops the tail; a
+  // rare mid-run omission mispairs — that window can't co-sign and errors, but no stake is lost).
+  const keyByPubkey = new Map<string, KeyPair>();
+  keypairs.forEach((kp) =>
+    keyByPubkey.set(toHex(kp.publicKey).toLowerCase(), kp),
+  );
+  const pairByPubkey = allocations.every(
+    (a) => typeof a.userEphPubkey === "string",
+  );
+  const reqIdxsByGame = new Map<string, number[]>();
+  opts.games.forEach((game, i) => {
+    const arr = reqIdxsByGame.get(game);
+    if (arr) arr.push(i);
+    else reqIdxsByGame.set(game, [i]);
+  });
+  const takenByGame = new Map<string, number>();
+  // NB: called synchronously in allocation order (Promise.all's callbacks run to their first await in
+  // order), so the order-within-game counter advances deterministically before any deposit awaits.
+  const resolveKey = (alloc: ArenaAllocation): KeyPair | null => {
+    if (pairByPubkey)
+      return keyByPubkey.get(alloc.userEphPubkey!.toLowerCase()) ?? null;
+    const k = takenByGame.get(alloc.game) ?? 0;
+    takenByGame.set(alloc.game, k + 1);
+    const reqIdx = reqIdxsByGame.get(alloc.game)?.[k];
+    return reqIdx == null ? null : keypairs[reqIdx];
+  };
   const open = opts.open ?? requestTunnelOpen;
-  // Deposit seat A into every pre-opened tunnel. The batcher coalesces these into ONE PTB (one
-  // wallet popup). Each allocation keeps its server-assigned tunnelId (authoritative) — see the
-  // deposit call below for why the batcher's returned id must not be adopted here.
-  const live = await Promise.all(
-    allocations.map(async (alloc) => {
-      const partyA = parties.get(alloc.game)!;
+  const entered = await Promise.all(
+    allocations.map(async (alloc): Promise<ArenaEntered | null> => {
+      const keypair = resolveKey(alloc);
+      if (keypair == null) return null; // no matching request key (out-of-band allocation) — skip
+      const partyA: PartyOnchain = {
+        address: opts.userAddress,
+        publicKey: keypair.publicKey,
+      };
       const partyB: PartyOnchain = {
         address: alloc.botAddress,
         publicKey: fromHex(alloc.botEphPubkey),
       };
-      // Per-game stake from the allocation (backend GameProfile) so games with different stakes
-      // batch into one PTB; fall back to the caller's flat stake for back-compat.
       const aAmount =
         alloc.stakeEach != null ? BigInt(alloc.stakeEach) : opts.stakePerGame;
       if (aAmount == null)
         throw new Error(
           `arena: no stake for ${alloc.game} (allocation.stakeEach + stakePerGame both unset)`,
         );
-      // Deposit seat A into the fleet-pre-created tunnel. `alloc.tunnelId` is authoritative — the
-      // deposit goes INTO it and cannot change its id — so keep it and never adopt the batcher's
-      // returned id. The address-keyed batcher map collides when a batch shares one party-A address
-      // (all arena games use the same wallet), which would cross games onto a single tunnel and make
-      // the co-signed `tunnel_id` disagree with the bot's reservation → every move rejected.
+      // `alloc.tunnelId` is authoritative — the deposit goes INTO it and can't change its id, so keep
+      // it (the batcher resolves deposits by tunnelId, never by the shared party-A address).
       await open({
         mode: "deposit",
         tunnelId: alloc.tunnelId,
@@ -160,12 +188,26 @@ export async function enterArena(
         coinType: opts.coinType,
         usesAddressBalance: opts.usesAddressBalance ?? true,
       });
-      return alloc;
+      return { allocation: alloc, keypair };
     }),
   );
-  await reportArenaOpened(
-    live.map((o) => ({ matchId: o.matchId, tunnelId: o.tunnelId })),
-    opts,
-  );
+  const live = entered.filter((e): e is ArenaEntered => e != null);
+  // Best-effort cue: the tunnels are already funded (deposit landed) and the fleet bot enters its move
+  // loop on tunnel-open, not on this notification — so a failed/`503` "opened" report must NOT abort
+  // entry and strand a funded tunnel. Log and continue so each game still auto-enters + plays.
+  try {
+    await reportArenaOpened(
+      live.map((o) => ({
+        matchId: o.allocation.matchId,
+        tunnelId: o.allocation.tunnelId,
+      })),
+      opts,
+    );
+  } catch (e) {
+    console.warn(
+      "[arena] reportArenaOpened failed (tunnels funded; entering anyway)",
+      e,
+    );
+  }
   return live;
 }

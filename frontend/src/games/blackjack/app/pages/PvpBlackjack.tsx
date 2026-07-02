@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
-import { usePvpBlackjack } from "@/games/blackjack/app/hooks/usePvpBlackjack";
+import {
+  useRoutedPvpBlackjack,
+  type PvpView,
+} from "@/games/blackjack/app/hooks/usePvpBlackjack";
 import { handToCardIndices } from "@/games/blackjack/app/lib/bjCards";
 import { isMtpsConfigured } from "@/onchain/mtps";
 import {
@@ -18,7 +21,7 @@ const MIN_BUYIN = 100;
 const chipsToSui = (chips: bigint) =>
   (Number(chips) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 });
 
-function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
+function statusText(g: PvpView): string {
   if (g.phase === "opening") return "Opening tunnel on-chain…";
   if (g.phase === "funding") return "Funding your seat…";
   if (g.phase === "settling") return "Ending…";
@@ -38,8 +41,8 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
   return "";
 }
 
-export default function PvpBlackjack() {
-  const g = usePvpBlackjack();
+export default function PvpBlackjack({ windowId }: { windowId: string }) {
+  const g = useRoutedPvpBlackjack(windowId);
   const { isPortrait } = useGameScale();
   const account = useCurrentAccount();
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo } from "react";
 import type { ReactNode } from "react";
 
 import { get } from "../games/registry";
@@ -25,6 +25,13 @@ function GameTelemetryScope({
 }) {
   const base = useTelemetry();
   const { report: baseReport, recordGameUpdate } = base;
+  const { registerGameWindow, unregisterGameWindow } = base;
+  // Count this window into the open-games set for the aggregate "your TPS" (ref-counted, so a
+  // second window of the same game doesn't double it, and closing/switching floors decrements).
+  useEffect(() => {
+    registerGameWindow(gameId);
+    return () => unregisterGameWindow(gameId);
+  }, [gameId, registerGameWindow, unregisterGameWindow]);
   const report = useMemo<TelemetryWriter>(
     () => ({
       ...baseReport,
