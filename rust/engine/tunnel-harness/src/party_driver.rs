@@ -496,9 +496,15 @@ where
                 ));
             }
 
+            // Skip proposing when the protocol pins this nonce's turn to the other seat — a free
+            // co-draw whose turn is invisible in the co-signed state, so the strategy can't self-gate
+            // (see `Protocol::proposer_for_nonce`). Without this the always-proposing bot cross-proposes
+            // with the peer and the seat aborts (`expected ack, got move`). `None` (every state-based
+            // game) leaves proposing to the strategy, unchanged.
+            let not_our_turn = seat.proposer_for_nonce().is_some_and(|p| p != our_seat);
             // Never open a new move while settling here; fall through to the
             // receiver arm to drain any in-flight move and then stop.
-            let planned_move = if winding_down {
+            let planned_move = if winding_down || not_our_turn {
                 None
             } else {
                 move_strategy.plan_move(seat.state(), our_seat, &ctx).await

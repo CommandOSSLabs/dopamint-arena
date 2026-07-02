@@ -381,6 +381,15 @@ impl Protocol for WorldCanvasStroke {
         true
     }
 
+    /// Free co-draw: turns are invisible in `encode_state` (an idle `{cells:[]}` move advances only
+    /// the nonce, leaving the digest/counters identical), so neither seat can self-gate from state.
+    /// Pin strict alternation by nonce parity — byte-identical to the FE engine's
+    /// `turn(nonce) = nonce % 2 === 0 ? A : B` (frontend/src/pvp/pvpMatchHook.ts): A proposes 0→1,
+    /// B 1→2, A 2→3, … So exactly one seat proposes per nonce and no cross-propose can abort co-sign.
+    fn proposer_for_nonce(&self, nonce: u64) -> Option<Seat> {
+        Some(if nonce % 2 == 0 { Seat::A } else { Seat::B })
+    }
+
     fn sample_move(
         &self,
         state: &StrokeCanvasState,

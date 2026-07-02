@@ -95,6 +95,12 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     pub fn can_gracefully_close(&self) -> bool {
         self.protocol.can_gracefully_close(&self.state)
     }
+    /// The seat allowed to propose the next move when the protocol pins turns by nonce (see
+    /// [`Protocol::proposer_for_nonce`]); `None` = the strategy decides. Read against the COMMITTED
+    /// nonce, so it tells the driver whose turn the next proposal is.
+    pub fn proposer_for_nonce(&self) -> Option<Seat> {
+        self.protocol.proposer_for_nonce(self.nonce)
+    }
     pub fn balances(&self) -> Balances {
         self.protocol.balances(&self.state)
     }
