@@ -690,6 +690,7 @@ impl GrpcSuiChainClient {
 #[async_trait]
 impl SuiChainClient for GrpcSuiChainClient {
     async fn get_object_ref(&self, object_id: Address) -> Result<ObjectReference, String> {
+        tracing::debug!(op = "get_object_ref", %object_id, endpoint = %self.endpoint, "sui rpc");
         // Default read mask is `object_id,version,digest` — exactly an ObjectReference.
         let response = self
             .client()
@@ -714,6 +715,7 @@ impl SuiChainClient for GrpcSuiChainClient {
     }
 
     async fn get_object(&self, object_id: Address) -> Result<Option<Object>, String> {
+        tracing::debug!(op = "get_object", %object_id, endpoint = %self.endpoint, "sui rpc");
         let request =
             GetObjectRequest::new(&object_id).with_read_mask(FieldMask::from_paths(OBJECT_READ_FIELDS));
         let response = match self
@@ -738,6 +740,7 @@ impl SuiChainClient for GrpcSuiChainClient {
         &self,
         object_ids: Vec<Address>,
     ) -> Result<Vec<(Address, Option<Object>)>, String> {
+        tracing::debug!(op = "batch_get_objects", count = object_ids.len(), endpoint = %self.endpoint, "sui rpc");
         let read_mask = FieldMask::from_paths(OBJECT_READ_FIELDS);
         let mut out = Vec::with_capacity(object_ids.len());
         for chunk in object_ids.chunks(BATCH_GET_OBJECTS_CHUNK) {
@@ -779,6 +782,7 @@ impl SuiChainClient for GrpcSuiChainClient {
     }
 
     async fn address_balance_gas_context(&self) -> Result<AddressBalanceGasContext, String> {
+        tracing::debug!(op = "get_epoch", endpoint = %self.endpoint, "sui rpc");
         let request = GetEpochRequest::latest()
             .with_read_mask(FieldMask::from_paths(["epoch", "reference_gas_price"]));
         let response = self
@@ -811,6 +815,7 @@ impl SuiChainClient for GrpcSuiChainClient {
         transaction: &Transaction,
         signatures: &[UserSignature],
     ) -> Result<ExecutedChainTx, String> {
+        tracing::debug!(op = "execute_transaction", endpoint = %self.endpoint, "sui rpc");
         let request = ExecuteTransactionRequest::new(ProtoTransaction::from(transaction.clone()))
             .with_signatures(
                 signatures
@@ -842,6 +847,7 @@ impl SuiChainClient for GrpcSuiChainClient {
     }
 
     async fn get_transaction(&self, digest: &str) -> Result<Option<ExecutedChainTx>, String> {
+        tracing::debug!(op = "get_transaction", %digest, endpoint = %self.endpoint, "sui rpc");
         let digest: Digest = digest.parse().map_err(|e| format!("{e}"))?;
         let request =
             GetTransactionRequest::new(&digest).with_read_mask(executed_tx_read_mask());

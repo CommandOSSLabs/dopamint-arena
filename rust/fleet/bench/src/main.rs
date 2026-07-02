@@ -45,13 +45,24 @@ fn main() {
     // Always install a subscriber writing to stderr so the report on stdout stays
     // clean. Without `--trace` we still surface `warn`+ so anchor-level failures
     // (RPC rate limits, transport stalls) that stall a swarm are diagnosable.
-    let env_filter = if opts.trace {
-        tracing_subscriber::EnvFilter::new(
-            "fleet_bench=debug,sui_tunnel_anchor=debug,tunnel_harness=info",
-        )
+    //
+    // `--trace` selects the anchor-level preset (else the base is `warn`), then any
+    // `RUST_LOG` directives layer on top: they add new targets (e.g. `sui_rpc=debug`
+    // for transport-level gRPC) and override the preset for matching targets. So the
+    // two compose instead of one replacing the other.
+    let mut env_filter = tracing_subscriber::EnvFilter::new(if opts.trace {
+        "fleet_bench=debug,sui_tunnel_anchor=debug,tunnel_harness=info"
     } else {
-        tracing_subscriber::EnvFilter::new("warn")
-    };
+        "warn"
+    });
+    if let Ok(rust_log) = std::env::var("RUST_LOG") {
+        for directive in rust_log.split(',').filter(|part| !part.is_empty()) {
+            match directive.parse() {
+                Ok(parsed) => env_filter = env_filter.add_directive(parsed),
+                Err(error) => eprintln!("ignoring invalid RUST_LOG directive `{directive}`: {error}"),
+            }
+        }
+    }
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
