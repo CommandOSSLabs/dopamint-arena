@@ -7,6 +7,7 @@ use clap::{CommandFactory, Parser};
 use sui_tunnel_anchor::{
     SuiFundingProfile, SuiOpenBatchingConfig, SuiOpenMode, SuiSettleMode, SuiStakeSource,
 };
+use std::time::Duration;
 use tunnel_blackjack::MIN_BET as BLACKJACK_BET_MIN_BET;
 use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
@@ -50,6 +51,29 @@ pub enum ScenarioMode {
 pub enum ConcurrencyMode {
     Auto,
     Fixed(u64),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CohortConfig {
+    /// Max tunnels admitted per open wave. `None` = spawn all up front.
+    pub open_cohort: Option<usize>,
+    /// Delay between open waves.
+    pub open_spacing: Duration,
+    /// Max tunnels admitted per settle wave. `None` = no gate.
+    pub settle_cohort: Option<usize>,
+    /// Delay between settle waves.
+    pub settle_spacing: Duration,
+}
+
+impl CohortConfig {
+    pub fn unbounded() -> Self {
+        Self {
+            open_cohort: None,
+            open_spacing: Duration::ZERO,
+            settle_cohort: None,
+            settle_spacing: Duration::ZERO,
+        }
+    }
 }
 
 impl ConcurrencyMode {
@@ -113,6 +137,8 @@ pub struct BenchOpts {
     pub bench_mode: BenchMode,
     /// Warm-up open barrier timeout in seconds.
     pub warmup_timeout_secs: u64,
+    /// Optional open/settle cohort pacing configuration.
+    pub cohorts: CohortConfig,
     /// Emit a machine-readable JSON report to stdout.
     pub json: bool,
     /// Show the per-move latency breakdown — per-frame transport send/recv (and
@@ -259,6 +285,18 @@ struct Raw {
     /// Warm-up open barrier timeout in seconds (warmup mode only).
     #[arg(long = "warmup-timeout", default_value_t = 120, value_name = "SECONDS")]
     warmup_timeout: u64,
+    /// Max tunnels admitted per open wave (warmup); absent = spawn all up front.
+    #[arg(long = "open-cohort", value_name = "N")]
+    open_cohort: Option<usize>,
+    /// Delay in ms between open waves.
+    #[arg(long = "open-spacing", default_value_t = 0, value_name = "MS")]
+    open_spacing: u64,
+    /// Max tunnels admitted per settle wave; absent = no settle gate.
+    #[arg(long = "settle-cohort", value_name = "N")]
+    settle_cohort: Option<usize>,
+    /// Delay in ms between settle waves.
+    #[arg(long = "settle-spacing", default_value_t = 0, value_name = "MS")]
+    settle_spacing: u64,
     /// Emit a machine-readable JSON report to stdout instead of the text report.
     #[arg(long = "json", default_value_t = false)]
     json: bool,
@@ -754,6 +792,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     if raw.warmup_timeout == 0 {
         return Err("--warmup-timeout must be greater than 0".to_string());
     }
+    if raw.open_cohort == Some(0) {
+        return Err("--open-cohort must be at least 1".to_string());
+    }
+    if raw.settle_cohort == Some(0) {
+        return Err("--settle-cohort must be at least 1".to_string());
+    }
+    let cohorts = CohortConfig {
+        open_cohort: raw.open_cohort,
+        open_spacing: Duration::from_millis(raw.open_spacing),
+        settle_cohort: raw.settle_cohort,
+        settle_spacing: Duration::from_millis(raw.settle_spacing),
+    };
 
     Ok(BenchOpts {
         workers,
@@ -763,6 +813,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         tunnel_concurrency,
         bench_mode,
         warmup_timeout_secs: raw.warmup_timeout,
+        cohorts,
         json: raw.json,
         per_move_latency: raw.per_move_latency,
         trace: raw.trace,
@@ -882,6 +933,48 @@ mod tests {
         assert_eq!(o.bench_mode, BenchMode::Churn);
         assert_eq!(o.warmup_timeout_secs, 120);
         assert!(!o.json);
+    }
+
+    #[test]
+    fn cohort_flags_default_to_unbounded() {
+        let o = parse_v(&[]).unwrap();
+
+        assert_eq!(o.cohorts.open_cohort, None);
+        assert_eq!(o.cohorts.settle_cohort, None);
+        assert_eq!(o.cohorts.open_spacing, std::time::Duration::ZERO);
+        assert_eq!(o.cohorts.settle_spacing, std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn cohort_flags_parse_values() {
+        let o = parse_v(&[
+            "--open-cohort",
+            "255",
+            "--open-spacing",
+            "50",
+            "--settle-cohort",
+            "681",
+            "--settle-spacing",
+            "25",
+        ])
+        .unwrap();
+
+        assert_eq!(o.cohorts.open_cohort, Some(255));
+        assert_eq!(o.cohorts.settle_cohort, Some(681));
+        assert_eq!(
+            o.cohorts.open_spacing,
+            std::time::Duration::from_millis(50)
+        );
+        assert_eq!(
+            o.cohorts.settle_spacing,
+            std::time::Duration::from_millis(25)
+        );
+    }
+
+    #[test]
+    fn zero_cohort_is_rejected() {
+        assert!(parse_v(&["--open-cohort", "0"]).is_err());
+        assert!(parse_v(&["--settle-cohort", "0"]).is_err());
     }
 
     #[test]

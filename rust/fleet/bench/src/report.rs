@@ -565,8 +565,8 @@ pub fn render_json(
 mod tests {
     use super::*;
     use crate::cli::{
-        AnchorMode, BenchMode, BenchOpts, ColorMode, ConcurrencyMode, SignerInitMode,
-        TranscriptRecorderMode,
+        AnchorMode, BenchMode, BenchOpts, CohortConfig, ColorMode, ConcurrencyMode,
+        SignerInitMode, TranscriptRecorderMode,
     };
     use crate::resources::ResourceSummary;
     use crate::swarm::SwarmOutcome;
@@ -580,6 +580,7 @@ mod tests {
             tunnel_concurrency: ConcurrencyMode::Fixed(64),
             bench_mode: BenchMode::Churn,
             warmup_timeout_secs: 120,
+            cohorts: CohortConfig::unbounded(),
             json: false,
             per_move_latency: false,
             trace: false,

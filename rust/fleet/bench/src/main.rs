@@ -172,7 +172,8 @@ fn resolve_heartbeat(opts: &cli::BenchOpts, protocol_id: &'static str) -> Option
 mod tests {
     use super::*;
     use fleet_bench::cli::{
-        BenchMode, BenchOpts, ColorMode, FrameCodecKind, ScenarioMode, SuiSponsoredAnchorOpts,
+        BenchMode, BenchOpts, CohortConfig, ColorMode, FrameCodecKind, ScenarioMode,
+        SuiSponsoredAnchorOpts,
     };
 
     fn opts(tunnel_concurrency: ConcurrencyMode) -> BenchOpts {
@@ -184,6 +185,7 @@ mod tests {
             tunnel_concurrency,
             bench_mode: BenchMode::Churn,
             warmup_timeout_secs: 120,
+            cohorts: CohortConfig::unbounded(),
             json: false,
             per_move_latency: false,
             trace: false,
