@@ -228,6 +228,10 @@ export function resumeActiveTunnels<State, Move>(
   for (const tunnelId of listActiveTunnels()) {
     const record = readResumeRecord(tunnelId);
     if (!record || record.game !== gameId) continue;
+    // A disputed record is STATUS_DISPUTED on-chain — rebuilding it would drive a channel that can no
+    // longer advance. The hook's own resume() sweep finalizes it (force_close) once matured; skip it
+    // here either way so it never seats a stuck "playing" tunnel.
+    if (record.disputedAt != null) continue;
     try {
       // A record whose persisted state is already terminal is a finished match: settle either
       // completed (record is stale) or was interrupted. Rebuilding it seats a live "playing"

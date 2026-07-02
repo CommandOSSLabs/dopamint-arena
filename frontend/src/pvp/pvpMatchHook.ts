@@ -45,6 +45,7 @@ import {
   closeCooperativeWithRoot,
   openAndFundSharedTunnel,
   raiseDisputeUnilateral,
+  forceCloseAfterTimeout,
   readCreatedAt,
 } from "@/onchain/tunnelTx";
 import {
@@ -70,9 +71,12 @@ import {
   installResumePersistence,
   evictExpiredRecords,
   readResumeRecord,
+  writeResumeRecord,
   listActiveTunnels,
   clearResumeRecord,
+  type ResumeRecord,
 } from "@/pvp/resume";
+import { disputesToFinalize } from "@/pvp/disputeFinalize";
 
 export type PvpStatus =
   | "idle"
@@ -481,15 +485,22 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
         opponentPubkeyHex: info.opponentPubkeyHex,
         selfEphemeralSecretHex: info.selfEphemeralSecretHex,
       },
-      // Settlement floor: after the 1h grace, settle from the held checkpoint.
+      // Settlement floor: after the 1h grace, stake the held checkpoint via raise_dispute, then stamp
+      // the record disputed so a later cold-resume finalizes it (force_close) once the on-chain timeout
+      // elapses — nothing else closes a STATUS_DISPUTED tunnel (see disputeFinalize).
       onGraceExpired: (latest) => {
-        if (latest)
-          void raiseDisputeUnilateral({
-            signExec: signExec as never,
-            tunnelId: dt.tunnelId,
-            update: latest,
-            role: info.role,
-          });
+        if (!latest) return;
+        void raiseDisputeUnilateral({
+          signExec: signExec as never,
+          tunnelId: dt.tunnelId,
+          update: latest,
+          role: info.role,
+        })
+          .then(() => {
+            const rec = readResumeRecord(dt.tunnelId);
+            if (rec) writeResumeRecord({ ...rec, disputedAt: Date.now() });
+          })
+          .catch(() => {});
       },
     });
 
@@ -509,6 +520,20 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       .map((id) => readResumeRecord(id))
       .some((r) => r?.game === this.spec.game);
     if (!resumable) return; // nothing to resume → don't open a socket
+    // Dispute floor step 2: finalize any dispute we raised whose on-chain timeout elapsed — a
+    // wallet-signed force_close, no relay socket needed. Disputed records are skipped by
+    // resumeActiveTunnels below, so a still-young one just waits for a later resume. Mirrors the
+    // worker session's cold-resume sweep.
+    const persisted = listActiveTunnels()
+      .map((id) => readResumeRecord(id))
+      .filter((r): r is ResumeRecord => r != null && r.game === this.spec.game);
+    for (const tunnelId of disputesToFinalize(persisted, Date.now())) {
+      void forceCloseAfterTimeout({
+        signExec: deps.signExec as never,
+        tunnelId,
+      }).catch(() => {});
+      clearResumeRecord(tunnelId);
+    }
     void (async () => {
       try {
         const ephemeral: KeyPair = generateKeyPair();

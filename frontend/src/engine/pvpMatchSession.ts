@@ -30,6 +30,7 @@ import {
   resumeWatchdogShouldArm,
   RESUME_WATCHDOG_MS,
 } from "@/pvp/resumeWatchdog";
+import { disputesToFinalize } from "@/pvp/disputeFinalize";
 import type { ResumeRecord } from "@/pvp/resume";
 import { resumeIdb } from "./persist/idb";
 import { elog, emark } from "./debug";
@@ -551,6 +552,19 @@ export class PvpMatchSession {
       this.busy = false;
       return;
     }
+    // Dispute floor, step 2: finalize any dispute WE raised whose on-chain timeout has elapsed
+    // (force_close to claim), then keep only rebuildable records — a disputed tunnel is STATUS_DISPUTED
+    // on-chain and can't resume as a live match. Best-effort: a force_close that reverts (still early,
+    // or already closed) is caught and retried on the next resume; the record is dropped either way.
+    for (const tunnelId of disputesToFinalize(records, Date.now())) {
+      void this.deps.bridge.forceClose({ tunnelId }).catch(() => {});
+      void resumeIdb.delete(tunnelId).catch(() => {});
+    }
+    const live = records.filter((r) => r.disputedAt == null);
+    if (live.length === 0) {
+      this.busy = false;
+      return;
+    }
     try {
       const mp = this.deps.mp; // shared, already connected by the hub
       const controller = spec.createMatch(this.io());
@@ -562,7 +576,7 @@ export class PvpMatchSession {
         return;
       }
       // Most-recently-updated record wins, not lexical tunnelId order (defect #2).
-      const rec = [...records].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      const rec = [...live].sort((a, b) => b.updatedAt - a.updatedAt)[0];
       this.matchId = rec.matchId;
       this.role = rec.role;
       this.opponentWallet = rec.opponentWallet;
@@ -669,17 +683,19 @@ export class PvpMatchSession {
         },
         // Settlement floor: after attachResume's on-chain grace (the peer dropped and never came back),
         // stake the held checkpoint via `raise_dispute` so the stake is recoverable without a fresh
-        // cooperative co-signature. Routed through the bridge — the worker holds no wallet signer.
-        // Parity with pvpMatchHook.onGraceExpired; the shorter resume watchdog handles the reload case.
+        // cooperative co-signature. Routed through the bridge — the worker holds no wallet signer. On
+        // success, stamp the record disputed so the next cold-resume finalizes it (force_close) once the
+        // on-chain timeout elapses. The shorter resume watchdog handles the reload case.
         onGraceExpired: (latest) => {
-          if (latest)
-            void this.deps.bridge
-              .raiseDispute({
-                tunnelId: info.tunnelId,
-                update: latest,
-                role: info.role,
-              })
-              .catch(() => {});
+          if (!latest) return;
+          void this.deps.bridge
+            .raiseDispute({
+              tunnelId: info.tunnelId,
+              update: latest,
+              role: info.role,
+            })
+            .then(() => this.markDisputed(info.game, info.tunnelId))
+            .catch(() => {});
         },
       });
     }
@@ -765,6 +781,20 @@ export class PvpMatchSession {
     if (this.resumeWatchdog !== null) {
       clearTimeout(this.resumeWatchdog);
       this.resumeWatchdog = null;
+    }
+  }
+
+  /** Stamp this match's persisted record as disputed (read-modify-write) so a later cold-resume
+   *  finalizes it via {@link disputesToFinalize} + force_close instead of rebuilding a now-disputed
+   *  tunnel. Best-effort: the raise already landed on-chain, so the settlement floor holds even if this
+   *  marker write fails (the record is at worst rebuilt once and errors out — no stake is lost). */
+  private async markDisputed(game: GameId, tunnelId: string): Promise<void> {
+    try {
+      const recs = await resumeIdb.getAllByGame(game);
+      const rec = recs.find((r) => r.tunnelId === tunnelId);
+      if (rec) await resumeIdb.put({ ...rec, disputedAt: Date.now() });
+    } catch {
+      /* best-effort — see the doc comment */
     }
   }
 }

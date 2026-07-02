@@ -172,6 +172,9 @@ export interface RaiseDisputeParams {
   update: CoSignedUpdate;
   role: Role;
 }
+export interface ForceCloseParams {
+  tunnelId: string;
+}
 
 /**
  * Implemented on MAIN (dapp-kit signers + Sui client live there) and called FROM the worker.
@@ -202,6 +205,9 @@ export interface MainBridge {
   /** Unilateral settlement floor: after a resumed match's peer stays gone past the on-chain grace,
    *  stake the held checkpoint via `raise_dispute` so the stake is recoverable without the peer. */
   raiseDispute(p: RaiseDisputeParams): Promise<void>;
+  /** Finalize a dispute WE raised, once its on-chain timeout has elapsed (`force_close_after_timeout`
+   *  — only the raiser may call it). Driven by the cold-resume dispute sweep, not the live path. */
+  forceClose(p: ForceCloseParams): Promise<void>;
 }
 
 // --- Per-game spec (imported in the worker, addressed by gameId) --------------------------

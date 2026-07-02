@@ -12,6 +12,7 @@ import {
 import {
   closeCooperativeWithRoot,
   raiseDisputeUnilateral,
+  forceCloseAfterTimeout,
   readCreatedAt,
 } from "@/onchain/tunnelTx";
 import {
@@ -30,6 +31,7 @@ import type {
   DepositStakeParams,
   CloseFallbackParams,
   RaiseDisputeParams,
+  ForceCloseParams,
   MainBridge,
 } from "../engineApi";
 
@@ -53,6 +55,7 @@ type ChainBridge = Pick<
   | "readCreatedAt"
   | "closeFallback"
   | "raiseDispute"
+  | "forceClose"
 >;
 
 export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
@@ -147,6 +150,16 @@ export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
         tunnelId: p.tunnelId,
         update: p.update,
         role: p.role,
+      });
+    },
+    async forceClose(p: ForceCloseParams) {
+      // Finalize a matured dispute we raised. Same gas rationale as raiseDispute/closeFallback: the
+      // sponsor pays in MTPS mode; the disputed balance split is fixed on-chain, so no settlement body.
+      await forceCloseAfterTimeout({
+        signExec: (isMtpsConfigured
+          ? deps.sponsoredSignExec
+          : deps.signExec) as never,
+        tunnelId: p.tunnelId,
       });
     },
   };
