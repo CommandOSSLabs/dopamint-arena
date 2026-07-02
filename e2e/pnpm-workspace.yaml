@@ -1,0 +1,9 @@
+# Standalone e2e package (not part of any repo workspace). esbuild/msgpackr-extract
+# build scripts are unnecessary here (the platform-specific prebuilt binaries are
+# installed as separate packages); setting them false silences the ignored-builds
+# gate so `pnpm run <script>` doesn't abort the pre-script deps check.
+allowBuilds:
+  esbuild: false
+  msgpackr-extract: false
+minimumReleaseAgeExclude:
+  - '@mysten-incubation/devstack@0.6.0'
