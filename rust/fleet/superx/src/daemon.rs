@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::merge::merge;
+use crate::pool::AccountPool;
 use crate::proto::SpawnMode;
 use crate::proto::{
     decode_line, encode_line, Request, Response, RunAggregateWire, RunEvent, RunSummary,
@@ -59,6 +60,12 @@ pub struct DaemonArgs {
     /// Optional `host:port` for the localhost heartbeat sink (Phase C).
     #[arg(long)]
     sink_addr: Option<String>,
+    /// Optional JSON file of Sui account/gas slots (an array of
+    /// `{address, key_ref, gas_coin_ids}`). When set, each `--anchor sui-sponsored`
+    /// run checks out one disjoint slot per swarm so concurrent swarms fund from
+    /// non-contending accounts; slots return to the pool when the run ends.
+    #[arg(long)]
+    accounts_file: Option<PathBuf>,
 }
 
 /// Shared daemon state handed to every connection and transport. `nonce` seeds
@@ -74,6 +81,10 @@ pub struct DaemonContext {
     /// Sink root (`http://<sink-addr>`) forwarded into each run's [`RunConfig`] so
     /// spawned swarms post run-scoped telemetry. `None` when no sink runs.
     pub heartbeat_base: Option<String>,
+    /// Disjoint per-swarm Sui account/gas pool, present when the daemon was started
+    /// with `--accounts-file`. Sui-sponsored runs check out one slot per swarm and
+    /// release them on completion; `None` (or a memory run) allocates nothing.
+    pub pool: Option<Arc<AccountPool>>,
 }
 
 impl DaemonContext {
@@ -88,6 +99,7 @@ impl DaemonContext {
             nonce: process_nonce(),
             sink: None,
             heartbeat_base: None,
+            pool: None,
         }
     }
 }
@@ -137,6 +149,25 @@ pub fn daemon_main(a: DaemonArgs) -> i32 {
         };
         eprintln!("fleet-superx daemon: listening on {}", a.socket.display());
         let mut ctx = DaemonContext::new();
+
+        // Load the account/gas pool up front so a missing/malformed file aborts
+        // startup rather than failing the first sui-sponsored run.
+        if let Some(accounts_file) = &a.accounts_file {
+            match AccountPool::load(accounts_file) {
+                Ok(pool) => {
+                    eprintln!(
+                        "fleet-superx daemon: loaded {} account slots from {}",
+                        pool.available(),
+                        accounts_file.display()
+                    );
+                    ctx.pool = Some(Arc::new(pool));
+                }
+                Err(err) => {
+                    eprintln!("fleet-superx daemon: {err}");
+                    return 1;
+                }
+            }
+        }
 
         // Optionally bind the localhost heartbeat sink before serving so a bind
         // failure aborts startup. The sink runs on a detached task (auxiliary
@@ -338,6 +369,17 @@ pub async fn handle_request(request: Request, ctx: &Arc<DaemonContext>) -> Respo
             // Point this run's swarms at the daemon's sink (if one runs) so their
             // heartbeats fold into a live aggregate keyed by this run id.
             cfg.heartbeat_sink = ctx.heartbeat_base.clone();
+            // Check out a disjoint account/gas slot per swarm for sui-sponsored
+            // runs so their sponsored opens never contend on shared coins. An
+            // exhausted pool rejects the run rather than overcommitting accounts.
+            if is_sui_anchor(&cfg.anchor) {
+                if let Some(pool) = &ctx.pool {
+                    match pool.allocate(cfg.swarms) {
+                        Ok(slots) => cfg.sui_slots = slots,
+                        Err(err) => return Response::Error(format!("account pool: {err}")),
+                    }
+                }
+            }
             ctx.registry.insert(RunRecord::new(cfg.clone()));
             let ctx = ctx.clone();
             tokio::spawn(async move { execute_run(ctx, cfg).await });
@@ -368,6 +410,13 @@ pub async fn handle_request(request: Request, ctx: &Arc<DaemonContext>) -> Respo
             Response::Error(format!("watch is a streaming command (run {run_id})"))
         }
     }
+}
+
+/// Whether an anchor selector names the sui-sponsored backend (the only anchor
+/// that draws on the account pool). Mirrors the `run-swarm` `--anchor` accepted
+/// spellings.
+fn is_sui_anchor(anchor: &str) -> bool {
+    matches!(anchor, "sui-sponsored" | "sui")
 }
 
 /// Project a registry record onto its `List` wire summary.
@@ -560,4 +609,12 @@ async fn execute_run(ctx: Arc<DaemonContext>, cfg: RunConfig) {
         RunState::Finished
     };
     ctx.registry.set_state(&cfg.run_id, terminal);
+
+    // Return this run's account/gas slots to the pool so later runs reuse them.
+    // Runs off the pool (memory anchor, or no `--accounts-file`) hold no slots.
+    if !cfg.sui_slots.is_empty() {
+        if let Some(pool) = &ctx.pool {
+            pool.release(cfg.sui_slots.clone());
+        }
+    }
 }

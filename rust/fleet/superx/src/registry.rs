@@ -224,6 +224,7 @@ mod tests {
             extra: vec![],
             heartbeat_sink: None,
             sui: crate::runconfig::SuiRunConfig::default(),
+            sui_slots: Vec::new(),
         }
     }
 

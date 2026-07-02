@@ -40,6 +40,7 @@ fn memory_cfg(mode: SpawnMode, swarms: u64, tunnels: u64, cohorts: CohortWire) -
         extra: Vec::new(),
         heartbeat_sink: None,
         sui: fleet_superx::runconfig::SuiRunConfig::default(),
+        sui_slots: Vec::new(),
     }
 }
 

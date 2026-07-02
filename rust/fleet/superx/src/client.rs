@@ -541,6 +541,7 @@ mod tests {
             nonce: 0x9999,
             sink: None,
             heartbeat_base: None,
+            pool: None,
         });
         let serve_ctx = ctx.clone();
         tokio::spawn(async move {

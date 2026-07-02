@@ -69,6 +69,7 @@ async fn daemon_runs_distribute_to_completion_over_unix() {
         nonce: 0x1234_5678,
         sink: None,
         heartbeat_base: None,
+        pool: None,
     });
     let serve_ctx = ctx.clone();
     tokio::spawn(async move {

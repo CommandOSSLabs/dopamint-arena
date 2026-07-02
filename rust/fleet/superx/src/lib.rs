@@ -4,6 +4,7 @@ pub mod client;
 pub mod daemon;
 pub mod ids;
 pub mod merge;
+pub mod pool;
 pub mod proto;
 pub mod registry;
 pub mod runconfig;

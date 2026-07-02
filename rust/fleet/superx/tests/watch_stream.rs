@@ -77,6 +77,7 @@ async fn watch_streams_live_aggregate_until_ended() {
         nonce: 0xF00D_BEEF,
         sink: Some(sink),
         heartbeat_base: Some(format!("http://{sink_addr}")),
+        pool: None,
     });
     let serve_ctx = ctx.clone();
     let serve_task = tokio::spawn(async move {

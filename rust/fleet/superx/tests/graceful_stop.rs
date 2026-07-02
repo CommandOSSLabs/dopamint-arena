@@ -95,6 +95,7 @@ async fn stop_drains_running_swarm_to_finished_with_no_half_open() {
         nonce: 0xABCD_1234,
         sink: None,
         heartbeat_base: None,
+        pool: None,
     });
     let serve_ctx = ctx.clone();
     tokio::spawn(async move {

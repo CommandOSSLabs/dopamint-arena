@@ -7,6 +7,7 @@
 //! `replicate`/`sequential` forward the per-swarm target unchanged. It is pure
 //! so the fan-out is unit-testable without spawning a process.
 
+use crate::pool::SuiAccountSlot;
 use crate::proto::{CohortWire, SpawnMode, StartRun};
 
 /// Sui-sponsored anchor settings forwarded verbatim to each swarm's hidden
@@ -63,6 +64,12 @@ pub struct RunConfig {
     /// Sui-sponsored anchor settings forwarded to each swarm. All-`None` for
     /// memory runs; the daemon populates it for `--anchor sui-sponsored`.
     pub sui: SuiRunConfig,
+    /// Per-swarm Sui account/gas slots the daemon checked out of the account pool,
+    /// indexed by swarm index. Empty for memory runs and for sui runs started
+    /// without an `--accounts-file`. When present, [`swarm_args`] overrides swarm
+    /// `i`'s funder key + stake coin with `sui_slots[i]` so concurrent swarms fund
+    /// from disjoint accounts.
+    pub sui_slots: Vec<SuiAccountSlot>,
 }
 
 impl RunConfig {
@@ -85,6 +92,7 @@ impl RunConfig {
             extra: start.extra,
             heartbeat_sink: None,
             sui: SuiRunConfig::default(),
+            sui_slots: Vec::new(),
         }
     }
 }
@@ -150,9 +158,24 @@ pub fn swarm_args(cfg: &RunConfig, swarm_index: u64) -> Vec<String> {
             cfg.run_id
         ));
     }
-    push_sui_args(&mut args, &cfg.sui);
+    push_sui_args(&mut args, &sui_for_swarm(cfg, swarm_index));
     args.extend(cfg.extra.iter().cloned());
     args
+}
+
+/// The `--sui-*` config for one swarm: the run-level [`SuiRunConfig`] with this
+/// swarm's pool slot (if any) overriding the funder key and stake coin. Disjoint
+/// slots per swarm are what keep concurrent sponsored opens from contending on the
+/// same gas coins. Runs without an account pool keep the shared run-level funder.
+fn sui_for_swarm(cfg: &RunConfig, swarm_index: u64) -> SuiRunConfig {
+    let mut sui = cfg.sui.clone();
+    if let Some(slot) = cfg.sui_slots.get(swarm_index as usize) {
+        sui.funder_priv_key = Some(slot.key_ref.clone());
+        if let Some(coin) = slot.gas_coin_ids.first() {
+            sui.funder_stake_coin_id = Some(coin.clone());
+        }
+    }
+    sui
 }
 
 /// Append the run's `--sui-*` flags for every field the daemon set. Only present
@@ -305,6 +328,46 @@ mod tests {
         assert_eq!(flag(&a, "--sui-funder-stake-coin-id"), Some("0xcoin"));
         assert_eq!(flag(&a, "--sui-open-batch"), Some("25"));
         assert_eq!(flag(&a, "--sui-settle-batch"), Some("40"));
+    }
+
+    #[test]
+    fn per_swarm_slots_override_funder_key_and_stake_coin_disjointly() {
+        use crate::pool::SuiAccountSlot;
+        let mut c = cfg(SpawnMode::Replicate, 2, 4);
+        c.extra.clear();
+        // Run-level funder that both swarms would otherwise share.
+        c.sui.funder_priv_key = Some("shared-funder".to_string());
+        c.sui_slots = vec![
+            SuiAccountSlot {
+                address: "0xa0".to_string(),
+                key_ref: "swarm0-key".to_string(),
+                gas_coin_ids: vec!["0xc0".to_string()],
+            },
+            SuiAccountSlot {
+                address: "0xa1".to_string(),
+                key_ref: "swarm1-key".to_string(),
+                gas_coin_ids: vec!["0xc1".to_string()],
+            },
+        ];
+
+        let a0 = swarm_args(&c, 0);
+        let a1 = swarm_args(&c, 1);
+        // Each swarm funds from its own slot, never the shared run-level key.
+        assert_eq!(flag(&a0, "--sui-funder-priv-key"), Some("swarm0-key"));
+        assert_eq!(flag(&a0, "--sui-funder-stake-coin-id"), Some("0xc0"));
+        assert_eq!(flag(&a1, "--sui-funder-priv-key"), Some("swarm1-key"));
+        assert_eq!(flag(&a1, "--sui-funder-stake-coin-id"), Some("0xc1"));
+    }
+
+    #[test]
+    fn swarms_without_a_slot_keep_the_run_level_funder() {
+        // A sui run started without an account pool: no per-swarm slots, so the
+        // shared run-level funder key is forwarded unchanged.
+        let mut c = cfg(SpawnMode::Replicate, 1, 1);
+        c.extra.clear();
+        c.sui.funder_priv_key = Some("shared-funder".to_string());
+        let a = swarm_args(&c, 0);
+        assert_eq!(flag(&a, "--sui-funder-priv-key"), Some("shared-funder"));
     }
 
     #[test]
