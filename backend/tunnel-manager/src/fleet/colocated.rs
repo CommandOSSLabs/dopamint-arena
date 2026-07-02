@@ -11,18 +11,18 @@
 //! handler (`SuiArenaOpener`), independent of the bot task; the bot resolves the pre-created tunnel
 //! and co-signs with the per-match ephemeral key it re-derives from the reservation recipe.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail, Context};
 use tunnel_harness::{InMemoryTranscriptRecorder, Signer};
 
 use fleet_core::match_channel::MatchChannel;
 use fleet_core::play_match::{
     play_battleship, play_blackjack_v2, play_bomb_it, play_caro, play_chicken_cross,
-    play_quantum_poker, play_tic_tac_toe, play_world_canvas,
+    play_quantum_poker, play_tic_tac_toe, play_world_canvas, profile_for,
 };
 use fleet_core::signer_durable::DurableSigner;
 use fleet_core::Role;
 
-use crate::fleet::arena_anchor::RelayBridgedAnchor;
+use crate::fleet::arena_anchor::{cosign_forfeit, ForfeitFrame, ForfeitWatch, RelayBridgedAnchor};
 use crate::fleet::bus_transport::{BusRelayConnection, BusRelayTransport};
 use crate::mp::protocol::ServerMsg;
 use crate::mp::MatchRecord;
@@ -125,7 +125,6 @@ pub async fn join_and_spawn(
         );
         return Err("unknown_arena_match");
     };
-    let match_key = DurableSigner::from_secret(&secret);
 
     // The bot's virtual relay connection, registered on THIS instance next to the user's socket.
     let conn = BusRelayConnection::register(state.clone());
@@ -177,7 +176,7 @@ pub async fn join_and_spawn(
             &rec.tunnel_id,
             &rec.seat_a,
             rec.created_at_ms,
-            match_key,
+            secret,
             conn,
         )
         .await
@@ -198,10 +197,13 @@ async fn drive_arena_bot(
     tunnel_id: &str,
     opponent_wallet: &str,
     created_at_ms: u64,
-    match_key: DurableSigner,
+    match_secret: [u8; 32],
     conn: std::sync::Arc<BusRelayConnection>,
 ) -> anyhow::Result<()> {
-    let transport = BusRelayTransport::new(conn.clone(), match_id.to_owned());
+    // Tee the human's mid-match `forfeit` frame off the relay before the game demux drops it, and
+    // capture party A's `hello` pubkey (needed to verify the forfeit half — the reservation lacks it).
+    let (watch, mut forfeit) = ForfeitWatch::new();
+    let transport = BusRelayTransport::with_forfeit_watch(conn.clone(), match_id.to_owned(), watch);
     let channel = MatchChannel::new(transport);
     // `created_at` is captured at allocate and carried in the reservation — the bot does ZERO chain IO
     // before its first move. A slow Sui RPC HERE previously left the bot spawned but silent (no hello,
@@ -215,17 +217,80 @@ async fn drive_arena_bot(
     );
     let anchor = RelayBridgedAnchor::new(
         tunnel_id.to_owned(),
-        conn,
+        conn.clone(),
         match_id.to_owned(),
         created_at_ms,
     );
-    let moves = play_game(game, channel, anchor, match_key, opponent_wallet).await?;
+    let play_signer = DurableSigner::from_secret(&match_secret);
+
+    // Race play against a forfeit: whichever resolves first ends the match. A forfeit cancels play
+    // (dropping the `MatchChannel` aborts its demux) after the bot co-signs the pot to itself.
+    tokio::select! {
+        forfeit_frame = forfeit.forfeit_rx.recv() => {
+            let Some(raw) = forfeit_frame else {
+                // Watch closed without a forfeit (match torn down); nothing to settle.
+                return Ok(());
+            };
+            handle_forfeit(
+                game,
+                match_id,
+                tunnel_id,
+                &match_secret,
+                &forfeit.party_a_pk,
+                &conn,
+                &raw,
+            )
+            .await?;
+        }
+        played = play_game(game, channel, anchor, play_signer, opponent_wallet) => {
+            let moves = played?;
+            tracing::info!(
+                match_id = %match_id,
+                game = %game,
+                tunnel = %tunnel_id,
+                moves,
+                "co-located arena match settled",
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The human conceded mid-match: verify their `forfeit` half hands the bot the whole pot, co-sign
+/// the SAME canonical bytes with the bot's per-match key, and emit the bot's `settleHalf` back so the
+/// FE combines both halves and submits `POST /settle`. The bot never submits the close itself. Any
+/// refusal — unsafe/unauthorized split, or no captured party-A pubkey — ends the match unsettled
+/// (fail-closed): the bot would rather forgo the pot than sign a bad close.
+async fn handle_forfeit(
+    game: &str,
+    match_id: &str,
+    tunnel_id: &str,
+    match_secret: &[u8; 32],
+    party_a_pk: &std::sync::Mutex<Option<[u8; 32]>>,
+    conn: &BusRelayConnection,
+    raw_forfeit: &str,
+) -> anyhow::Result<()> {
+    let profile =
+        profile_for(game).ok_or_else(|| anyhow!("forfeit: no profile for game '{game}'"))?;
+    // A forfeit hands the bot the entire pot, so the bot's entitled share IS the total; combined with
+    // conservation this forces the human's split to be exactly `(0, total)`.
+    let total = profile
+        .stake_each
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("forfeit: pot total overflow for '{game}'"))?;
+    let frame: ForfeitFrame = serde_json::from_str(raw_forfeit).context("parse forfeit frame")?;
+    let party_a_pk = party_a_pk
+        .lock()
+        .expect("forfeit watch pk mutex")
+        .ok_or_else(|| anyhow!("forfeit before hello: no party-A pubkey to verify against"))?;
+    let bot_signer = DurableSigner::from_secret(match_secret);
+    let half = cosign_forfeit(&frame, tunnel_id, total, total, &party_a_pk, &bot_signer)
+        .map_err(|e| anyhow!("refused to co-sign forfeit: {e:?}"))?;
+    conn.send_to_peer(match_id, half.to_wire()).await;
     tracing::info!(
         match_id = %match_id,
         game = %game,
-        tunnel = %tunnel_id,
-        moves,
-        "co-located arena match settled",
+        "co-signed human forfeit; bot takes the pot",
     );
     Ok(())
 }

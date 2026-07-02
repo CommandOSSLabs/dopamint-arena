@@ -27,6 +27,7 @@ use uuid::Uuid;
 use fleet_core::relay_ws::RelayTransport;
 use fleet_core::{MatchInfo, Role};
 
+use crate::fleet::arena_anchor::ForfeitWatch;
 use crate::mp::protocol::ServerMsg;
 use crate::mp::{ConnId, MatchRecord};
 use crate::state::SharedState;
@@ -174,17 +175,44 @@ pub struct BusRelayTransport {
     last_frame: Mutex<Option<Vec<u8>>>,
     /// Grace to wait for a dropped human before ending the match; injectable so tests run fast.
     resume_grace: Duration,
+    /// Co-located arena only: tees a mid-match `forfeit` frame to the bot driver (and captures party
+    /// A's `hello` pubkey). `None` for plain bot-vs-bot bus play, which never forfeits.
+    forfeit_watch: Option<ForfeitWatch>,
 }
 
 impl BusRelayTransport {
-    pub fn new(conn: Arc<BusRelayConnection>, match_id: String) -> BusRelayTransport {
-        Self::with_resume_grace(conn, match_id, PEER_RESUME_GRACE)
+    /// A co-located arena bot always installs a [`ForfeitWatch`]: it intercepts the human's mid-match
+    /// `forfeit` frame so the bot can co-sign the cooperative close (ADR-0024 / Task 2), and captures
+    /// party A's `hello` pubkey for verifying that half.
+    pub fn with_forfeit_watch(
+        conn: Arc<BusRelayConnection>,
+        match_id: String,
+        watch: ForfeitWatch,
+    ) -> BusRelayTransport {
+        Self::build(conn, match_id, PEER_RESUME_GRACE, Some(watch))
     }
 
+    /// A watchless transport, for the bot-vs-bot bus tests (which never forfeit). Production goes
+    /// through [`BusRelayTransport::with_forfeit_watch`].
+    #[cfg(test)]
+    pub fn new(conn: Arc<BusRelayConnection>, match_id: String) -> BusRelayTransport {
+        Self::build(conn, match_id, PEER_RESUME_GRACE, None)
+    }
+
+    #[cfg(test)]
     fn with_resume_grace(
         conn: Arc<BusRelayConnection>,
         match_id: String,
         resume_grace: Duration,
+    ) -> BusRelayTransport {
+        Self::build(conn, match_id, resume_grace, None)
+    }
+
+    fn build(
+        conn: Arc<BusRelayConnection>,
+        match_id: String,
+        resume_grace: Duration,
+        forfeit_watch: Option<ForfeitWatch>,
     ) -> BusRelayTransport {
         BusRelayTransport {
             conn,
@@ -193,6 +221,7 @@ impl BusRelayTransport {
             peer_online: AtomicBool::new(true),
             last_frame: Mutex::new(None),
             resume_grace,
+            forfeit_watch,
         }
     }
 
@@ -256,6 +285,14 @@ impl RelayTransport for BusRelayTransport {
             };
             match msg {
                 Some(ServerMsg::Relay { match_id, payload }) if match_id == self.match_id => {
+                    // A `forfeit` frame is teed to the bot's co-sign watcher and swallowed here — the
+                    // game demux would drop the unknown tag anyway; a `hello` is sniffed for party A's
+                    // pubkey and passed through. Everything else flows to the demux unchanged.
+                    if let Some(watch) = &self.forfeit_watch {
+                        if watch.observe(&payload) {
+                            continue;
+                        }
+                    }
                     tracing::debug!(match_id = %self.match_id, head = %&payload[..payload.len().min(120)], "bus rx (peer→bot)");
                     return Ok(Some(payload.into_bytes()));
                 }

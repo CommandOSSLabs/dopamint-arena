@@ -45,6 +45,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # `FrameTransport`/`RelayTransport` error type the seam returns.
 fleet-core = { path = "../../rust/fleet/core" }
 tunnel-harness = { path = "../../rust/engine/tunnel-harness" }
+# Canonical settlement serializer + ed25519 verify for the bot's forfeit co-sign (arena_anchor):
+# the bot rebuilds the SAME `serialize_settlement_with_root` bytes the FE/Move sign, byte-for-byte.
+tunnel-core = { path = "../../rust/engine/tunnel-core" }
 # Funded seat-B identities for on-demand arena bots (PR #124): the 1M-member pool, opened once at
 # startup, gives each bot a real on-chain address from `get_member_key`. Gated by WALLET_POOL_ID.
 wallet-pool = { path = "../../wallet-pool" }
@@ -54,8 +57,6 @@ wallet-pool-s3 = { path = "../../wallet-pool/s3" }
 [dev-dependencies]
 tokio-tungstenite = "0.24"
 wiremock = "0.6"
-# Constructing a ProtocolId for anchor open() requests in fleet tests.
-tunnel-core = { path = "../../rust/engine/tunnel-core" }
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["redis"] }
 ctor = "0.2"
