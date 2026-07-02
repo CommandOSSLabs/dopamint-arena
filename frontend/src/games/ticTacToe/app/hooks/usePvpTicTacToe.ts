@@ -222,9 +222,9 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
-  // tick it on and new games keep a bot playing for you. See autoPreference.
-  const [auto, setAutoState] = useState(() => defaultAuto(variant));
+  // Arena games autopilot by default (fallback true) so a resume/reload keeps playing; your
+  // explicit toggle still sticks for the session. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto(variant, true));
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
     create?: string;
@@ -238,7 +238,7 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(defaultAuto(variant));
+  const autoRef = useRef(defaultAuto(variant, true));
   const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
@@ -517,7 +517,7 @@ export function usePvpTicTacToe(
         // Fresh queue resets Auto to the session default (ON the first time, else your last
         // toggle); auto-requeue passes keepAuto so the Auto loop survives across per-game matches.
         if (!opts?.keepAuto) {
-          autoRef.current = defaultAuto(variant);
+          autoRef.current = defaultAuto(variant, true);
           setAutoState(autoRef.current);
         }
         bufferedSettleRef.current = null;
@@ -1073,7 +1073,7 @@ export function usePvpTicTacToe(
       stoppingRef.current = false;
       autoKickedRef.current = false;
       if (!keepAuto) {
-        autoRef.current = defaultAuto(variant);
+        autoRef.current = defaultAuto(variant, true);
         setAutoState(autoRef.current);
       }
       openedResolveRef.current = null;

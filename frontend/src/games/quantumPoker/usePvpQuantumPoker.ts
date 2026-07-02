@@ -277,7 +277,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [endRequested, setEndRequested] = useState(false);
   // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
   // tick it on and new hands let a persona bot play your seat. See autoPreference.
-  const [auto, setAutoState] = useState(() => defaultAuto(GAME_ID));
+  const [auto, setAutoState] = useState(() => defaultAuto(GAME_ID, true));
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -289,7 +289,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // Auto mode: a persona bot drives this seat's BETTING. `autoRef` mirrors `auto` for use inside
   // the imperative move loop (closures that read it after toggles); `autoBotRef` is the stateless
   // kit bot built once per match.
-  const autoRef = useRef(defaultAuto(GAME_ID));
+  const autoRef = useRef(defaultAuto(GAME_ID, true));
   const autoBotRef = useRef<PokerSeatBot | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
   const detachResumeRef = useRef<(() => void) | null>(null);
@@ -325,7 +325,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
     // Reset Auto to the session default (ON the first time, else your last toggle).
-    autoRef.current = defaultAuto(GAME_ID);
+    autoRef.current = defaultAuto(GAME_ID, true);
     autoBotRef.current = null;
     setAutoState(autoRef.current);
     channelRef.current = null;
@@ -834,9 +834,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       // Arena entry: this seat starts on autopilot vs the fleet bot; the player toggles Auto off to take over.
       autoRef.current = true;
       setAutoState(true);
-      // Persist the forced-on default so the natural-end auto-rematch (poker is the only game
-      // that re-matches itself) restores auto via reset()'s defaultAuto() — otherwise it stops.
-      rememberAuto(GAME_ID, true);
       const signExec = async (
         tx: Parameters<typeof signAndExecute>[0]["transaction"],
       ) => {

@@ -169,9 +169,9 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
-  // Auto is OFF on a fresh page load (you play your own seat), then sticky to your last toggle —
-  // tick it on and new games keep a bot playing for you. See autoPreference.
-  const [auto, setAutoState] = useState(() => defaultAuto("blackjack"));
+  // Arena games autopilot by default (fallback true) so a resume/reload keeps playing; your
+  // explicit toggle still sticks for the session. See autoPreference.
+  const [auto, setAutoState] = useState(() => defaultAuto("blackjack", true));
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -188,7 +188,7 @@ export function usePvpBlackjack(): PvpView {
     BlackjackMove
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(defaultAuto("blackjack"));
+  const autoRef = useRef(defaultAuto("blackjack", true));
   const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
@@ -515,7 +515,7 @@ export function usePvpBlackjack(): PvpView {
       setRounds([]);
       autoKickedRef.current = false;
       // Fresh match resets Auto to the session default (ON the first time, else your last toggle).
-      autoRef.current = defaultAuto("blackjack");
+      autoRef.current = defaultAuto("blackjack", true);
       setAutoState(autoRef.current);
       bufferedSettleRef.current = null;
       bufferedStakeRef.current = null;
@@ -1123,7 +1123,7 @@ export function usePvpBlackjack(): PvpView {
     settledRef.current = false;
     stoppingRef.current = false;
     autoKickedRef.current = false;
-    autoRef.current = defaultAuto("blackjack");
+    autoRef.current = defaultAuto("blackjack", true);
     setAutoState(autoRef.current);
     openedResolveRef.current = null;
     bufferedOpenedRef.current = null;
