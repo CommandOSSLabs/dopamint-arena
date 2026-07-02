@@ -5,7 +5,7 @@
 //! surface exists in the skeleton.
 pub mod cli;
 // pub mod protocol;
-// pub mod gates;
+pub mod gates;
 // pub mod anchor;
 // pub mod settle_manager;
 // pub mod pipeline;
