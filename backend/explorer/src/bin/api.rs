@@ -15,6 +15,11 @@ use explorer::api::{router, ApiState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Pin one rustls CryptoProvider (ring) as the process default BEFORE any TLS. Building the S3
+    // client (S3TranscriptStore::from_env, once S3_TRANSCRIPTS_BUCKET is set) pulls aws-lc-rs into
+    // the graph alongside ring; without this, rustls 0.23 can't auto-select a provider and panics at
+    // startup (the S3-enabled task crash-loops on exit 101). Mirrors tunnel-manager + indexer.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
