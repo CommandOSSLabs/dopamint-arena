@@ -42,6 +42,20 @@ pub trait Protocol: Send + Sync + 'static {
         self.is_terminal(s)
     }
 
+    /// Which seat may propose the move advancing the tunnel from `nonce` to `nonce+1`, when the
+    /// protocol pins turns purely by nonce. `None` (default) = no protocol-imposed turn: the
+    /// `MoveStrategy` decides when to propose, returning `None` off-turn from the co-signed state
+    /// (what every state-based game does — e.g. `turn_of(state.tick)`, `actor_for`).
+    ///
+    /// A protocol whose turn is INVISIBLE in `encode_state` must return `Some(seat)` so the driver
+    /// serializes proposals. World-canvas is a free co-draw: an idle `{cells:[]}` move advances only
+    /// the nonce and leaves the digest/counters byte-identical, so no state field tracks whose turn
+    /// it is. Without a pin, an always-proposing strategy cross-proposes with the peer and the seat
+    /// aborts (`expected ack, got move` — see `seat` module contract).
+    fn proposer_for_nonce(&self, _nonce: u64) -> Option<Seat> {
+        None
+    }
+
     /// Optional: sample a legal move for `seat`, or None. Only the protocol knows its
     /// own move space, so this is what lets a generic move strategy drive any protocol.
     fn sample_move(
