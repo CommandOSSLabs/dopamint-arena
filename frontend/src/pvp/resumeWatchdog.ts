@@ -1,4 +1,13 @@
 /**
+ * How long a resumed match waits to prove it's still alive before abandoning to idle. Defined once
+ * and shared by every PvP hook (generic engine, tic-tac-toe/caro, battleship) so the threshold isn't
+ * re-picked per game. A live co-located bot answers in ms, so a quiet window this long means the peer
+ * is gone — exited past its grace, or a cross-instance reconnect our resync can't reach — and we
+ * reset to idle rather than sit frozen in "playing".
+ */
+export const RESUME_WATCHDOG_MS = 8_000;
+
+/**
  * Whether a just-resumed match should arm the peer-timeout watchdog. Arm ONLY when we're actually
  * waiting on the peer to advance — an unacked move we just re-sent, or it's the peer's turn. A clean
  * resume on our OWN turn already succeeded (the user simply makes their move next), so arming there

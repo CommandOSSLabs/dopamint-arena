@@ -25,8 +25,13 @@ use tunnel_core::wire::{serialize_settlement, serialize_settlement_with_root, Se
 /// MOVE or its ACK was actually dropped — e.g. the browser's first frame arriving
 /// before its `onFrame` is wired at match start.
 const DEFAULT_ACK_TIMEOUT: Duration = Duration::from_millis(2000);
-/// Default number of MOVE re-sends before giving up and aborting the match.
-const DEFAULT_MAX_ACK_RESENDS: u32 = 4;
+/// Default number of MOVE re-sends before giving up and aborting the match. Sized to span the
+/// peer-resume window (bus_transport `PEER_RESUME_GRACE` = 300s ÷ the 2s ack timeout), NOT a few
+/// seconds: a dropped B→A move (or a browser that briefly stops ACKing and then resyncs) must be
+/// re-driven long enough to recover — the old cap of 4 (~8s) aborted an otherwise-live match on a
+/// single transient relay drop, stranding the human on "opponent's turn". A truly-disconnected peer
+/// still ends the match earlier and cheaply via `recv → None` (the transport's own park bound).
+const DEFAULT_MAX_ACK_RESENDS: u32 = 150;
 
 #[derive(Debug)]
 pub struct DriverOutcome {

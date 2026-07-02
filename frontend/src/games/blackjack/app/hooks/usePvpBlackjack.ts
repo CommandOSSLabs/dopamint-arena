@@ -39,6 +39,7 @@ import {
   evictExpiredRecords,
   installResumePersistence,
   readResumeRecord,
+  hasResumableMatch,
 } from "@/pvp/resume";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import { coSignCloseFromPeerRoot } from "@/pvp/settleClose";
@@ -504,6 +505,64 @@ export function usePvpBlackjack(): PvpView {
     [proto, submit, finishSettle],
   );
 
+  // Rebuild + attach a persisted in-flight blackjack match on `mp`. Returns true if one was resumed
+  // (the caller must NOT quickMatch), false if there was nothing to restore. Shared by the manual
+  // queue() (resume-or-quickMatch) and the mount effect (resume-only) so both seat the tunnel
+  // identically. Does NOT connect — the caller owns that.
+  const tryResume = useCallback(
+    (mp: MpClient): boolean => {
+      installResumePersistence();
+      // The rebuild's `restoreSecret` fires synchronously inside `resumeActiveTunnels`; capture the
+      // persisted hidden secret here, then re-inject it into the rebuilt tunnel state below.
+      // Explicit annotation keeps TS from narrowing the closure-mutated `let` to `never`.
+      let restoredSecret: {
+        localSecretA: BlackjackState["localSecretA"];
+        localSecretB: BlackjackState["localSecretB"];
+      } | null = null;
+      const restored = resumeActiveTunnels<BlackjackState, BlackjackMove>(
+        mp,
+        "blackjack",
+        {
+          proto,
+          moveCodec: blackjackMoveCodec,
+          adapter: makeBlackjackResumeAdapter({
+            getSecret: () => ({ localSecretA: null, localSecretB: null }),
+            setSecret: (sec) => {
+              restoredSecret = sec;
+            },
+            onReconciled: () => {},
+          }),
+        },
+        { selfWallet: walletAddress },
+      );
+      if (restored.length === 0) return false;
+      const { tunnel, channel } = restored[0];
+      // Re-inject the restored secret into the rebuilt tunnel state; without this the reveal
+      // after resume reads a null secret and stalls.
+      const secret = restoredSecret as {
+        localSecretA: BlackjackState["localSecretA"];
+        localSecretB: BlackjackState["localSecretB"];
+      } | null;
+      if (secret) {
+        tunnel.state.localSecretA = secret.localSecretA;
+        tunnel.state.localSecretB = secret.localSecretB;
+      }
+      const rec = readResumeRecord(tunnel.tunnelId)!;
+      matchIdRef.current = rec.matchId;
+      roleRef.current = rec.role;
+      setRole(rec.role);
+      activateSession(mp, channel, tunnel, {
+        matchId: rec.matchId,
+        role: rec.role,
+        opponentWallet: rec.opponentWallet,
+        opponentPubkeyHex: rec.opponentPubkeyHex,
+        selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+      });
+      return true;
+    },
+    [walletAddress, proto, activateSession],
+  );
+
   const queue = useCallback(() => {
     void (async () => {
       if (!walletAddress) {
@@ -533,34 +592,7 @@ export function usePvpBlackjack(): PvpView {
         const mp = new MpClient(resolveMpWsUrl(MP_URL), walletAddress, connEph);
         mpRef.current = mp;
         // Cold-load: rebuild any persisted in-flight blackjack match before joining a queue.
-        installResumePersistence();
-        const restored = resumeActiveTunnels<BlackjackState, BlackjackMove>(
-          mp,
-          "blackjack",
-          {
-            proto,
-            moveCodec: blackjackMoveCodec,
-            adapter: makeBlackjackResumeAdapter({
-              getSecret: () => ({ localSecretA: null, localSecretB: null }),
-              setSecret: () => {},
-              onReconciled: () => {},
-            }),
-          },
-          { selfWallet: walletAddress },
-        );
-        if (restored.length > 0) {
-          const { tunnel, channel } = restored[0];
-          const rec = readResumeRecord(tunnel.tunnelId)!;
-          matchIdRef.current = rec.matchId;
-          roleRef.current = rec.role;
-          setRole(rec.role);
-          activateSession(mp, channel, tunnel, {
-            matchId: rec.matchId,
-            role: rec.role,
-            opponentWallet: rec.opponentWallet,
-            opponentPubkeyHex: rec.opponentPubkeyHex,
-            selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
-          });
+        if (tryResume(mp)) {
           await mp.connect();
           return; // skip quickMatch — continuing an in-flight match
         }
@@ -573,7 +605,38 @@ export function usePvpBlackjack(): PvpView {
         setPhase("error");
       }
     })();
-  }, [walletAddress, proto, activateSession]);
+  }, [walletAddress, tryResume]);
+
+  // Cold-load entry: on mount (once the wallet is known), rebuild any persisted in-flight blackjack
+  // match and jump straight into it — no "Play" click. Resume-only: it never falls through to a fresh
+  // quickMatch, so a stale/terminal record just drops back to the menu. Idempotent (no-ops if already
+  // connected or nothing to restore); mirrors the arena-entry effect below.
+  const resume = useCallback(() => {
+    if (mpRef.current) return;
+    if (!walletAddress) return;
+    // installResumePersistence + evictExpiredRecords already ran in the mount effect above, and
+    // tryResume → resumeActiveTunnels re-runs both — no need to repeat them here.
+    if (!hasResumableMatch("blackjack")) return;
+    void (async () => {
+      try {
+        const connEph = core.generateKeyPair();
+        const mp = new MpClient(resolveMpWsUrl(MP_URL), walletAddress, connEph);
+        mpRef.current = mp;
+        if (!tryResume(mp)) {
+          mpRef.current = null;
+          mp.close();
+          return;
+        }
+        await mp.connect();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [walletAddress, tryResume]);
+  useEffect(() => {
+    resume();
+  }, [resume]);
 
   const onMatch = useCallback(
     async (mp: MpClient, m: MatchInfo) => {

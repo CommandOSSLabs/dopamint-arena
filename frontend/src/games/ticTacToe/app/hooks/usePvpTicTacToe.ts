@@ -43,6 +43,7 @@ import {
   type PvpChannel,
 } from "@/pvp/mpClient";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import { RESUME_WATCHDOG_MS } from "@/pvp/resumeWatchdog";
 import {
   raiseDisputeUnilateral,
   submitRebuildingOnStale,
@@ -52,6 +53,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  hasResumableMatch,
 } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
@@ -498,6 +500,63 @@ export function usePvpTicTacToe(
     [proto, submit, variant, finishSettle],
   );
 
+  // Rebuild + attach a persisted in-flight match for this variant on `mp`. Returns true if one was
+  // resumed (the caller must NOT quickMatch), false if there was nothing to restore. Shared by the
+  // manual queue() (resume-or-quickMatch) and the mount effect (resume-only) so both seat the tunnel
+  // identically. Does NOT connect — the caller owns that.
+  const tryResume = useCallback(
+    (mp: MpClient): boolean => {
+      const selfWallet = walletRef.current.address;
+      if (!selfWallet) return false;
+      installResumePersistence();
+      const restored = resumeActiveTunnels<AnyState, CellMove>(
+        mp,
+        variant,
+        {
+          proto,
+          adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+          // Mirror onMatch: without the variant codec the resumed tunnel falls back to
+          // identityMoveCodec, which cannot encode the Uint8Array salt — a reloaded
+          // staked match would then stall on the first move.
+          moveCodec:
+            variant === "caro"
+              ? (caroMoveCodec as never)
+              : (tttMoveCodec as never),
+        },
+        { selfWallet },
+      );
+      if (restored.length === 0) return false;
+      const { tunnel, channel } = restored[0]; // one active match per game in practice
+      const rec = readResumeRecord(tunnel.tunnelId)!;
+      activateTttSession(mp, channel, tunnel, {
+        matchId: rec.matchId,
+        role: rec.role,
+        opponentWallet: rec.opponentWallet,
+        opponentPubkeyHex: rec.opponentPubkeyHex,
+        selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+      });
+      // Resume watchdog (like battleship): if `resume.ok` never arrives — the co-located bot exited
+      // past its grace, or a cross-instance reconnect the resync can't reach — don't hang on a dead
+      // match. Clear the record and return to idle so the user falls through to a fresh game instead
+      // of a frozen board.
+      let resumed = false;
+      const unsubResumeOk = mp.onResumeOk(() => {
+        resumed = true;
+      });
+      setTimeout(() => {
+        unsubResumeOk();
+        if (!resumed && mpRef.current === mp) {
+          clearResumeRecord(tunnel.tunnelId);
+          mp.close();
+          mpRef.current = null;
+          setPhase("idle");
+        }
+      }, RESUME_WATCHDOG_MS);
+      return true;
+    },
+    [variant, proto, activateTttSession],
+  );
+
   const queue = useCallback(
     (opts?: { keepAuto?: boolean }) => {
       void (async () => {
@@ -534,33 +593,7 @@ export function usePvpTicTacToe(
           mpRef.current = mp;
           // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
           // variant and re-attach to it. The opening handshake then carries resume{matchId}.
-          installResumePersistence();
-          const restored = resumeActiveTunnels<AnyState, CellMove>(
-            mp,
-            variant,
-            {
-              proto,
-              adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
-              // Mirror onMatch: without the variant codec the resumed tunnel falls back to
-              // identityMoveCodec, which cannot encode the Uint8Array salt — a reloaded
-              // staked match would then stall on the first move.
-              moveCodec:
-                variant === "caro"
-                  ? (caroMoveCodec as never)
-                  : (tttMoveCodec as never),
-            },
-            { selfWallet: w.address },
-          );
-          if (restored.length > 0) {
-            const { tunnel, channel } = restored[0]; // one active match per game in practice
-            const rec = readResumeRecord(tunnel.tunnelId)!;
-            activateTttSession(mp, channel, tunnel, {
-              matchId: rec.matchId,
-              role: rec.role,
-              opponentWallet: rec.opponentWallet,
-              opponentPubkeyHex: rec.opponentPubkeyHex,
-              selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
-            });
+          if (tryResume(mp)) {
             await mp.connect();
             return; // skip quickMatch — we are continuing an in-flight match
           }
@@ -580,8 +613,44 @@ export function usePvpTicTacToe(
         }
       })();
     },
-    [eph, variant, boardSize, proto, activateTttSession],
+    [eph, variant, boardSize, tryResume],
   );
+
+  // Cold-load entry: on mount (once the wallet is known), rebuild any persisted in-flight match for
+  // this variant and jump straight into it — no "Play" click. Resume-only: it never falls through to
+  // a fresh quickMatch, so a stale/terminal record just drops back to the menu. Idempotent (no-ops if
+  // already connected or nothing to restore); mirrors the arena-entry effect below.
+  const resume = useCallback(() => {
+    if (mpRef.current) return;
+    const w = walletRef.current;
+    const selfWallet = w.address;
+    if (!w.isConnected || !selfWallet) return;
+    // installResumePersistence + evictExpiredRecords already run in the mount effect, and
+    // tryResume → resumeActiveTunnels re-runs both — no need to repeat them here.
+    if (!hasResumableMatch(variant)) return;
+    void (async () => {
+      try {
+        const mp = new MpClient(
+          resolveMpWsUrl(MP_URL),
+          selfWallet,
+          eph.coreKey,
+        );
+        mpRef.current = mp;
+        if (!tryResume(mp)) {
+          mpRef.current = null;
+          mp.close();
+          return;
+        }
+        await mp.connect();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [eph, variant, tryResume]);
+  useEffect(() => {
+    resume();
+  }, [resume]);
 
   const onMatch = useCallback(
     async (mp: MpClient, m: MatchInfo) => {

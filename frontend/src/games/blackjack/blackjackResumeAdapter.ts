@@ -29,8 +29,22 @@ export function makeBlackjackResumeAdapter(args: {
       return bytesToNumberArrays(pub) as never;
     },
     deserializeState: (j) => j as BlackjackState,
-    serializeMove: (m) => blackjackMoveCodec.encode(m) as never,
-    deserializeMove: (j) => blackjackMoveCodec.decode(j),
+    serializeMove: (m) => {
+      const j = blackjackMoveCodec.encode(m) as Record<string, unknown>;
+      // Re-attach the commit's localSecret (number arrays; a Uint8Array wouldn't survive JSON). The
+      // wire codec drops it so the peer never sees it, but a reloaded proposer needs it to reveal
+      // after the commit confirms — otherwise the restored pending commit stalls the draw.
+      if (m.kind === "commit" && m.localSecret)
+        return { ...j, localSecret: encodeSecret(m.localSecret) } as never;
+      return j as never;
+    },
+    deserializeMove: (j) => {
+      const m = blackjackMoveCodec.decode(j);
+      const raw = j as { localSecret?: EncodedSecret };
+      if (m.kind === "commit" && raw.localSecret)
+        m.localSecret = decodeSecret(raw.localSecret) ?? undefined;
+      return m;
+    },
     captureSecret: () =>
       ({
         localSecretA: encodeSecret(args.getSecret().localSecretA),
