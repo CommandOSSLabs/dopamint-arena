@@ -567,6 +567,25 @@ export function usePvpBlackjack(): PvpView {
             selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
           });
           await mp.connect();
+          // Resume watchdog (mirrors the shared kit's armResumeWatchdog): the auto-kick fires
+          // before connect on this path, so if it's our turn the proposal is dropped; and if the
+          // co-located bot exited past its grace, nothing re-kicks. Rather than hang at "playing",
+          // drop the record and requeue a fresh match. Disarms on the first confirmed frame.
+          {
+            const resumed = tunnel;
+            let answered = false;
+            const prevConfirmed = resumed.onConfirmed;
+            resumed.onConfirmed = (u) => {
+              answered = true;
+              resumed.onConfirmed = prevConfirmed;
+              prevConfirmed?.(u);
+            };
+            setTimeout(() => {
+              if (answered || mpRef.current !== mp) return;
+              clearResumeRecord(resumed.tunnelId);
+              requeueRef.current?.();
+            }, 10_000);
+          }
           return; // skip quickMatch — continuing an in-flight match
         }
         await mp.connect();

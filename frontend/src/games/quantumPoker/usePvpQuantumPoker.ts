@@ -1100,6 +1100,27 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         });
         await mp.connect();
         maybeAutoPropose();
+        // Resume watchdog (mirrors the shared kit's armResumeWatchdog): if the co-located bot
+        // never answers the resync — it exited past its grace, or the displayState!==state guard
+        // suppressed the auto-kick — don't hang at "playing". Drop the record and start a fresh
+        // match (poker's own natural-end recovery). Disarms on the first confirmed frame; a stale
+        // timer is ignored once a newer mp has replaced this one.
+        {
+          const resumed = tunnel;
+          let answered = false;
+          const prevConfirmed = resumed.onConfirmed;
+          resumed.onConfirmed = (u) => {
+            answered = true;
+            resumed.onConfirmed = prevConfirmed;
+            prevConfirmed?.(u);
+          };
+          setTimeout(() => {
+            if (answered || mpRef.current !== mp) return;
+            clearResumeRecord(resumed.tunnelId);
+            reset();
+            findMatchRef.current?.();
+          }, 10_000);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");
