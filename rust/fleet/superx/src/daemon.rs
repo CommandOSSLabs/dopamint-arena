@@ -618,3 +618,131 @@ async fn execute_run(ctx: Arc<DaemonContext>, cfg: RunConfig) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::{CohortWire, SpawnMode};
+    use crate::runconfig::{RunConfig, SuiRunConfig};
+    use crate::sink::{serve_sink, Sink};
+    use tokio::net::TcpListener;
+
+    /// A memory-anchor run config with no terminal aggregate, used to stage a run
+    /// that stays `Running` for the duration of a live-monitoring test.
+    fn memory_run_cfg(run_id: &str) -> RunConfig {
+        RunConfig {
+            run_id: run_id.to_string(),
+            mode: SpawnMode::Distribute,
+            swarms: 2,
+            protocol: "payments.v1".to_string(),
+            duration: Duration::from_secs(30),
+            until_stop: false,
+            tunnels: 4,
+            scenario: "golden".to_string(),
+            anchor: "memory".to_string(),
+            initial_balance: 1_000_000,
+            cohorts: CohortWire {
+                open_cohort: None,
+                open_spacing: Duration::ZERO,
+                settle_cohort: None,
+                settle_spacing: Duration::ZERO,
+            },
+            extra: vec![],
+            heartbeat_sink: None,
+            sui: SuiRunConfig::default(),
+            sui_slots: Vec::new(),
+        }
+    }
+
+    /// The live-monitoring branch must project the sink's in-flight aggregate while
+    /// a run is still `Running` — before any terminal merged aggregate exists.
+    ///
+    /// This isolates the strictly-*live* path from the terminal merged rollup that
+    /// the broader `watch` e2e can incidentally satisfy (a memory run finishes before
+    /// its last heartbeat flush, so the e2e can stream only the terminal aggregate).
+    /// Here the run never leaves `Running` and its record carries no aggregate, so a
+    /// streamed `Aggregate` with `moves > 0` can *only* come from the sink fold. If
+    /// the live branch in [`watch_aggregate`] is bypassed, no such event is ever
+    /// emitted and this test fails.
+    #[tokio::test]
+    async fn watch_streams_live_sink_aggregate_while_running() {
+        let run_id = "run-live-monitor";
+
+        // A live sink folding real heartbeats for the run over loopback, exactly as
+        // the daemon roots each swarm's telemetry at `/runs/<run_id>`.
+        let sink = Sink::new();
+        let sink_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind sink");
+        let sink_addr = sink_listener.local_addr().expect("sink addr");
+        let sink_task = tokio::spawn(serve_sink(sink_listener, sink.clone()));
+
+        let base = format!("http://{sink_addr}/runs/{run_id}");
+        let http = reqwest::Client::new();
+        let registration: serde_json::Value = http
+            .post(format!("{base}/v1/sessions"))
+            .json(&serde_json::json!({ "userAddress": "fleet-superx", "game": "payments.v1" }))
+            .send()
+            .await
+            .expect("register send")
+            .json()
+            .await
+            .expect("register json");
+        let session_id = registration["sessionId"].as_str().expect("sessionId");
+        http.post(format!("{base}/v1/sessions/{session_id}/heartbeat"))
+            .json(&serde_json::json!({
+                "tunnelId": "0x1",
+                "nonce": "1",
+                "actionsDelta": 7,
+                "windowMs": 1000,
+                "phase": "play",
+                "phaseDone": 1,
+                "phaseTotal": 4,
+            }))
+            .send()
+            .await
+            .expect("heartbeat send")
+            .error_for_status()
+            .expect("heartbeat status");
+        // Sanity: the sink folded the delta the live branch will project.
+        assert_eq!(sink.snapshot(run_id).expect("run present").moves, 7);
+
+        // A registry run pinned in `Running` with no terminal aggregate: the only
+        // aggregate `watch` can report is the live sink fold.
+        let registry = Arc::new(Registry::new());
+        registry.insert(RunRecord::new(memory_run_cfg(run_id)));
+        assert!(registry.set_state(run_id, RunState::Running));
+
+        let ctx = Arc::new(DaemonContext {
+            registry,
+            self_exe: PathBuf::from("unused-in-this-test"),
+            nonce: 0,
+            sink: Some(sink),
+            heartbeat_base: Some(format!("http://{sink_addr}")),
+            pool: None,
+        });
+
+        // Drive the real streaming projection. The run never becomes terminal, so an
+        // `Aggregate` with committed moves is proof the live branch fired; an `Ended`
+        // would mean the run finished (it cannot here) and fails the test.
+        let mut events = spawn_watch(run_id.to_string(), ctx);
+        let saw_live_moves = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    Response::Event(RunEvent::Aggregate(agg)) if agg.moves > 0 => return true,
+                    Response::Event(RunEvent::Ended { .. }) => {
+                        panic!("run is pinned Running; Ended must not fire")
+                    }
+                    _ => {}
+                }
+            }
+            false
+        })
+        .await
+        .expect("watch emitted a live aggregate within the deadline");
+        assert!(
+            saw_live_moves,
+            "watch streams the live sink aggregate (moves > 0) while the run is Running"
+        );
+
+        sink_task.abort();
+    }
+}

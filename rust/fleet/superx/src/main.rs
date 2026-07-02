@@ -20,15 +20,17 @@ enum Cmd {
     Ls(fleet_superx::client::LsArgs),
     /// Watch a run's live monitoring.
     Watch(fleet_superx::client::WatchArgs),
-    /// Internal: run one swarm (spawned by the daemon).
+    /// Internal: run one swarm (spawned by the daemon). Boxed because its arg set
+    /// (all the `--sui-*` flags) dwarfs the other variants; this dispatch enum is
+    /// built once at startup, so the indirection costs nothing.
     #[command(hide = true, name = "run-swarm")]
-    RunSwarm(fleet_superx::swarm::cli::RunSwarmArgs),
+    RunSwarm(Box<fleet_superx::swarm::cli::RunSwarmArgs>),
 }
 
 fn main() {
     let cli = Cli::parse();
     let code = match cli.cmd {
-        Cmd::RunSwarm(a) => fleet_superx::swarm::run_swarm_main(a),
+        Cmd::RunSwarm(a) => fleet_superx::swarm::run_swarm_main(*a),
         Cmd::Daemon(a) => fleet_superx::daemon::daemon_main(a),
         Cmd::Start(a) => fleet_superx::client::start_main(a),
         Cmd::Stop(a) => fleet_superx::client::stop_main(a),

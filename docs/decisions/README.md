@@ -100,6 +100,10 @@ _why_ survives after the people involved have moved on.
   pre-creates + funds seat B at allocate; the user joins with a deposit-only PTB
   (Active on one signature). Supersedes the open mechanics of 0026; makes
   `allocate` on-chain-bound, so it **must** be authenticated + rate-limited.
+- [0029](0029-fleet-superx-staged-swarm-supervisor.md) — Fork `fleet-bench` into
+  `fleet-superx`: a supervisor daemon + staged open→play→settle swarm engine with
+  per-swarm barriers. Reuse-by-copy for `pub(crate)` bench modules; stage at the
+  `TunnelAnchor` seam; keep `fleet-serve`. `fleet-bench` is unmodified.
 
 ### Backend-local decisions
 
