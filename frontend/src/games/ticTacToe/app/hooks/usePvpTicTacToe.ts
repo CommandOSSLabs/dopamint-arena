@@ -43,6 +43,7 @@ import {
   type PvpChannel,
 } from "@/pvp/mpClient";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import { RESUME_WATCHDOG_MS } from "@/pvp/resumeWatchdog";
 import {
   raiseDisputeUnilateral,
   submitRebuildingOnStale,
@@ -111,9 +112,6 @@ const NEXT_MS = 150; // pause before auto-requeuing the next match (flat-out: ju
 // unconditionally at its terminal). Give up after this timeout so a truly lost peer recovers (auto
 // re-queues) instead of stranding the table forever.
 const SETTLE_TIMEOUT_MS = 12000;
-// A resumed match waits this long for `resume.ok`; past it the bot is gone (exited grace / cross-
-// instance) and we abandon to idle rather than hang on a dead board.
-const TTT_RESUME_WATCHDOG_MS = 8_000;
 
 export type PvpPhase =
   | "idle"
@@ -553,7 +551,7 @@ export function usePvpTicTacToe(
           mpRef.current = null;
           setPhase("idle");
         }
-      }, TTT_RESUME_WATCHDOG_MS);
+      }, RESUME_WATCHDOG_MS);
       return true;
     },
     [variant, proto, activateTttSession],

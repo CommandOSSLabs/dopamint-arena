@@ -60,6 +60,7 @@ import { proposeDue, canFireShot } from "./engine/pvpDriver";
 import { pickShot, BOT_CONFIGS, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 import { deriveBattleshipView, type BattleshipView } from "./view";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import { RESUME_WATCHDOG_MS } from "@/pvp/resumeWatchdog";
 import {
   installResumePersistence,
   evictExpiredRecords,
@@ -75,10 +76,6 @@ export const BATTLESHIP_ARENA_GAME_ID = "battleship";
 
 const STAKE_BALANCE = 1n; // locked per seat: 1 MTPS (0 decimals; ADR-0023)
 const STAKE_SHIFT = 1n; // winner-take-all: the loser's 1 MTPS stake moves to the winner (0 decimals; ADR-0023)
-/** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
- *  stale/dead match (or a backend that predates resume support) never confirms, so we
- *  abandon to idle rather than hang on a frozen board. */
-const RESUME_GRACE_MS = 8_000;
 
 export type PvpStatus =
   | "idle"
@@ -515,7 +512,7 @@ class PvpSession {
         setTimeout(() => {
           unsubOk();
           if (!resumed && this.mp === mp) this.abandonResume(tunnel.tunnelId);
-        }, RESUME_GRACE_MS);
+        }, RESUME_WATCHDOG_MS);
       } catch {
         this.abandonResume();
       }
