@@ -498,6 +498,11 @@ impl BenchSubmitter {
         settle_gate: Option<Arc<SettleWaveGate>>,
         pair_timeout: Option<Duration>,
     ) -> SettleResult {
+        let effective_pair_timeout = if settle_gate.is_some() {
+            None
+        } else {
+            pair_timeout
+        };
         let receiver = {
             let mut state = self.inner.lock().expect("bench submitter mutex poisoned");
             if let Some(result) = &state.settle.result {
@@ -517,7 +522,7 @@ impl BenchSubmitter {
 
         if seat == Seat::A {
             if let Err(error) = self
-                .submit_settle_when_ready(inner, settle_gate, pair_timeout)
+                .submit_settle_when_ready(inner, settle_gate, effective_pair_timeout)
                 .await
             {
                 let result = Err(error);
@@ -526,7 +531,8 @@ impl BenchSubmitter {
         }
 
         let shared_result =
-            await_submitter_result(receiver, pair_timeout, "paired settle submitter").await?;
+            await_submitter_result(receiver, effective_pair_timeout, "paired settle submitter")
+                .await?;
         clone_settle_result(&shared_result)
     }
 
@@ -1820,6 +1826,83 @@ mod tests {
             1,
             "submitter should retain one shared settle result after waiters drain"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settle_gate_wait_does_not_trip_pair_timeout() {
+        let submitter = BenchSubmitter::new();
+        let inner = BenchAnchorInner::Memory(InMemoryAnchor::with_fixed_id("0x1"));
+        let signer_a = LocalSigner::from_secret(&[1u8; 32]);
+        let signer_b = LocalSigner::from_secret(&[2u8; 32]);
+        let protocol =
+            tunnel_core::protocol_id::ProtocolId::parse("test.protocol.v1").expect("protocol id");
+        inner
+            .open(TunnelOpenRequest {
+                protocol,
+                party_a: signer_a.public_key(),
+                party_b: signer_b.public_key(),
+                initial: Balances { a: 1, b: 1 },
+            })
+            .await
+            .expect("open");
+        let settlement = tunnel_core::wire::Settlement {
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+        };
+        let msg = tunnel_core::wire::serialize_settlement(&settlement);
+        let request_a = TunnelSettleRequest {
+            by: Seat::A,
+            tunnel_id: "0x1".into(),
+            party_a_balance: 1,
+            party_b_balance: 1,
+            final_nonce: 1,
+            timestamp: 7,
+            signature: signer_a.sign(&msg),
+            transcript_root: None,
+            transcript_entries: Vec::new(),
+        };
+        let request_b = TunnelSettleRequest {
+            by: Seat::B,
+            signature: signer_b.sign(&msg),
+            ..clone_settle_request(&request_a)
+        };
+        let gate = SettleWaveGate::new(1, Duration::from_millis(50));
+        gate.admit().await;
+        let gate_for_b = gate.clone();
+
+        let b = {
+            let submitter = submitter.clone();
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                submitter
+                    .settle_as_seat_with_pair_timeout(
+                        Seat::B,
+                        &inner,
+                        request_b,
+                        Some(gate_for_b),
+                        Some(Duration::from_millis(5)),
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        let settled_a = submitter
+            .settle_as_seat_with_pair_timeout(
+                Seat::A,
+                &inner,
+                request_a,
+                Some(gate),
+                Some(Duration::from_millis(5)),
+            )
+            .await
+            .expect("seat A settle");
+        let settled_b = b.await.expect("seat B join").expect("seat B settle");
+
+        assert_eq!(settled_a.digest, settled_b.digest);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
