@@ -130,6 +130,32 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    // Streaming transcript chunk writer (same bucket as `archiver`): the bot streams the co-signed
+    // transcript to S3 in chunks *during play*. `chunk_writer` seals the manifest at `finish()`;
+    // `chunk_upload_tx` feeds the per-instance bounded uploader (byte-budget backpressure). Both
+    // `None` when S3 is unconfigured.
+    let chunk_writer: Option<std::sync::Arc<dyn transcript_store::TranscriptChunkWriter>> =
+        match config.s3_bucket.clone() {
+            Some(bucket) => {
+                let aws_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&aws_cfg);
+                let prefix = config.s3_prefix.clone().unwrap_or_default();
+                Some(std::sync::Arc::new(
+                    transcript_store::S3TranscriptStore::new(client, bucket, prefix),
+                ))
+            }
+            None => None,
+        };
+    // Keep the uploader (not just its sender) so a clean SIGTERM roll can drain its queue before
+    // exit: a settled match's early 1 MB chunks pass through here, and dropping them would leave
+    // that transcript short. Drained after `serve` returns (below).
+    let uploader = chunk_writer
+        .clone()
+        .map(transcript_stream::TranscriptUploader::spawn);
+    let chunk_upload_tx = uploader.as_ref().map(|u| u.sender());
+
     let instance_id = config
         .instance_id
         .clone()
@@ -243,6 +269,8 @@ async fn main() -> anyhow::Result<()> {
         walrus,
         archiver,
         s3_prefix: config.s3_prefix.clone().unwrap_or_default(),
+        chunk_writer,
+        chunk_upload_tx,
         ollama,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
@@ -361,6 +389,11 @@ async fn main() -> anyhow::Result<()> {
     // Graceful shutdown completed: push the last sub-second of counted moves so a clean
     // rollout doesn't drop them (the 1 Hz flusher is gone with the runtime by now).
     flush_actions(&flush_state).await;
+    // Then flush any transcript chunks still queued for S3, so a match that settled just before the
+    // roll isn't left with missing chunks. Still-playing matches' tails are best-effort here.
+    if let Some(uploader) = uploader {
+        uploader.shutdown().await;
+    }
     Ok(())
 }
 

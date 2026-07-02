@@ -14,6 +14,10 @@ export interface ExplorerServicesArgs {
   securityGroupId: pulumi.Input<string>; // reuse the backend SG (allowed to DB + Redis)
   databaseUrlSecretArn: pulumi.Input<string>;
   pubSubEndpoint: pulumi.Input<string>;
+  // S3 transcript archive the api reads so /transcript serves the server-owned streamed chunks
+  // instead of the legacy Walrus blob. Must be the same bucket/prefix the tunnel-manager streams
+  // to (Backend s3TranscriptsBucket, no prefix). Unset => the route falls back to Walrus.
+  s3TranscriptsBucket?: pulumi.Input<string>;
   // ALB plumbing for the api (the indexer has no inbound).
   vpcId: pulumi.Input<string>;
   listener: aws.lb.Listener;
@@ -165,40 +169,53 @@ export function createExplorerServices(
       args.logGroupName,
       args.databaseUrlSecretArn,
       args.corsAllowedOrigins ?? pulumi.output(undefined),
+      args.s3TranscriptsBucket ?? pulumi.output(undefined),
     ])
-    .apply(([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins]) =>
-      JSON.stringify([
-        {
-          name: "api",
-          image: `${repo}:${tag}`,
-          essential: true,
-          command: ["/usr/local/bin/api"],
-          portMappings: [{ containerPort: 8080, protocol: "tcp" }],
-          environment: [
-            {
-              name: "WALRUS_AGGREGATOR_URL",
-              value: "https://aggregator.walrus-testnet.walrus.space",
-            },
-            { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
-            ...(corsAllowedOrigins
-              ? [{ name: "CORS_ALLOWED_ORIGINS", value: corsAllowedOrigins }]
-              : []),
-          ],
-          secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
-          logConfiguration: logConfig(logGroup, "explorer-api"),
-          healthCheck: {
-            command: [
-              "CMD-SHELL",
-              "curl -f http://localhost:8080/health/ready || exit 1",
+    .apply(
+      ([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins, s3Bucket]) =>
+        JSON.stringify([
+          {
+            name: "api",
+            image: `${repo}:${tag}`,
+            essential: true,
+            command: ["/usr/local/bin/api"],
+            portMappings: [{ containerPort: 8080, protocol: "tcp" }],
+            environment: [
+              {
+                name: "WALRUS_AGGREGATOR_URL",
+                value: "https://aggregator.walrus-testnet.walrus.space",
+              },
+              { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
+              // AWS_REGION is required for the in-container S3 SDK (ECS does not auto-inject it);
+              // credentials come from the shared task role, granted s3:GetObject on this bucket.
+              ...(s3Bucket
+                ? [
+                    { name: "S3_TRANSCRIPTS_BUCKET", value: s3Bucket },
+                    {
+                      name: "AWS_REGION",
+                      value: aws.config.region ?? "us-east-1",
+                    },
+                  ]
+                : []),
+              ...(corsAllowedOrigins
+                ? [{ name: "CORS_ALLOWED_ORIGINS", value: corsAllowedOrigins }]
+                : []),
             ],
-            interval: 30,
-            timeout: 5,
-            retries: 3,
-            startPeriod: 30,
+            secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
+            logConfiguration: logConfig(logGroup, "explorer-api"),
+            healthCheck: {
+              command: [
+                "CMD-SHELL",
+                "curl -f http://localhost:8080/health/ready || exit 1",
+              ],
+              interval: 30,
+              timeout: 5,
+              retries: 3,
+              startPeriod: 30,
+            },
+            stopTimeout: 30,
           },
-          stopTimeout: 30,
-        },
-      ]),
+        ]),
     );
 
   const apiTd = new aws.ecs.TaskDefinition(`${n}-explorer-api-td`, {

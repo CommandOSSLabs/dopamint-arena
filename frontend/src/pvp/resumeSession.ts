@@ -327,10 +327,14 @@ export function attachResume<State, Move>(
     if (rec) persist(rec);
   };
 
-  // Persist on PROPOSE too, preserving any game-set onProposed. A commit-reveal seat's fresh secret
-  // lives only in the pending proposal until the ACK; persisting here (captureSecret reads the
-  // pending/display state) means a reload in the propose→ACK window doesn't lose it and strand the
-  // seat at draw_reveal with no matching pre-image.
+  // Persist on PROPOSE too, preserving any game-set onProposed. `onConfirmed` fires only AFTER the
+  // pending clears, so it can never capture a still-in-flight move — without this the proposer's
+  // pending is lost on reload. Two things ride on that pending surviving: a commit-reveal seat's
+  // fresh secret lives only in the pending proposal until the ACK (captureSecret reads the pending/
+  // display state), so a reload in the propose→ACK window would strand the seat at draw_reveal with
+  // no matching pre-image; and the co-located bot's resync-less resume relies on the restored pending,
+  // which `resumeKick` re-sends so the bot's replayed ACK finds a match instead of throwing "unexpected
+  // ACK". Uses the injected `persist` sink (IndexedDB in the worker engine, localStorage otherwise).
   const prevProposed = tunnel.onProposed;
   tunnel.onProposed = () => {
     prevProposed?.();
@@ -345,11 +349,22 @@ export function attachResume<State, Move>(
   };
   channel.addPeerListener(peerHandler);
 
+  // On resume: announce our nonce (so a live bot targets its replay) AND re-deliver any restored
+  // in-flight move. `restoreInto` re-seats the pending WITHOUT sending, and only the generic hook
+  // called `resendPending` itself — the custom hooks (poker, tic-tac-toe/caro, battleship, blackjack)
+  // did not, so a move made just before a reload was persisted (onProposed) but never re-sent, and a
+  // bot that hadn't received it deadlocked. Doing it HERE covers every hook. Both are idempotent: an
+  // unanswered resync is harmless, and the bot re-ACKs a duplicate move; `resendPending` no-ops with
+  // nothing pending.
+  const resumeKick = () => {
+    sendResync(args);
+    args.tunnel.resendPending();
+  };
   const offOk = mp.onResumeOk((e) => {
-    if (e.matchId === identity.matchId && e.peerOnline) sendResync(args);
+    if (e.matchId === identity.matchId) resumeKick();
   });
   const offRes = mp.onPeerResumed((e) => {
-    if (e.matchId === identity.matchId) sendResync(args);
+    if (e.matchId === identity.matchId) resumeKick();
   });
 
   const graceMs = args.graceMs ?? 3_600_000;
@@ -391,5 +406,6 @@ export function attachResume<State, Move>(
     cancelGrace();
     channel.removePeerListener(peerHandler);
     if (tunnel.onConfirmed) tunnel.onConfirmed = prevConfirmed;
+    if (tunnel.onProposed) tunnel.onProposed = prevProposed;
   };
 }

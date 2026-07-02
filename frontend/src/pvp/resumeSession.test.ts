@@ -457,6 +457,7 @@ test("peer.dropped starts a grace timer; peer return cancels it; expiry offers s
   // No latest yet → onGraceExpired receives null but still fires.
   const tunnel = {
     snapshot: () => ({ state: {}, nonce: 0n, latest: null, pending: null }),
+    resendPending: () => {},
     onConfirmed: undefined,
   } as never;
   let expired: unknown = "unset";
@@ -503,4 +504,68 @@ test("peer.dropped starts a grace timer; peer return cancels it; expiry offers s
     null,
     "grace expiry offered settle from the held checkpoint (null here)",
   );
+});
+
+// On resume, attachResume must BOTH announce the resync AND re-send any restored pending — the latter
+// is what the custom hooks (poker, tic-tac-toe/caro, battleship, blackjack) never did themselves, so a
+// move made just before a reload deadlocked the bot. Doing it in the shared handler covers every hook.
+test("resume.ok re-sends the pending and the resync (covers custom hooks)", async () => {
+  const { attachResume } = await import("./resumeSession");
+  const okSubs: ((e: { matchId: string }) => void)[] = [];
+  const fakeMp = {
+    onPeerDropped: () => () => {},
+    onResumeOk: (cb: never) => {
+      okSubs.push(cb as never);
+      return () => {};
+    },
+    onPeerResumed: () => () => {},
+  };
+  let sentPeer = 0;
+  let resent = 0;
+  const channel = {
+    addPeerListener() {},
+    removePeerListener() {},
+    sendPeer() {
+      sentPeer++;
+    },
+    transport: { send() {}, onFrame() {} },
+    onPeer() {},
+  };
+  const tunnel = {
+    snapshot: () => ({ state: {}, nonce: 3n, latest: null, pending: null }),
+    resendPending: () => {
+      resent++;
+    },
+    onConfirmed: undefined,
+  } as never;
+  attachResume({
+    mp: fakeMp as never,
+    channel: channel as never,
+    tunnel,
+    adapter: {
+      serializeState: (s: unknown) => s,
+      deserializeState: (j: unknown) => j,
+      onReconciled() {},
+    } as never,
+    identity: {
+      matchId: "m1",
+      tunnelId: "0xT",
+      role: "A",
+      game: "g",
+      opponentWallet: "0xb",
+      opponentPubkeyHex: "ab",
+    },
+  } as never);
+
+  okSubs.forEach((cb) => cb({ matchId: "m1" }));
+  assert.equal(sentPeer, 1, "resync announced on resume");
+  assert.equal(
+    resent,
+    1,
+    "restored pending re-sent on resume (the custom-hook fix)",
+  );
+
+  // A resume for a different match must not touch this session.
+  okSubs.forEach((cb) => cb({ matchId: "other" }));
+  assert.equal(resent, 1, "only this match's resume re-sends");
 });

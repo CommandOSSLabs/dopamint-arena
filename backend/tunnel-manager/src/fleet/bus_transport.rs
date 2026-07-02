@@ -14,7 +14,7 @@
 //! `RelayConnection`'s queue entry for the matchmaking path (the arena flow gets its match via the
 //! `BotPool` `Opened` push instead), so it stays test-exercised behind an item-level dead-code allow.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -141,17 +141,37 @@ impl Drop for BusRelayConnection {
 /// How long a parked bot waits for a dropped human to resume before ending the match. Bounded
 /// (unlike the FE's 1h settlement grace) because a parked bot still holds an in-flight fleet slot
 /// against the per-game cap — a human who never returns must free it. A browser reload reconnects in
-/// seconds, so this is generous headroom, not the expected wait.
-const PEER_RESUME_GRACE: Duration = Duration::from_secs(60);
+/// seconds; the headroom covers a slow reconnect / a user who tabs away briefly and returns. Past
+/// this the bot exits (and its in-memory per-match state is gone), so a later resume can't continue.
+const PEER_RESUME_GRACE: Duration = Duration::from_secs(300);
 
-/// Whether a relay payload is a game frame (`{"t":"frame",…}`) rather than a peer control message
-/// (settle half, hello, …). Only frames are safe to re-emit on resume: a MOVE/ACK is idempotent (the
-/// FE dedupes by nonce), whereas replaying a settle half could disturb the settlement handshake.
-fn is_frame_payload(payload: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(payload)
-        .ok()
-        .and_then(|v| v.get("t").and_then(|t| t.as_str()).map(|t| t == "frame"))
-        .unwrap_or(false)
+/// How many recent game frames the bot retains for a resume replay. On resume the human announces
+/// its highest co-signed nonce and the bot replays only the frames past it (see `replay_since`), so
+/// this just bounds memory; the human is at most ~2 nonces behind the bot's latest (one round-trip),
+/// plus debounce slack, so a handful is ample headroom.
+const RESUME_REPLAY_FRAMES: usize = 8;
+
+/// The nonce of a seat frame carried in a relay envelope (`{"t":"frame","kind":…,"data":"<inner>"}`),
+/// read from the inner frame's decimal `nonce`. `None` for non-frame payloads (settle halves, resync,
+/// hello, …) — which are never retained or replayed, so a settle half can't disturb the handshake.
+fn frame_nonce(payload: &str) -> Option<u64> {
+    let env: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if env.get("t").and_then(|t| t.as_str()) != Some("frame") {
+        return None;
+    }
+    let data = env.get("data").and_then(|d| d.as_str())?;
+    let inner: serde_json::Value = serde_json::from_str(data).ok()?;
+    inner.get("nonce").and_then(|n| n.as_str())?.parse().ok()
+}
+
+/// If `payload` is the human's resume `resync`, the highest co-signed nonce it announced. The bot
+/// intercepts this at the transport (never surfacing it to the play loop) to drive a targeted replay.
+fn resync_nonce(payload: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if v.get("t").and_then(|t| t.as_str()) != Some("resync") {
+        return None;
+    }
+    v.get("nonce").and_then(|n| n.as_str())?.parse().ok()
 }
 
 /// A [`RelayTransport`] over the in-process bus, scoped to one match. `send_payload` routes through
@@ -160,8 +180,9 @@ fn is_frame_payload(payload: &str) -> bool {
 ///
 /// Resume-aware (ADR-0028 lifecycle): a human's `peer.dropped` does NOT collapse the match — the bot
 /// parks (keeping itself and its per-match co-signing key alive) until they `peer.resumed` or the
-/// [`PEER_RESUME_GRACE`] elapses. On resume it re-emits its last frame so the reconnected human
-/// re-ACKs, so a reload mid-match continues instead of killing the game.
+/// [`PEER_RESUME_GRACE`] elapses. On resume the human sends a `resync` announcing its highest nonce;
+/// the bot replays exactly the frames past it (`replay_since`) so the human re-applies/re-ACKs the
+/// tail it missed and the match continues instead of stalling on a lost frame.
 pub struct BusRelayTransport {
     conn: Arc<BusRelayConnection>,
     match_id: String,
@@ -170,8 +191,9 @@ pub struct BusRelayTransport {
     cache: Mutex<HashMap<String, MatchRecord>>,
     /// False while the human seat is dropped (parked, awaiting resume); gates the grace timeout.
     peer_online: AtomicBool,
-    /// The last game frame we sent, re-emitted on resume so the reconnected human re-ACKs it.
-    last_frame: Mutex<Option<Vec<u8>>>,
+    /// Recent game frames as `(nonce, payload)`, oldest→newest, capped at [`RESUME_REPLAY_FRAMES`].
+    /// A resume replays those with `nonce >= K` (the human's announced checkpoint) so it catches up.
+    recent_frames: Mutex<VecDeque<(u64, Vec<u8>)>>,
     /// Grace to wait for a dropped human before ending the match; injectable so tests run fast.
     resume_grace: Duration,
 }
@@ -191,20 +213,29 @@ impl BusRelayTransport {
             match_id,
             cache: Mutex::new(HashMap::new()),
             peer_online: AtomicBool::new(true),
-            last_frame: Mutex::new(None),
+            recent_frames: Mutex::new(VecDeque::new()),
             resume_grace,
         }
     }
 
-    /// The human resumed on a (possibly new) connection. The relay rebinds their seat and evicts our
-    /// stale relay cache as SEPARATE ops, so don't depend on that ordering — drop our own routing
-    /// cache here so the resend (and every later send) re-reads the record's new `conn_a`, then
-    /// re-emit our last frame to that reconnected seat.
-    async fn on_peer_resumed(&self) {
+    /// Targeted resume replay: re-emit every retained frame with `nonce >= k` (the human's announced
+    /// checkpoint), oldest→newest, to the reconnected seat. `>= k` (not `> k`) is deliberate — the
+    /// frame AT k re-triggers the human's `onMove` re-ACK, which unblocks a bot still awaiting that
+    /// ACK; frames past k the human applies forward. Order matters: the FE applies each at exactly
+    /// `nonce+1`, so a newer frame ahead of an older one it depends on trips its "nonce gap" guard.
+    /// The routing cache is dropped first so the replay re-reads the record's rebound `conn_a`.
+    async fn replay_since(&self, k: u64) {
         let mut cache = self.cache.lock().await;
         cache.remove(&self.match_id);
-        let last = self.last_frame.lock().await.clone();
-        if let Some(frame) = last {
+        let frames: Vec<Vec<u8>> = self
+            .recent_frames
+            .lock()
+            .await
+            .iter()
+            .filter(|(nonce, _)| *nonce >= k)
+            .map(|(_, payload)| payload.clone())
+            .collect();
+        for frame in frames {
             if let Ok(payload) = String::from_utf8(frame) {
                 crate::mp::ws::relay_to_other(
                     &self.conn.state,
@@ -235,9 +266,15 @@ impl RelayTransport for BusRelayTransport {
             )
             .await;
         }
-        // Remember the last game frame so a resume can re-emit it to the reconnected human.
-        if is_frame_payload(&payload) {
-            *self.last_frame.lock().await = Some(payload.into_bytes());
+        // Retain recent game frames by nonce (bounded ring) so a resume can replay exactly the tail
+        // the human missed. Never cleared on inbound: the human's persisted checkpoint can lag the
+        // frame it just ACKed (write debounce), so a frame it "acknowledged" may still be needed.
+        if let Some(nonce) = frame_nonce(&payload) {
+            let mut ring = self.recent_frames.lock().await;
+            ring.push_back((nonce, payload.into_bytes()));
+            while ring.len() > RESUME_REPLAY_FRAMES {
+                ring.pop_front();
+            }
         }
         Ok(())
     }
@@ -257,6 +294,12 @@ impl RelayTransport for BusRelayTransport {
             match msg {
                 Some(ServerMsg::Relay { match_id, payload }) if match_id == self.match_id => {
                     tracing::debug!(match_id = %self.match_id, head = %&payload[..payload.len().min(120)], "bus rx (peer→bot)");
+                    // The human's resume `resync` is handled HERE, at the transport, and never reaches
+                    // the play loop: replay the frames past its announced nonce so it catches up.
+                    if let Some(k) = resync_nonce(&payload) {
+                        self.replay_since(k).await;
+                        continue;
+                    }
                     return Ok(Some(payload.into_bytes()));
                 }
                 // Other-match frames shouldn't arrive (one match per virtual conn); ignore.
@@ -267,10 +310,10 @@ impl RelayTransport for BusRelayTransport {
                     self.peer_online.store(false, Ordering::Relaxed);
                     continue;
                 }
-                // The human is back: re-route to their new conn and re-emit our last frame.
+                // The human is back: stop the grace countdown. The actual catch-up is driven by the
+                // `resync` it sends next (handled in the Relay arm above), not by a blind re-emit here.
                 Some(ServerMsg::PeerResumed { .. }) => {
                     self.peer_online.store(true, Ordering::Relaxed);
-                    self.on_peer_resumed().await;
                     continue;
                 }
                 // The bus connection itself closed → end the match channel.
@@ -433,46 +476,135 @@ mod tests {
         );
     }
 
-    // On `peer.resumed` the bot re-emits its last frame to the reconnected human so they re-ACK it —
-    // the piece that makes a mid-move reload continue instead of stalling on a lost ACK.
-    #[tokio::test]
-    async fn peer_resumed_resends_last_frame_to_the_reconnected_human() {
-        let state = AppState::in_memory_for_test();
+    // A seat frame in its relay envelope: `{"t":"frame","kind":…,"data":"<inner-json>"}`, inner nonce
+    // a decimal string (matches `relay_envelope::wrap` + `JsonFrameCodec`), so `frame_nonce` reads it.
+    fn frame_env(kind: &str, nonce: u64) -> String {
+        let inner = serde_json::json!({ "kind": kind, "nonce": nonce.to_string() }).to_string();
+        serde_json::json!({ "t": "frame", "kind": kind, "data": inner }).to_string()
+    }
+    fn resync_env(nonce: u64) -> String {
+        serde_json::json!({ "t": "resync", "nonce": nonce.to_string(), "hasPending": false })
+            .to_string()
+    }
+
+    // The parse helpers the replay targeting relies on.
+    #[test]
+    fn frame_and_resync_nonces_parse() {
+        assert_eq!(frame_nonce(&frame_env("move", 42)), Some(42));
+        assert_eq!(frame_nonce(&frame_env("ack", 7)), Some(7));
+        assert_eq!(frame_nonce(&resync_env(9)), None, "resync is not a frame");
+        assert_eq!(resync_nonce(&resync_env(9)), Some(9));
+        assert_eq!(
+            resync_nonce(&frame_env("move", 1)),
+            None,
+            "frame is not a resync"
+        );
+    }
+
+    async fn resume_match(
+        state: &SharedState,
+        match_id: &str,
+    ) -> (Arc<BusRelayConnection>, BusRelayTransport) {
         let bot = BusRelayConnection::register(state.clone());
         let human = BusRelayConnection::register(state.clone());
-        let match_id = "m-resume";
-        state
-            .mp
-            .put_match(
-                match_id,
-                MatchRecord {
-                    game: "blackjack".into(),
-                    seat_a: "0xhuman".into(),
-                    seat_b: "0xbot".into(),
-                    conn_a: human.conn_ref(),
-                    conn_b: bot.conn_ref(),
-                    tunnel_id: None,
-                    latest_checkpoint: None,
-                },
-            )
-            .await;
+        let record = MatchRecord {
+            game: "blackjack".into(),
+            seat_a: "0xhuman".into(),
+            seat_b: "0xbot".into(),
+            conn_a: human.conn_ref(),
+            conn_b: bot.conn_ref(),
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
         let transport = BusRelayTransport::new(bot.clone(), match_id.into());
+        state.mp.put_match(match_id, record).await;
+        (human, transport)
+    }
 
-        // Bot proposes a MOVE (captured as last_frame + routed to the human).
-        let move_env = r#"{"t":"frame","kind":"move","data":"{}"}"#;
-        transport
-            .send_payload(move_env.as_bytes().to_vec())
-            .await
-            .expect("send ok");
-        let first = human.recv_for_test().await.expect("human gets the move");
-        assert!(first.contains("move"), "original move routed to the human");
+    // The stall this whole change fixes: one round-trip advances the bot TWO nonces (ACK the human's
+    // move, then propose its own), so a reload mid-round-trip leaves the human two frames behind. On
+    // resume the human announces its highest nonce K in a `resync`; the bot replays exactly the frames
+    // with `nonce >= K`, oldest→newest — the ACK(K) (re-triggers the human's re-ACK) then MOVE(K+1) —
+    // and SKIPS anything below K. A single-frame or blind replay couldn't do this targeting.
+    #[tokio::test]
+    async fn resync_replays_frames_at_and_after_the_announced_nonce() {
+        let state = AppState::in_memory_for_test();
+        let match_id = "m-resync";
+        let (human, transport) = resume_match(&state, match_id).await;
 
-        // Human reloaded and resumed. Processing PeerResumed re-emits the MOVE, then recv_payload
-        // parks awaiting the human's re-ACK — so bound it with a timeout and assert the resend landed.
+        // Bot's recent frames span a stale one (n=0, already deep in the human's history) and this
+        // round-trip's tail: ACK(n=1) + MOVE(n=2).
+        for (kind, nonce) in [("move", 0u64), ("ack", 1), ("move", 2)] {
+            transport
+                .send_payload(frame_env(kind, nonce).into_bytes())
+                .await
+                .expect("send ok");
+            human
+                .recv_for_test()
+                .await
+                .expect("human gets the original");
+        }
+
+        // Human resumes at nonce 1 → announce it. The bot replays n>=1 (ACK 1, MOVE 2), not n=0.
         state
             .bus
             .deliver(
-                &bot.conn_ref(),
+                &transport.conn.conn_ref(),
+                ServerMsg::Relay {
+                    match_id: match_id.into(),
+                    payload: resync_env(1),
+                }
+                .to_text(),
+            )
+            .await;
+        let _ = tokio::time::timeout(Duration::from_millis(100), transport.recv_payload()).await;
+
+        let first = tokio::time::timeout(Duration::from_millis(200), human.recv_for_test())
+            .await
+            .expect("first replay delivered, no hang")
+            .expect("human gets a replayed frame");
+        let second = tokio::time::timeout(Duration::from_millis(200), human.recv_for_test())
+            .await
+            .expect("second replay delivered, no hang")
+            .expect("human gets a replayed frame");
+        assert!(
+            first.contains("ack") && !first.contains("move"),
+            "replayed the frame AT K (ACK n=1) first — it re-triggers the human's re-ACK: {first}",
+        );
+        assert!(
+            second.contains("move"),
+            "replayed the frame past K (MOVE n=2) second: {second}",
+        );
+        // The stale n=0 frame is NOT replayed: no third frame arrives.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), human.recv_for_test())
+                .await
+                .is_err(),
+            "targeting skipped the frame below K — only n>=1 replayed",
+        );
+    }
+
+    // Blind replay is gone: `peer.resumed` alone (no `resync`) re-emits NOTHING. Catch-up is driven
+    // solely by the human's announced nonce, so a bot can't spray stale frames on a bare resume.
+    #[tokio::test]
+    async fn peer_resumed_alone_does_not_replay() {
+        let state = AppState::in_memory_for_test();
+        let match_id = "m-bare-resume";
+        let (human, transport) = resume_match(&state, match_id).await;
+
+        transport
+            .send_payload(frame_env("move", 1).into_bytes())
+            .await
+            .expect("send ok");
+        human
+            .recv_for_test()
+            .await
+            .expect("human gets the original");
+
+        state
+            .bus
+            .deliver(
+                &transport.conn.conn_ref(),
                 ServerMsg::PeerResumed {
                     match_id: match_id.into(),
                     seat: "A".into(),
@@ -482,14 +614,11 @@ mod tests {
             )
             .await;
         let _ = tokio::time::timeout(Duration::from_millis(100), transport.recv_payload()).await;
-
-        let resent = tokio::time::timeout(Duration::from_millis(200), human.recv_for_test())
-            .await
-            .expect("resend delivered, no hang")
-            .expect("human gets the resent move");
         assert!(
-            resent.contains("relay") && resent.contains("move"),
-            "resume re-emitted the bot's last frame to the reconnected human: {resent}",
+            tokio::time::timeout(Duration::from_millis(100), human.recv_for_test())
+                .await
+                .is_err(),
+            "peer.resumed without a resync must not re-emit any frame",
         );
     }
 

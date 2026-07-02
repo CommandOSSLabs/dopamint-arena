@@ -45,6 +45,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # `FrameTransport`/`RelayTransport` error type the seam returns.
 fleet-core = { path = "../../rust/fleet/core" }
 tunnel-harness = { path = "../../rust/engine/tunnel-harness" }
+# Streaming transcript: the bot streams the co-signed transcript to S3 in chunks during play.
+# `transcript-store` = the S3 chunk store; `transcript-stream` = the recorder + bounded uploader.
+transcript-store = { path = "../transcript-store" }
+transcript-stream = { path = "../transcript-stream" }
 # Funded seat-B identities for on-demand arena bots (PR #124): the 1M-member pool, opened once at
 # startup, gives each bot a real on-chain address from `get_member_key`. Gated by WALLET_POOL_ID.
 wallet-pool = { path = "../../wallet-pool" }

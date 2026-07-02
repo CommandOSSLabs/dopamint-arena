@@ -28,6 +28,19 @@ export function createAlb(
     protocol: "HTTP",
     targetType: "ip",
     vpcId: args.vpcId,
+    // Pin a browser to the instance running its co-located bot. The `/v1/mp` WS handshake sets an
+    // `aff` cookie (ws.rs `mp_upgrade`), CloudFront forwards it to this TG (Managed-AllViewer), and
+    // app-cookie stickiness on `aff` keeps a reload/reconnect on the same target — so the resume
+    // `resync` reaches the in-process bot instead of hopping cross-instance (best-effort pub/sub).
+    // Codified here (not a console/CLI toggle) so a Pulumi apply can't reconcile it away. Same-origin
+    // (CloudFront proxies /v1/*), so the Lax cookie suffices; a cross-origin split would additionally
+    // need `SameSite=None; Secure` on the cookie and `credentials: "include"` on the FE.
+    stickiness: {
+      enabled: true,
+      type: "app_cookie",
+      cookieName: "aff",
+      cookieDuration: 86400, // seconds (app_cookie allows 1..604800); one day covers a play session.
+    },
     healthCheck: {
       path: "/health/ready",
       port: "8080",
