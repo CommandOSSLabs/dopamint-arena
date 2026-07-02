@@ -7,6 +7,7 @@ import { POKER_BUYIN } from "./constants";
 import { QuantumPokerTable, PHASE_LABEL } from "./QuantumPokerTable";
 import { SketchDefs } from "../sketch";
 import { PokerActionBar } from "./PokerActionBar";
+import { ForfeitDialog } from "@/pvp/ForfeitDialog";
 
 /** Heads-up Quantum Poker vs a real opponent over the relay: matchmaking + co-sign + on-chain stakes,
  *  in the shared hand-drawn skin. An in-game Auto toggle lets a persona bot make this seat's bets. */
@@ -20,6 +21,10 @@ export function QuantumPokerPvpWindow({
   // backstop when the hand can't reach a settle boundary (e.g. an unresponsive opponent), so Back always
   // gets the user out; their half settles via the grace path if it never made the wire.
   const [leaving, setLeaving] = useState(false);
+  // In-match Back asks first — forfeiting hands the whole pot to the opponent. Gated on being live
+  // so a natural terminal (settled) can't leave the dialog offering a now-stale Forfeit option.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isLiveMatch = g.status === "playing" || g.status === "settling";
   useEffect(() => {
     if (!leaving) return;
     if (g.status === "settled" || g.status === "error") {
@@ -166,6 +171,10 @@ export function QuantumPokerPvpWindow({
               type="button"
               className="sketch-btn"
               onClick={() => {
+                if (isLiveMatch) {
+                  setConfirmOpen(true);
+                  return;
+                }
                 setLeaving(true);
                 g.backOut(); // auto-fold out → settle this hand → leave when settled
               }}
@@ -200,22 +209,11 @@ export function QuantumPokerPvpWindow({
               🤖 Auto{g.auto ? " ON" : ""}
             </button>
           )}
-          {g.status === "playing" &&
-            !terminal &&
-            (g.endRequested ? (
-              <span className="sketch-eyebrow whitespace-nowrap">
-                ends after hand
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="sketch-btn"
-                onClick={g.requestSettle}
-                title="End the match after this hand and settle on-chain at the current stacks"
-              >
-                Settle
-              </button>
-            ))}
+          {g.status === "playing" && !terminal && g.endRequested && (
+            <span className="sketch-eyebrow whitespace-nowrap">
+              ends after hand
+            </span>
+          )}
         </div>
       </header>
 
@@ -260,6 +258,17 @@ export function QuantumPokerPvpWindow({
           </div>
         )}
       </footer>
+
+      <ForfeitDialog
+        open={isLiveMatch && confirmOpen}
+        stake={`${POKER_BUYIN} MTPS`}
+        onKeepPlaying={() => setConfirmOpen(false)}
+        onForfeit={() => {
+          setConfirmOpen(false);
+          setLeaving(true);
+          g.forfeit();
+        }}
+      />
     </div>
   );
 }

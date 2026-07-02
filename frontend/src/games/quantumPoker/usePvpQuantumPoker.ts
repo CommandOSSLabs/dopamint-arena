@@ -7,7 +7,10 @@ import {
 } from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
-import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
+import {
+  makeEndpoint,
+  type CoSignedSettlementWithRoot,
+} from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
@@ -57,7 +60,9 @@ import {
   readResumeRecord,
   listActiveTunnels,
   clearResumeRecord,
+  keypairFromSecretHex,
 } from "@/pvp/resume";
+import { buildForfeitHalf } from "@/pvp/forfeit";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 import {
   makeSeatBot,
@@ -146,10 +151,10 @@ export interface PvpQuantumPoker {
   bet: (amount: bigint) => void;
   /** True once this seat or the opponent asked to end early; the current hand finishes, then it settles. */
   endRequested: boolean;
-  /** End the match cooperatively after the current hand — stop dealing and settle at the current balances. */
-  requestSettle: () => void;
   /** Bail out now: auto-fold this seat's remaining action so the hand ends immediately, then settle. */
   backOut: () => void;
+  /** Concede the live match: forced-half close, opponent takes the whole pot. See `forfeit` below. */
+  forfeit: () => void;
   /** True when the persona bot is auto-playing this seat's bets. */
   auto: boolean;
   /** Toggle auto-play: when on, a persona bot makes this seat's betting moves. */
@@ -292,6 +297,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const autoBotRef = useRef<PokerSeatBot | null>(null);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
+  const waitPeerRef = useRef<ReturnType<typeof makeInbox> | null>(null);
+  // This match's per-game ephemeral signing key, rebuilt from `info.selfEphemeralSecretHex` in
+  // `activatePokerSession` (live and resumed alike) — `forfeit()` needs it to co-sign the forced half.
+  const ephRef = useRef<KeyPair | null>(null);
   const detachResumeRef = useRef<(() => void) | null>(null);
   // Early-end: once either seat asks to settle, stop dealing new hands and close at the next clean
   // hand boundary. `settlingRef` guards the single close; `settleNowRef` lets the button/peer
@@ -330,6 +339,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     setAutoState(autoRef.current);
     transcriptRef.current = null;
     channelRef.current = null;
+    waitPeerRef.current = null;
+    ephRef.current = null;
     endRef.current = false;
     foldOutRef.current = false;
     peerLeftRef.current = false;
@@ -445,17 +456,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     [propose],
   );
 
-  // End the match early by mutual agreement: stop dealing new hands and settle at the current
-  // (between-hands) balances. The current hand finishes first — we never settle mid-pot. Tell the
-  // opponent so their client stops + settles too; if we're already parked at hand_over, settle now.
-  const requestSettle = useCallback(() => {
-    if (endRef.current || settlingRef.current) return;
-    endRef.current = true;
-    setEndRequested(true);
-    channelRef.current?.sendPeer({ t: "endMatch" });
-    if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.();
-  }, []);
-
   // Bail out on Back: auto-fold this seat's action so the hand ends now, then publish our signed
   // settlement half and leave — the STAYING seat collects our half and submits the close, so we never
   // block on the on-chain settle (~one fold round-trip, then out). The window exits once we're settled.
@@ -471,6 +471,88 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       settleNowRef.current?.(true);
     else maybeAutoPropose();
   }, [maybeAutoPropose]);
+
+  // Forfeit the live match: concede the whole pot to the opponent. Builds the forced (0,total) half
+  // (`buildForfeitHalf`), sends a `forfeit` peer frame (NOT `settleHalf`, so a natural-terminal
+  // co-sign never mistakes it for the ordinary close), awaits the bot's co-signed `settleHalf` reply,
+  // combines, and submits exactly like the natural close. Off a live tunnel it falls back to the
+  // ordinary bail-out (`backOut`); a failed submit resets fully instead of retrying `backOut`, which
+  // would no-op once `settlingRef` is already set.
+  const forfeit = useCallback(() => {
+    const dt = dtRef.current;
+    const channel = channelRef.current;
+    const transcript = transcriptRef.current;
+    const waitPeer = waitPeerRef.current;
+    const eph = ephRef.current;
+    if (
+      !dt ||
+      !channel ||
+      !transcript ||
+      !waitPeer ||
+      !eph ||
+      !account ||
+      settlingRef.current ||
+      (status !== "playing" && status !== "settling")
+    ) {
+      backOut();
+      return;
+    }
+    const wallet = account.address;
+    const reads = client as unknown as Parameters<typeof readCreatedAt>[0];
+    const signExec = async (
+      tx: Parameters<typeof signAndExecute>[0]["transaction"],
+    ) => {
+      const r = await signAndExecute({ transaction: tx });
+      return { digest: r.digest };
+    };
+    const sponsoredSignExec = sponsored.signExec;
+    settlingRef.current = true;
+    setStatus("settling");
+    void (async () => {
+      try {
+        const { a, b } = dt.protocol.balances(dt.state);
+        const total = a + b;
+        const createdAt = await readCreatedAt(reads, dt.tunnelId);
+        const root = transcript.root();
+        const { settlement, sig } = buildForfeitHalf({
+          tunnelId: dt.tunnelId,
+          total,
+          wallet,
+          eph,
+          timestamp: createdAt,
+          transcriptRoot: root,
+        });
+        channel.sendPeer({
+          t: "forfeit",
+          partyABalance: settlement.partyABalance.toString(),
+          partyBBalance: settlement.partyBBalance.toString(),
+          finalNonce: settlement.finalNonce.toString(),
+          timestamp: settlement.timestamp.toString(),
+          transcriptRoot: toHex(root),
+          sig: toHex(sig),
+        });
+        const other = await waitPeer<{ sig: string }>("settleHalf");
+        const co = dt.combineSettlementWithRoot(
+          settlement,
+          sig,
+          fromHex(other.sig),
+        );
+        await submitCombinedSettlement(
+          co,
+          dt.tunnelId,
+          transcript,
+          getControlPlaneClient(),
+          signExec,
+          sponsoredSignExec,
+        );
+        clearResumeRecord(dt.tunnelId);
+        setStatus("settled");
+      } catch (e) {
+        console.warn("[quantum-poker] forfeit submit failed; resetting", e);
+        reset();
+      }
+    })();
+  }, [account, client, signAndExecute, sponsored, status, backOut, reset]);
 
   // Wire the per-move loop, settle triggers, and resume onto a freshly built/rebuilt tunnel.
   // Shared by the live (findMatch) and cold-load (resume) paths. The readiness handshake and the
@@ -503,6 +585,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const proto = new QuantumPokerProtocol(HAND_CAP, QUANTUM_POKER_ANTE);
       const transcript = new Transcript(dt.tunnelId);
       transcriptRef.current = transcript;
+      waitPeerRef.current = waitPeer;
+      ephRef.current = keypairFromSecretHex(info.selfEphemeralSecretHex);
 
       dtRef.current = dt;
       driverRef.current = new QuantumPokerSeatDriver(info.role);
@@ -1185,8 +1269,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     call,
     bet,
     endRequested,
-    requestSettle,
     backOut,
+    forfeit,
     auto,
     setAuto,
     reset,
@@ -1249,6 +1333,27 @@ async function settle(
   // blocks until the close is on-chain. A recycle must wait for this before opening a fresh tunnel —
   // the close returns the staked MTPS to the wallet and the next open consumes wallet coins, so
   // running them concurrently equivocates those coins ("object … unavailable for consumption").
+  await submitCombinedSettlement(
+    co,
+    tunnelId,
+    transcript,
+    cp,
+    signExec,
+    sponsoredSignExec,
+  );
+}
+
+/** Submit a combined settlement via the backend `/settle` (anchors the root + archives the
+ *  transcript to Walrus), falling back to a wallet-signed `close_cooperative_with_root` when the
+ *  backend is unreachable. Shared by the natural close (`settle`) and `forfeit`. */
+async function submitCombinedSettlement(
+  co: CoSignedSettlementWithRoot,
+  tunnelId: string,
+  transcript: Transcript,
+  cp: ReturnType<typeof getControlPlaneClient>,
+  signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+): Promise<void> {
   try {
     await cp.settle(
       tunnelId,
