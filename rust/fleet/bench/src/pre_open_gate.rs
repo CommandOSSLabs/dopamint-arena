@@ -7,12 +7,13 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 
 pub(crate) struct PreOpenGate {
     opened: AtomicU64,
     target: u64,
     released_tx: watch::Sender<bool>,
+    progress: Notify,
 }
 
 impl PreOpenGate {
@@ -24,12 +25,14 @@ impl PreOpenGate {
             opened: AtomicU64::new(0),
             target,
             released_tx,
+            progress: Notify::new(),
         })
     }
 
     /// Record one opened tunnel and release the gate once `target` is reached.
     pub(crate) fn mark_opened(&self) -> u64 {
         let n = self.opened.fetch_add(1, Ordering::AcqRel) + 1;
+        self.progress.notify_waiters();
         if n >= self.target {
             let _ = self.released_tx.send_replace(true);
         }
@@ -42,6 +45,12 @@ impl PreOpenGate {
 
     pub(crate) fn is_released(&self) -> bool {
         *self.released_tx.borrow()
+    }
+
+    /// Resolves the next time any tunnel calls `mark_opened`. Used by the swarm
+    /// wave loop to re-check its cohort condition without polling.
+    pub(crate) async fn opened_progress(&self) {
+        self.progress.notified().await;
     }
 
     /// Park until the gate releases. Returns immediately after release.
@@ -82,6 +91,22 @@ mod tests {
         assert!(!parked.is_finished());
         gate.mark_opened();
         parked.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mark_opened_wakes_progress_waiters() {
+        let gate = PreOpenGate::new(3);
+        let g = gate.clone();
+        let woke = tokio::spawn(async move {
+            g.opened_progress().await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!woke.is_finished());
+        gate.mark_opened();
+        tokio::time::timeout(std::time::Duration::from_secs(1), woke)
+            .await
+            .expect("progress waiter must wake on mark_opened")
+            .unwrap();
     }
 
     #[tokio::test]
