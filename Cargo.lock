@@ -3107,6 +3107,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-superx"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures-util",
+ "getrandom 0.2.17",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sui-tunnel-anchor",
+ "sysinfo",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tracing",
+ "tracing-subscriber",
+ "tunnel-blackjack",
+ "tunnel-core",
+ "tunnel-harness",
+ "tunnel-payments",
+ "tunnel-telemetry",
+]
+
+[[package]]
 name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
