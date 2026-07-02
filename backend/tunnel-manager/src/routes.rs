@@ -921,6 +921,10 @@ pub(crate) fn settled_event(
     crate::state::TunnelEvent {
         tunnel_id: tunnel_id.to_string(),
         kind: crate::state::TunnelEventKind::Settled,
+        party_a: None,
+        party_b: None,
+        funder: None,
+        game: None,
         party_a_balance: Some(party_a_balance),
         party_b_balance: Some(party_b_balance),
         transcript_root: non_empty(transcript_root_hex),
