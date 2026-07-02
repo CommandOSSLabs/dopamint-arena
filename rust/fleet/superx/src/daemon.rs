@@ -12,17 +12,20 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Args;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::merge::merge;
 use crate::proto::SpawnMode;
-use crate::proto::{decode_line, encode_line, Request, Response, RunSummary};
+use crate::proto::{
+    decode_line, encode_line, Request, Response, RunAggregateWire, RunEvent, RunSummary,
+};
 use crate::registry::{Registry, RunRecord, RunState};
 use crate::runconfig::RunConfig;
 use crate::sink::{serve_sink, Sink};
@@ -233,13 +236,30 @@ async fn serve_connection(stream: UnixStream, ctx: Arc<DaemonContext>) -> std::i
         if line.trim().is_empty() {
             continue;
         }
-        let response = match decode_line::<Request>(&line) {
-            Ok(request) => handle_request(request, &ctx).await,
-            Err(err) => Response::Error(format!("malformed request: {err}")),
-        };
-        conn.get_mut()
-            .write_all(encode_line(&response).as_bytes())
-            .await?;
+        // `Watch` holds the connection open, streaming many events; every other
+        // request is a single request/response exchange.
+        match decode_line::<Request>(&line) {
+            Ok(Request::Watch { run_id }) => {
+                let mut events = spawn_watch(run_id, ctx.clone());
+                while let Some(event) = events.recv().await {
+                    conn.get_mut()
+                        .write_all(encode_line(&event).as_bytes())
+                        .await?;
+                }
+            }
+            Ok(request) => {
+                let response = handle_request(request, &ctx).await;
+                conn.get_mut()
+                    .write_all(encode_line(&response).as_bytes())
+                    .await?;
+            }
+            Err(err) => {
+                let response = Response::Error(format!("malformed request: {err}"));
+                conn.get_mut()
+                    .write_all(encode_line(&response).as_bytes())
+                    .await?;
+            }
+        }
     }
 }
 
@@ -276,11 +296,24 @@ async fn serve_ws_connection(
                 if text.trim().is_empty() {
                     continue;
                 }
-                let response = match decode_line::<Request>(&text) {
-                    Ok(request) => handle_request(request, &ctx).await,
-                    Err(err) => Response::Error(format!("malformed request: {err}")),
-                };
-                ws.send(Message::Text(encode_line(&response))).await?;
+                // `Watch` streams a run's live events until it ends; other requests
+                // are single request/response exchanges.
+                match decode_line::<Request>(&text) {
+                    Ok(Request::Watch { run_id }) => {
+                        let mut events = spawn_watch(run_id, ctx.clone());
+                        while let Some(event) = events.recv().await {
+                            ws.send(Message::Text(encode_line(&event))).await?;
+                        }
+                    }
+                    Ok(request) => {
+                        let response = handle_request(request, &ctx).await;
+                        ws.send(Message::Text(encode_line(&response))).await?;
+                    }
+                    Err(err) => {
+                        let response = Response::Error(format!("malformed request: {err}"));
+                        ws.send(Message::Text(encode_line(&response))).await?;
+                    }
+                }
             }
             Message::Close(_) => return Ok(()),
             // Ping is auto-ponged by tungstenite; other frames carry no request.
@@ -346,6 +379,107 @@ fn summarize_run(record: &RunRecord) -> RunSummary {
         swarms: record.cfg.swarms,
         aggregate: record.aggregate.as_ref().map(|agg| agg.to_wire()),
     }
+}
+
+/// Polling cadence for a `Watch` stream: how often the daemon samples the run's
+/// state + live aggregate and emits an event. Small enough to feel live, large
+/// enough not to spin.
+const WATCH_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Depth of the per-watch event channel. Events are tiny and emitted on a slow
+/// cadence, so a few slots absorb transient transport-write latency without the
+/// producer ever blocking the run.
+const WATCH_CHANNEL_DEPTH: usize = 16;
+
+/// Spawn a background task that streams one run's live monitoring into a channel,
+/// returning the receiver the transport drains onto the client. The task samples
+/// the registry (lifecycle) and the sink (live aggregate) every [`WATCH_INTERVAL`],
+/// emitting a `State` event on each transition, an `Aggregate` event per tick, and
+/// a terminal `Ended` once the run finishes (or immediately if it is unknown). It
+/// exits when the run ends or the receiver is dropped (client hung up), so no
+/// watch task outlives its connection.
+fn spawn_watch(run_id: String, ctx: Arc<DaemonContext>) -> mpsc::Receiver<Response> {
+    let (tx, rx) = mpsc::channel(WATCH_CHANNEL_DEPTH);
+    tokio::spawn(async move { watch_loop(run_id, ctx, tx).await });
+    rx
+}
+
+/// Body of a watch stream: emit lifecycle transitions and live aggregates until
+/// the run reaches a terminal state, closing with `Ended`. A `send` failure means
+/// the client disconnected, which ends the loop.
+async fn watch_loop(run_id: String, ctx: Arc<DaemonContext>, tx: mpsc::Sender<Response>) {
+    let mut ticker = tokio::time::interval(WATCH_INTERVAL);
+    let mut last_state: Option<RunState> = None;
+    loop {
+        ticker.tick().await;
+        let Some(record) = ctx.registry.get(&run_id) else {
+            // The run vanished (or was never known): report and end the stream.
+            let _ = tx
+                .send(Response::Error(format!("unknown run: {run_id}")))
+                .await;
+            let _ = tx
+                .send(Response::Event(RunEvent::Ended {
+                    run_id: run_id.clone(),
+                }))
+                .await;
+            return;
+        };
+
+        if last_state != Some(record.state) {
+            last_state = Some(record.state);
+            let event = Response::Event(RunEvent::State {
+                run_id: run_id.clone(),
+                state: record.state.as_str().to_string(),
+            });
+            if tx.send(event).await.is_err() {
+                return; // client hung up
+            }
+        }
+
+        if let Some(aggregate) = watch_aggregate(&ctx, &record) {
+            if tx
+                .send(Response::Event(RunEvent::Aggregate(aggregate)))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+
+        if matches!(record.state, RunState::Finished | RunState::Failed) {
+            let _ = tx
+                .send(Response::Event(RunEvent::Ended {
+                    run_id: run_id.clone(),
+                }))
+                .await;
+            return;
+        }
+    }
+}
+
+/// The aggregate a watch tick reports: the authoritative merged rollup once the
+/// run has finished (attached to the record), else a best-effort projection of
+/// the sink's live [`crate::sink::LiveAggregate`] while the run is still in
+/// flight. `None` before any live telemetry exists (early ticks, no sink).
+fn watch_aggregate(ctx: &Arc<DaemonContext>, record: &RunRecord) -> Option<RunAggregateWire> {
+    if let Some(aggregate) = &record.aggregate {
+        return Some(aggregate.to_wire());
+    }
+    let live = ctx.sink.as_ref()?.snapshot(&record.run_id)?;
+    // Only `moves` and `tunnels_settled` are known in flight; the remaining
+    // rollup fields land with the merged aggregate at completion.
+    Some(RunAggregateWire {
+        swarms: record.cfg.swarms,
+        tunnels_opened: 0,
+        tunnels_settled: live.tunnels_settled,
+        tunnels_failed: 0,
+        tunnels_aborted: 0,
+        moves: live.moves,
+        wall_ms: 0,
+        wall_move_tps: 0.0,
+        cpu_cores_avg: 0.0,
+        rss_peak_bytes: 0,
+    })
 }
 
 /// Records each swarm's pid into the registry as it spawns, and flips the run to

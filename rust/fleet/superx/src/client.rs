@@ -18,7 +18,9 @@ use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::daemon::default_socket;
-use crate::proto::{decode_line, encode_line, CohortWire, Request, Response, SpawnMode, StartRun};
+use crate::proto::{
+    decode_line, encode_line, CohortWire, Request, Response, RunEvent, SpawnMode, StartRun,
+};
 
 /// `fleet-superx start`: describe a run and hand it to the daemon.
 #[derive(Args)]
@@ -359,10 +361,124 @@ pub fn ls_main(args: LsArgs) -> i32 {
     dispatch(target, Request::List)
 }
 
-/// `fleet-superx watch` entry point (streaming monitoring lands in Phase C).
-pub fn watch_main(_args: WatchArgs) -> i32 {
-    eprintln!("watch is not implemented yet");
-    2
+/// `fleet-superx watch` entry point: stream a run's live monitoring, printing a
+/// line per event until the terminal `Ended`. Returns 0 on a clean end, 1 on a
+/// transport failure or an `Error` response from the daemon.
+pub fn watch_main(args: WatchArgs) -> i32 {
+    let target = resolve_connect(args.connect.as_deref());
+    let req = Request::Watch {
+        run_id: args.run_id,
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("fleet-superx watch: build runtime: {err}");
+            return 1;
+        }
+    };
+    match runtime.block_on(watch_stream(target, req)) {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("fleet-superx: {err}");
+            1
+        }
+    }
+}
+
+/// Stream watch events from `target`, printing each until `Ended`. Shared entry
+/// for both transports so Unix and WebSocket clients render identically.
+async fn watch_stream(target: Connect, req: Request) -> Result<(), String> {
+    match target {
+        Connect::Unix(path) => watch_unix(&path, req).await,
+        Connect::Ws(url) => watch_ws(&url, req).await,
+    }
+}
+
+/// Stream watch events over a Unix socket until `Ended` or an error.
+async fn watch_unix(path: &Path, req: Request) -> Result<(), String> {
+    let stream = UnixStream::connect(path)
+        .await
+        .map_err(|e| format!("connect {}: {e}", path.display()))?;
+    let mut conn = BufReader::new(stream);
+    conn.get_mut()
+        .write_all(encode_line(&req).as_bytes())
+        .await
+        .map_err(|e| format!("send watch: {e}"))?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = conn
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("read watch event: {e}"))?;
+        if read == 0 {
+            return Err("daemon closed the watch stream before it ended".to_string());
+        }
+        let response = decode_line::<Response>(&line).map_err(|e| format!("decode event: {e}"))?;
+        if render_watch_event(&response)? {
+            return Ok(());
+        }
+    }
+}
+
+/// Stream watch events over WebSocket until `Ended` or an error.
+async fn watch_ws(url: &str, req: Request) -> Result<(), String> {
+    let (mut ws, _upgrade) = tokio_tungstenite::connect_async(url)
+        .await
+        .map_err(|e| format!("connect {url}: {e}"))?;
+    ws.send(Message::Text(encode_line(&req)))
+        .await
+        .map_err(|e| format!("send watch: {e}"))?;
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Text(text))) => {
+                let response =
+                    decode_line::<Response>(&text).map_err(|e| format!("decode event: {e}"))?;
+                if render_watch_event(&response)? {
+                    return Ok(());
+                }
+            }
+            Some(Ok(Message::Close(_))) | None => {
+                return Err("daemon closed the watch stream before it ended".to_string());
+            }
+            // Skip control frames (ping/pong auto-handled) and non-text payloads.
+            Some(Ok(_)) => continue,
+            Some(Err(e)) => return Err(format!("ws transport: {e}")),
+        }
+    }
+}
+
+/// Render one streamed watch event. Returns `Ok(true)` on the terminal `Ended`
+/// (stop streaming), `Ok(false)` to keep streaming, or `Err` on an `Error`
+/// response from the daemon.
+fn render_watch_event(response: &Response) -> Result<bool, String> {
+    match response {
+        Response::Event(RunEvent::State { run_id, state }) => {
+            println!("[{run_id}] {state}");
+            Ok(false)
+        }
+        Response::Event(RunEvent::Aggregate(agg)) => {
+            println!(
+                "  moves={} settled={} opened={} tps={:.1}",
+                agg.moves, agg.tunnels_settled, agg.tunnels_opened, agg.wall_move_tps
+            );
+            Ok(false)
+        }
+        Response::Event(RunEvent::Ended { run_id }) => {
+            println!("[{run_id}] ended");
+            Ok(true)
+        }
+        Response::Error(message) => Err(message.clone()),
+        other => {
+            // A non-event response on a watch stream is unexpected but harmless;
+            // surface it rather than dropping it.
+            println!("{other:?}");
+            Ok(false)
+        }
+    }
 }
 
 #[cfg(test)]
