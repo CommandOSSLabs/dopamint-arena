@@ -371,7 +371,6 @@ class PvpSession {
       void settle(
         dt,
         info.role,
-        channel,
         waitPeer,
         reads,
         signExec as never,
@@ -890,7 +889,6 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
 async function settle(
   dt: BattleshipTunnel,
   role: Role,
-  _channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],

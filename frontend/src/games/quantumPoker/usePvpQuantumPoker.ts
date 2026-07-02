@@ -521,7 +521,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         void settle(
           dt,
           info.role,
-          channel,
           waitPeer,
           reads,
           signExec,
@@ -1220,7 +1219,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 async function settle(
   dt: PokerTunnel,
   role: Role,
-  _channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],

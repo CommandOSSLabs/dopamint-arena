@@ -440,7 +440,6 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       void settle(
         dt,
         info.role,
-        channel,
         waitPeer,
         reads,
         signExec as never,
@@ -945,7 +944,6 @@ export function createPvpMatchHook<
 async function settle<State, Move>(
   dt: DistributedTunnel<State, Move>,
   role: Role,
-  _channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
