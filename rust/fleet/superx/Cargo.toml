@@ -32,5 +32,7 @@ tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 sysinfo = { workspace = true }
 getrandom.workspace = true
+# SIGTERM propagation to swarm subprocesses for graceful stop (Task B9).
+libc = "0.2"
 
 [dev-dependencies]

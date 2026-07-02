@@ -19,7 +19,7 @@ pub mod drain;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::swarm::pipeline::{SwarmParams, run_swarm_pipeline};
+use crate::swarm::pipeline::{SwarmParams, run_swarm_pipeline_with};
 use crate::swarm::report::{build_report, render_human};
 
 /// Sampling cadence (ms) for the CPU/RSS resource sampler wrapping a swarm run.
@@ -47,8 +47,16 @@ pub fn run_swarm_main(args: cli::RunSwarmArgs) -> i32 {
     let stop = Arc::new(AtomicBool::new(false));
     drain::install_graceful_stop(Arc::clone(&stop));
 
+    // Once the swarm crosses the open barrier into play, announce readiness to a
+    // supervising daemon on stderr (stdout carries only the JSON report). The
+    // stop handler is already installed (the call above blocks until it is), so a
+    // stop after this point drains open tunnels gracefully.
+    let on_playing: crate::swarm::pipeline::OnPlaying = Arc::new(|| {
+        eprintln!("{}", crate::spawn::SWARM_READY_MARKER);
+    });
+
     let sampler = resources::start(RESOURCE_SAMPLE_INTERVAL_MS, params.workers);
-    let outcome = run_swarm_pipeline(params, stop);
+    let outcome = run_swarm_pipeline_with(params, stop, on_playing);
     let resource_summary = sampler.stop();
 
     let report = build_report(&report_identity, &outcome, &resource_summary);

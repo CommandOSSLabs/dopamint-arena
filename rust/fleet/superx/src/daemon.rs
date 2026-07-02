@@ -25,7 +25,10 @@ use crate::proto::SpawnMode;
 use crate::proto::{decode_line, encode_line, Request, Response, RunSummary};
 use crate::registry::{Registry, RunRecord, RunState};
 use crate::runconfig::RunConfig;
-use crate::spawn::{run_replicate_or_distribute, run_sequential, self_exe, SwarmError};
+use crate::spawn::{
+    run_replicate_or_distribute_observed, run_sequential_observed, self_exe, signal_swarm,
+    SwarmError, SwarmProgressObserver,
+};
 use crate::swarm::report::SwarmReport;
 
 /// Default control socket: `$XDG_RUNTIME_DIR/fleet-superx.sock` when the runtime
@@ -266,10 +269,18 @@ pub async fn handle_request(request: Request, ctx: &Arc<DaemonContext>) -> Respo
             Response::Runs(runs)
         }
         Request::Stop { run_id } => match ctx.registry.get(&run_id) {
-            Some(_) => {
-                // Full graceful drain (signalling swarm pids) lands in Task B9;
-                // here we record the intent so `List` reflects a stopping run.
+            Some(record) => {
+                // Mark the run draining, then SIGTERM each swarm so it finishes
+                // its current phase and settles (no half-open tunnels). The
+                // detached `execute_run` task then collects the drained reports
+                // and lands the run in Finished. A pid that already exited yields
+                // ESRCH, which `signal_swarm` treats as success.
                 ctx.registry.set_state(&run_id, RunState::Stopping);
+                for pid in record.swarm_pids {
+                    if let Err(err) = signal_swarm(pid) {
+                        eprintln!("fleet-superx daemon: stop {run_id}: signal {pid}: {err}");
+                    }
+                }
                 Response::Stopped
             }
             None => Response::Error(format!("unknown run: {run_id}")),
@@ -291,17 +302,58 @@ fn summarize_run(record: &RunRecord) -> RunSummary {
     }
 }
 
-/// Drive one run's lifecycle: mark it `Running`, spawn the mode-aware swarm set,
-/// collect every report, merge into the fleet aggregate, and land on `Finished`
-/// (all swarms reported) or `Failed` (any swarm errored). Runs on a detached
-/// task; failures are recorded in the registry, never propagated.
+/// Records each swarm's pid into the registry as it spawns, and flips the run to
+/// `Running` only once a swarm reports it has begun play (its graceful-stop
+/// handler installed). Announcing `Running` on readiness — not on spawn —
+/// guarantees a `Stop` observed as `running` reaches a swarm that will drain
+/// gracefully, with its pid already recorded to signal.
+struct RegistryProgressObserver {
+    registry: Arc<Registry>,
+    run_id: String,
+    pids: std::sync::Mutex<Vec<u32>>,
+}
+
+impl RegistryProgressObserver {
+    fn new(registry: Arc<Registry>, run_id: String) -> Self {
+        Self {
+            registry,
+            run_id,
+            pids: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl SwarmProgressObserver for RegistryProgressObserver {
+    fn swarm_spawned(&self, _swarm_index: u64, pid: u32) {
+        let pids = {
+            let mut guard = self.pids.lock().expect("pid observer lock poisoned");
+            guard.push(pid);
+            guard.clone()
+        };
+        // Record the pid so a stop can signal it; the run is still `Starting`
+        // until the swarm confirms readiness below.
+        self.registry.set_pids(&self.run_id, pids);
+    }
+
+    fn swarm_ready(&self, _swarm_index: u64) {
+        // The swarm is playing with its stop handler installed (idempotent after
+        // the first swarm).
+        self.registry.set_state(&self.run_id, RunState::Running);
+    }
+}
+
+/// Drive one run's lifecycle: spawn the mode-aware swarm set (flipping the run to
+/// `Running` as its swarms come up and recording their pids for `stop`), collect
+/// every report, merge into the fleet aggregate, and land on `Finished` (all
+/// swarms reported) or `Failed` (any swarm errored). Runs on a detached task;
+/// failures are recorded in the registry, never propagated.
 async fn execute_run(ctx: Arc<DaemonContext>, cfg: RunConfig) {
-    ctx.registry.set_state(&cfg.run_id, RunState::Running);
     let started = Instant::now();
+    let observer = RegistryProgressObserver::new(ctx.registry.clone(), cfg.run_id.clone());
     let results = match cfg.mode {
-        SpawnMode::Sequential => run_sequential(&ctx.self_exe, &cfg).await,
+        SpawnMode::Sequential => run_sequential_observed(&ctx.self_exe, &cfg, &observer).await,
         SpawnMode::Replicate | SpawnMode::Distribute => {
-            run_replicate_or_distribute(&ctx.self_exe, &cfg).await
+            run_replicate_or_distribute_observed(&ctx.self_exe, &cfg, &observer).await
         }
     };
     let wall_ms = started.elapsed().as_millis();

@@ -242,10 +242,32 @@ fn recorder_for<M>(mode: SettlementMode) -> SwarmRecorder<M> {
     }
 }
 
+/// Callback fired once the swarm crosses the open barrier and play begins. A
+/// supervisor uses it to learn the swarm is genuinely running (open complete,
+/// its graceful-stop handler installed) so a later stop drains real open tunnels
+/// rather than racing the swarm's startup.
+pub type OnPlaying = Arc<dyn Fn() + Send + Sync>;
+
+/// A no-op [`OnPlaying`] for callers that do not observe the play transition.
+fn no_playing_hook() -> OnPlaying {
+    Arc::new(|| {})
+}
+
 /// Build the tokio runtime and run the staged pipeline to a [`SwarmOutcome`].
 /// `stop` is the SIGTERM-driven graceful flag: setting it requests a cooperative
 /// stop that drains every tunnel to its close boundary and settles.
 pub fn run_swarm_pipeline(params: SwarmParams, stop: Arc<AtomicBool>) -> SwarmOutcome {
+    run_swarm_pipeline_with(params, stop, no_playing_hook())
+}
+
+/// Like [`run_swarm_pipeline`], but invokes `on_playing` the instant the swarm
+/// finishes opening and begins play. Used by the `run-swarm` worker to announce
+/// readiness to the daemon only once a graceful stop would drain open tunnels.
+pub fn run_swarm_pipeline_with(
+    params: SwarmParams,
+    stop: Arc<AtomicBool>,
+    on_playing: OnPlaying,
+) -> SwarmOutcome {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(params.workers.max(1))
@@ -256,24 +278,33 @@ pub fn run_swarm_pipeline(params: SwarmParams, stop: Arc<AtomicBool>) -> SwarmOu
         .thread_stack_size(16 * 1024 * 1024)
         .build()
         .expect("fleet superx runtime");
-    let outcome = runtime.block_on(run_pipeline(params, stop));
+    let outcome = runtime.block_on(run_pipeline(params, stop, on_playing));
     // Give the spawned drain / heartbeat tasks a bounded window to finish before
     // the runtime cancels them.
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_GRACE);
     outcome
 }
 
-async fn run_pipeline(params: SwarmParams, stop: Arc<AtomicBool>) -> SwarmOutcome {
+async fn run_pipeline(
+    params: SwarmParams,
+    stop: Arc<AtomicBool>,
+    on_playing: OnPlaying,
+) -> SwarmOutcome {
     match params.protocol {
         ProtocolKind::Payments => {
             let max_transfers = params.moves.unwrap_or(DEFAULT_PAYMENTS_TRANSFERS);
-            run_generic(params, stop, Payments { max_transfers }).await
+            run_generic(params, stop, on_playing, Payments { max_transfers }).await
         }
-        ProtocolKind::BlackjackV2 => run_generic(params, stop, BlackjackV2).await,
+        ProtocolKind::BlackjackV2 => run_generic(params, stop, on_playing, BlackjackV2).await,
     }
 }
 
-async fn run_generic<P>(params: SwarmParams, stop: Arc<AtomicBool>, protocol: P) -> SwarmOutcome
+async fn run_generic<P>(
+    params: SwarmParams,
+    stop: Arc<AtomicBool>,
+    on_playing: OnPlaying,
+    protocol: P,
+) -> SwarmOutcome
 where
     P: Protocol + Clone + Send + 'static,
     P::State: Send + Sync,
@@ -436,6 +467,10 @@ where
     }
     let open_done = Instant::now();
     let open_ms = open_done.duration_since(started).as_millis().max(1);
+
+    // Open complete, play begins: signal readiness so a supervisor's later stop
+    // drains genuinely-open tunnels instead of racing this swarm's startup.
+    on_playing();
 
     // Play + settle barrier. The drain loop settles pairs in waves once every
     // seat has deposited; begin it now so it is ready the instant play completes.
