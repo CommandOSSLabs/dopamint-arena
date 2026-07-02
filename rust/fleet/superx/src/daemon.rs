@@ -576,7 +576,33 @@ impl SwarmProgressObserver for RegistryProgressObserver {
 /// every report, merge into the fleet aggregate, and land on `Finished` (all
 /// swarms reported) or `Failed` (any swarm errored). Runs on a detached task;
 /// failures are recorded in the registry, never propagated.
+/// Returns a run's checked-out account/gas slots to the pool when dropped — on
+/// normal completion *or* a panic during the run — so an abnormal exit can never
+/// leak slots for the daemon's lifetime. A no-op for runs that hold none
+/// (memory anchor, or no `--accounts-file`).
+struct SlotReleaseGuard {
+    pool: Option<Arc<AccountPool>>,
+    slots: Vec<crate::pool::SuiAccountSlot>,
+}
+
+impl Drop for SlotReleaseGuard {
+    fn drop(&mut self) {
+        if self.slots.is_empty() {
+            return;
+        }
+        if let Some(pool) = &self.pool {
+            pool.release(std::mem::take(&mut self.slots));
+        }
+    }
+}
+
 async fn execute_run(ctx: Arc<DaemonContext>, cfg: RunConfig) {
+    // Hold the run's slots in a drop-guard so they return to the pool on any
+    // exit path (completion or unwind), not just the normal tail below.
+    let _slot_guard = SlotReleaseGuard {
+        pool: ctx.pool.clone(),
+        slots: cfg.sui_slots.clone(),
+    };
     let started = Instant::now();
     let observer = RegistryProgressObserver::new(ctx.registry.clone(), cfg.run_id.clone());
     let results = match cfg.mode {
@@ -610,13 +636,8 @@ async fn execute_run(ctx: Arc<DaemonContext>, cfg: RunConfig) {
     };
     ctx.registry.set_state(&cfg.run_id, terminal);
 
-    // Return this run's account/gas slots to the pool so later runs reuse them.
-    // Runs off the pool (memory anchor, or no `--accounts-file`) hold no slots.
-    if !cfg.sui_slots.is_empty() {
-        if let Some(pool) = &ctx.pool {
-            pool.release(cfg.sui_slots.clone());
-        }
-    }
+    // `_slot_guard` releases this run's account/gas slots back to the pool as it
+    // drops here (and would do so too if the run above unwound).
 }
 
 #[cfg(test)]
@@ -744,5 +765,69 @@ mod tests {
         );
 
         sink_task.abort();
+    }
+
+    fn slot(tag: &str) -> crate::pool::SuiAccountSlot {
+        crate::pool::SuiAccountSlot {
+            address: format!("0xaddr-{tag}"),
+            key_ref: format!("key-{tag}"),
+            gas_coin_ids: vec![format!("0xcoin-{tag}")],
+        }
+    }
+
+    #[tokio::test]
+    async fn sui_run_rejected_when_pool_is_exhausted() {
+        use crate::proto::StartRun;
+        // A one-slot pool cannot cover a 2-swarm sui-sponsored run: the daemon must
+        // reject it up front (before spawning anything) rather than overcommit.
+        let pool = crate::pool::AccountPool::from_slots(vec![slot("a")]);
+        let ctx = Arc::new(DaemonContext {
+            registry: Arc::new(Registry::new()),
+            self_exe: std::path::PathBuf::from("/nonexistent/fleet-superx"),
+            nonce: 1,
+            sink: None,
+            heartbeat_base: None,
+            pool: Some(Arc::new(pool)),
+        });
+        let start = Request::Start(StartRun {
+            mode: SpawnMode::Distribute,
+            swarms: 2,
+            protocol: "payments.v1".to_string(),
+            duration: Duration::from_secs(1),
+            until_stop: false,
+            tunnels: 2,
+            scenario: "golden".to_string(),
+            anchor: "sui-sponsored".to_string(),
+            initial_balance: 1,
+            cohorts: CohortWire {
+                open_cohort: None,
+                open_spacing: Duration::ZERO,
+                settle_cohort: None,
+                settle_spacing: Duration::ZERO,
+            },
+            extra: vec![],
+        });
+        match handle_request(start, &ctx).await {
+            Response::Error(msg) => assert!(msg.contains("account pool"), "got: {msg}"),
+            other => panic!("expected pool-exhaustion Error, got {other:?}"),
+        }
+        // Rejected atomically: no run registered, the lone slot stays free.
+        assert_eq!(ctx.registry.list().len(), 0);
+        assert_eq!(ctx.pool.as_ref().unwrap().available(), 1);
+    }
+
+    #[test]
+    fn slot_guard_returns_slots_to_pool_on_drop() {
+        let pool = Arc::new(crate::pool::AccountPool::from_slots(vec![slot("a"), slot("b")]));
+        let slots = pool.allocate(2).expect("two available");
+        assert_eq!(pool.available(), 0);
+        {
+            let _guard = SlotReleaseGuard {
+                pool: Some(pool.clone()),
+                slots,
+            };
+            assert_eq!(pool.available(), 0, "slots held while the guard is alive");
+        }
+        assert_eq!(pool.available(), 2, "guard returned the slots when dropped");
     }
 }

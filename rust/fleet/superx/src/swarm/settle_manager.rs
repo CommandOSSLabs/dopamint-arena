@@ -423,6 +423,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn drain_caps_concurrency_below_tunnel_count() {
+        // 8 tunnels through a cohort of 4 must never exceed 4 in flight — proving
+        // the JoinSet cap actually bounds concurrency below the tunnel count,
+        // not just that the peak can reach the cohort when they happen to be equal.
+        let peak = drain_peak_concurrency(8, 4).await;
+        assert_eq!(
+            peak, 4,
+            "settle_cohort=4 must cap in-flight settles at 4 even with 8 tunnels, saw peak {peak}"
+        );
+    }
+
+    #[tokio::test]
     async fn drain_serializes_when_cohort_is_one() {
         // cohort=1 keeps exactly one tunnel in flight even though each tunnel's two
         // seat settles run concurrently under one `join!`.

@@ -44,6 +44,12 @@ impl AccountPool {
             .map_err(|err| format!("read accounts file {}: {err}", path.display()))?;
         let slots: Vec<SuiAccountSlot> = serde_json::from_str(&text)
             .map_err(|err| format!("parse accounts file {}: {err}", path.display()))?;
+        // A misconfigured file that repeats an address/key or shares a gas coin
+        // across slots would silently hand the same funding identity to two
+        // concurrent swarms, defeating the disjointness the pool exists to
+        // guarantee. Fail fast at startup with a clear message instead.
+        validate_disjoint(&slots)
+            .map_err(|err| format!("accounts file {}: {err}", path.display()))?;
         Ok(Self::from_slots(slots))
     }
 
@@ -78,6 +84,30 @@ impl AccountPool {
             .expect("account pool lock poisoned")
             .extend(slots);
     }
+}
+
+/// Reject a slot set that is not mutually disjoint: no two slots may share an
+/// `address`, a `key_ref`, or any `gas_coin_id`. Keeps the pool's core invariant
+/// (concurrently-checked-out slots never contend) enforceable at load time.
+fn validate_disjoint(slots: &[SuiAccountSlot]) -> Result<(), String> {
+    use std::collections::HashSet;
+    let mut addresses = HashSet::new();
+    let mut keys = HashSet::new();
+    let mut coins = HashSet::new();
+    for slot in slots {
+        if !addresses.insert(slot.address.as_str()) {
+            return Err(format!("duplicate account address {}", slot.address));
+        }
+        if !keys.insert(slot.key_ref.as_str()) {
+            return Err(format!("duplicate key_ref {}", slot.key_ref));
+        }
+        for coin in &slot.gas_coin_ids {
+            if !coins.insert(coin.as_str()) {
+                return Err(format!("gas coin {coin} shared across slots"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -133,6 +163,22 @@ mod tests {
             err.contains('4') && err.contains('3'),
             "shortfall message should name need and have: {err}"
         );
+    }
+
+    #[test]
+    fn load_rejects_a_non_disjoint_pool() {
+        // Two slots sharing an address must fail fast at load, not silently hand
+        // the same funding identity to two concurrent swarms.
+        assert!(validate_disjoint(&[slot(0), slot(0)]).is_err());
+        // Distinct address/key but an overlapping gas coin is also non-disjoint.
+        let mut a = slot(0);
+        let mut b = slot(1);
+        a.gas_coin_ids = vec!["0xshared".to_string()];
+        b.gas_coin_ids = vec!["0xshared".to_string()];
+        let err = validate_disjoint(&[a, b]).expect_err("shared gas coin is rejected");
+        assert!(err.contains("0xshared"), "message names the shared coin: {err}");
+        // A genuinely disjoint set passes.
+        assert!(validate_disjoint(&[slot(0), slot(1), slot(2)]).is_ok());
     }
 
     #[test]
