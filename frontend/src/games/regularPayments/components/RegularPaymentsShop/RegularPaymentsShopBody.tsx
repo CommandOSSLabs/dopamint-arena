@@ -28,17 +28,23 @@ export function RegularPaymentsShopBody({
               <button
                 key={product.id}
                 data-product-id={product.id}
+                disabled={
+                  session.busy ||
+                  session.pickInFlight ||
+                  product.priceMtps > session.balanceA
+                }
                 onClick={() => {
                   // stop Auto mode when click manually
                   if (session.autoMode) session.toggleAutoMode();
 
                   session.addToCart(product);
                 }}
-                disabled={session.busy || product.priceMtps > session.balanceA}
                 className={cn(
                   "flex flex-col items-center rounded-xl border border-border bg-card p-3 text-center",
                   "transition-colors hover:bg-secondary/80",
-                  "disabled:pointer-events-none disabled:opacity-45",
+
+                  // pickInFlight will make items flash
+                  session.phase === "settling" && "disabled:opacity-45",
                 )}
               >
                 <span

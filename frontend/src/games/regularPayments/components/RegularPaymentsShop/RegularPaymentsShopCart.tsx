@@ -21,7 +21,7 @@ export function RegularPaymentsShopCart({
     (Number(session.paidSoFar) / Number(session.depositBudget)) * 100,
   );
 
-  const paying = session.phase === "paying" || session.phase === "settling";
+  const settling = session.phase === "settling";
 
   return (
     <div className="shrink-0 border-t border-border bg-card/80">
@@ -52,23 +52,14 @@ export function RegularPaymentsShopCart({
 
           <Button
             size="sm"
-            disabled={!session.itemCount || session.busy}
             onClick={() => session.payNow()}
+            disabled={
+              !session.itemCount || session.busy || session.pickInFlight
+            }
           >
-            {paying && <Loader2 className="animate-spin" />}
+            {settling && <Loader2 className="animate-spin" />}
 
-            {(function () {
-              switch (session.phase) {
-                case "paying":
-                  return "Paying";
-
-                case "settling":
-                  return "Settling";
-
-                default:
-                  return "Pay now";
-              }
-            })()}
+            {settling ? "Settling" : "Pay now"}
           </Button>
         </div>
 
@@ -113,8 +104,13 @@ export function RegularPaymentsShopCart({
 
               <button
                 type="button"
-                className="shrink-0 rounded-md p-0.5 text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-45"
-                disabled={session.busy}
+                disabled={session.busy || session.pickInFlight}
+                className={cn(
+                  "shrink-0 rounded-md p-0.5 text-destructive transition-colors hover:bg-destructive/10",
+
+                  // pickInFlight will make items flash
+                  session.phase === "settling" && "disabled:opacity-45",
+                )}
                 onClick={() => {
                   if (session.autoMode) session.toggleAutoMode();
 

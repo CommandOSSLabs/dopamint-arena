@@ -2,7 +2,7 @@
 
 > **Status:** Active  
 > **Date:** 2026-06-28  
-> **Last updated:** 2026-07-01
+> **Last updated:** 2026-07-02
 > **Scope:** Coding standards for the `regularPayments` package (and general frontend apps).
 
 These rules govern all Regular Payments implementation to maintain a clean architecture and a consistent aesthetic.
@@ -153,3 +153,17 @@ Use `type` only for unions, literal unions, or utility compositions that interfa
 export type Screen = "lobby" | "shop" | "thankYou";
 export type ProductCategory = "fresh" | "snacks" | "drinks";
 ```
+
+---
+
+## 5. Session & engine (bot-server)
+
+Architecture reference: [2026-06-27-regular-payments-design.md](./2026-06-27-regular-payments-design.md) §15.
+
+- **Engine:** `DistributedTunnel` + `MpClient` — not `OffchainTunnel.selfPlay`.
+- **Arena id:** `regular_payments` (underscore) for backend; registry id stays `regular-payments`.
+- **Busy vs pick:** `busy` = `opening | settling` only. `pickInFlight` blocks the next propose and Pay
+  now but must not dim the whole shop (use `pointer-events-none` on the grid, not global opacity).
+- **Auto burst:** update `cart` / `balanceA` in memory; `flushBurstUi` batches React patches.
+  `cartFlyCue` still `patch`es every pick so fly animation works.
+- **Settle:** `{ t: "stop" }` → `settleHalf` → real `/settle` — never mock digest, never poker `endMatch`.
