@@ -65,7 +65,7 @@ struct RunLevelControl {
     /// at `move_limit` under a hard stop. Graceful mode enforces the limit via
     /// committed moves and never reads this.
     reservations: AtomicU64,
-    /// Committed moves across all tunnels — the run's move budget. Reaching
+    /// Committed moves across all tunnels for bounded runs. Reaching
     /// `move_limit` requests the run-wide stop.
     moves: AtomicU64,
     stop_tx: watch::Sender<bool>,
@@ -242,13 +242,15 @@ impl DriverRunControl {
         }
 
         self.gate.inflight.fetch_sub(1, Ordering::AcqRel);
-        let moves = self.run.moves.fetch_add(1, Ordering::Relaxed) + 1;
-        if self
-            .run
-            .move_limit
-            .is_some_and(|move_limit| moves >= move_limit)
-        {
-            self.request_stop();
+        // The run-wide committed-move counter exists only to enforce a move
+        // limit. Unbounded runs (the max-throughput workload) don't need it, and
+        // touching this shared atomic on every move is a cross-tunnel cache-line
+        // hotspot that caps multi-core scaling. Skip it unless a limit is set.
+        if let Some(move_limit) = self.run.move_limit {
+            let moves = self.run.moves.fetch_add(1, Ordering::Relaxed) + 1;
+            if moves >= move_limit {
+                self.request_stop();
+            }
         }
     }
 }
@@ -1213,7 +1215,7 @@ mod tests {
         let (out_b, _) = out_b.unwrap();
         assert_eq!(out_a.moves, 3);
         assert_eq!(out_b.moves, 3);
-        assert_eq!(run_control.moves(), 3);
+        assert_eq!(run_control.moves(), 0);
         assert!(run_control.stopped());
         assert_eq!(settled.load(Ordering::Relaxed), 2);
     }
@@ -1263,9 +1265,20 @@ mod tests {
         let (out_b, _) = out_b.unwrap();
         assert_eq!(out_a.moves, 6);
         assert_eq!(out_b.moves, 6);
-        assert_eq!(run_control.moves(), 6);
+        assert_eq!(run_control.moves(), 0);
         assert!(run_control.stopped());
         assert_eq!(settled.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn unbounded_run_control_skips_committed_move_counter() {
+        let run_control = DriverRunControl::unbounded();
+
+        assert!(run_control.reserve_move_proposal());
+        run_control.record_committed_move(Seat::B, Seat::A);
+
+        assert_eq!(run_control.moves(), 0);
+        assert!(!run_control.stopped());
     }
 
     #[test]
@@ -1480,7 +1493,7 @@ mod tests {
         let (out_b, _) = out_b.unwrap();
         assert_eq!(out_a.moves, 1);
         assert_eq!(out_b.moves, 1);
-        assert_eq!(run_control.moves(), 1);
+        assert_eq!(run_control.moves(), 0);
         assert!(run_control.stopped());
         assert_eq!(settled.load(Ordering::Relaxed), 2);
 
@@ -1585,7 +1598,7 @@ mod tests {
         let (out_b, _) = out_b.unwrap();
         assert_eq!(out_a.moves, 1);
         assert_eq!(out_b.moves, 1);
-        assert_eq!(run_control.moves(), 1);
+        assert_eq!(run_control.moves(), 0);
         assert!(run_control.stopped());
         assert_eq!(settled.load(Ordering::Relaxed), 2);
 
