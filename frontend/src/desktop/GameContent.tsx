@@ -1,7 +1,10 @@
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
 
-import { get } from "../games/registry";
+import { get, arenaGameIdForModule } from "../games/registry";
+import { FrozenContext } from "./frozenContext";
+import { FrozenScrim } from "./FrozenScrim";
+import { frozenScrimVisible } from "./freezeOnDisconnect";
 import {
   TelemetryContext,
   useTelemetry,
@@ -59,11 +62,17 @@ export const GameContent = memo(function GameContent({
 }) {
   const mod = get(gameId);
   const close = useCallback(() => onClose(windowId), [onClose, windowId]);
+  // Read before the early return so hook order stays stable (rules of hooks).
+  const frozen = useContext(FrozenContext);
   if (!mod) return null;
   const Content = mod.Window;
+  const showScrim = frozenScrimVisible(frozen, arenaGameIdForModule(gameId));
   return (
     <GameTelemetryScope gameId={gameId}>
-      <Content windowId={windowId} onClose={close} />
+      <div className="relative h-full">
+        <Content windowId={windowId} onClose={close} />
+        {showScrim && <FrozenScrim />}
+      </div>
     </GameTelemetryScope>
   );
 });
