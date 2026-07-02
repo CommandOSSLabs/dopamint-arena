@@ -41,6 +41,7 @@ export function recentEventsToTxnRows(
       address,
       mine,
       proofUrl: e.proofUrl ?? undefined,
+      timestampMs: e.timestampMs,
       time: new Date(e.timestampMs).toLocaleTimeString("en-GB"),
       bot: "",
       type: e.kind === "settled" ? "Settled" : "Opened",

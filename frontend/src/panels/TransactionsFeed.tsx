@@ -6,6 +6,7 @@ import { Panel, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { list } from "@/games/registry";
 import { suivisionAccountUrl, suivisionTxUrl } from "@/lib/suivision";
+import { formatRelativeTime } from "@/lib/relativeTime";
 import type { TxnRow } from "./types";
 import { HashLink } from "./atoms";
 
@@ -34,6 +35,8 @@ export function TransactionsFeed({
   const showGame = tab === "all";
   const gameNames = new Map(list().map((g) => [g.id, g.name]));
   const colCount = (onchain ? 5 : 2) + (showGame ? 1 : 0);
+  // One reference instant for every row's relative label; the ~1/s SSE re-render keeps it fresh.
+  const now = Date.now();
 
   return (
     <Panel className={className}>
@@ -146,8 +149,13 @@ export function TransactionsFeed({
                         {gameNames.get(t.game) ?? t.game}
                       </td>
                     )}
-                    <td className="px-2.5 py-1.5 text-muted-foreground">
-                      {t.time}
+                    <td
+                      className="px-2.5 py-1.5 text-muted-foreground"
+                      title={t.time}
+                    >
+                      {t.timestampMs != null
+                        ? formatRelativeTime(t.timestampMs, now)
+                        : t.time}
                     </td>
                     <td className="px-2.5 py-1.5">{t.type}</td>
                   </tr>

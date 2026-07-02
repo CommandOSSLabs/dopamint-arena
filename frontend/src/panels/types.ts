@@ -17,6 +17,8 @@ export interface TxnRow {
   /** Walrus transcript URL, present once a settlement is archived (see the /settle plan). */
   proofUrl?: string;
   time: string;
+  /** Raw event time (ms) for a live "N ago" label; absent on rows that only carry a formatted `time`. */
+  timestampMs?: number;
   bot: string;
   type: string;
   status: "Success" | "Failed";
