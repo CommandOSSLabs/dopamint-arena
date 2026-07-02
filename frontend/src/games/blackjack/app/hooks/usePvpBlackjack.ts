@@ -566,7 +566,18 @@ export function usePvpBlackjack(): PvpView {
             opponentPubkeyHex: rec.opponentPubkeyHex,
             selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
           });
-          await mp.connect();
+          try {
+            await mp.connect();
+          } catch {
+            // Resume connect failed — a 2nd socket for this wallet racing the relay's routing after
+            // a freeze/reconnect closed the old one, or the match is gone. Recover with a fresh
+            // match instead of dead-ending at "error" (the cleared record routes the retry to quickMatch).
+            clearResumeRecord(tunnel.tunnelId);
+            mp.close();
+            mpRef.current = null;
+            queue();
+            return;
+          }
           // Resume watchdog (mirrors the shared kit's armResumeWatchdog): the auto-kick fires
           // before connect on this path, so if it's our turn the proposal is dropped; and if the
           // co-located bot exited past its grace, nothing re-kicks. Rather than hang at "playing",

@@ -562,8 +562,20 @@ export function usePvpTicTacToe(
               opponentPubkeyHex: rec.opponentPubkeyHex,
               selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
             });
-            await mp.connect();
-            return; // skip quickMatch — we are continuing an in-flight match
+            try {
+              await mp.connect();
+              return; // skip quickMatch — we are continuing an in-flight match
+            } catch {
+              // Resume connect failed — commonly a 2nd socket for this wallet racing the relay's
+              // routing right after a freeze/reconnect closed the old one, or the match is gone.
+              // Don't dead-end at "error": drop the stale record + raced socket and retry as a
+              // fresh match (the cleared record makes the retry fall through to quickMatch).
+              clearResumeRecord(tunnel.tunnelId);
+              mp.close();
+              mpRef.current = null;
+              queue(opts);
+              return;
+            }
           }
           await mp.connect();
           setPhase("queuing");

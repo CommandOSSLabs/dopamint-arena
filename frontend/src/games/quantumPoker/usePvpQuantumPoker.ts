@@ -1098,7 +1098,16 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           opponentPubkeyHex: rec.opponentPubkeyHex,
           selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
         });
-        await mp.connect();
+        try {
+          await mp.connect();
+        } catch {
+          // Resume connect failed — a 2nd socket for this wallet racing the relay's routing after a
+          // freeze/reconnect, or the match is gone. Recover with a fresh match, not an error dead-end.
+          clearResumeRecord(tunnel.tunnelId);
+          reset();
+          findMatchRef.current?.();
+          return;
+        }
         maybeAutoPropose();
         // Resume watchdog (mirrors the shared kit's armResumeWatchdog): if the co-located bot
         // never answers the resync — it exited past its grace, or the displayState!==state guard
