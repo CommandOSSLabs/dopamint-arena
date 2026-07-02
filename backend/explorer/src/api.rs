@@ -195,18 +195,47 @@ async fn stats(State(s): State<ApiState>) -> Response {
     }
 }
 
-/// Per-second TPS = the discrete derivative of the cumulative `total_actions` series. Pairs of
-/// adjacent buckets where time advanced; the negative-delta guard tolerates a counter reset.
-pub(crate) fn derive_tps_points(cumulative: &[(i64, i64)]) -> Vec<(i64, f64)> {
-    cumulative
-        .windows(2)
-        .filter_map(|w| {
-            let (t0, v0) = w[0];
-            let (t1, v1) = w[1];
-            let dt = t1 - t0;
-            (dt > 0).then(|| (t1, (v1 - v0).max(0) as f64 / dt as f64))
-        })
-        .collect()
+/// Peak-preserving TPS from the cumulative `total_actions` counter. `cumulative` is (ts, total)
+/// ascending at fetch resolution (≈1s for live windows); the returned (ts, rate) keeps the MAX
+/// per-sample rate within each `display_stride`-wide bucket, so a short burst survives the
+/// downsample instead of being averaged away — the Grafana `max_over_time` / RRDtool MAX pattern.
+/// Deriving the average between coarse buckets is what flattened a 1M burst to ~115k on the 1D view.
+///
+/// An interval wider than `gap_max_secs` is a data gap (indexer downtime) and is dropped, not
+/// smeared: the lone cross-gap sample would otherwise paint the whole gap's accrual as one fake
+/// spike (the "last night" 11k/112k artifact). A counter that goes backwards (Redis flush /
+/// restart) contributes 0, never a negative rate.
+pub(crate) fn peak_tps_points(
+    cumulative: &[(i64, i64)],
+    display_stride: i64,
+    gap_max_secs: i64,
+) -> Vec<(i64, f64)> {
+    let stride = display_stride.max(1);
+    // display-bucket key → (ts of the peak sample in that bucket, its rate). BTreeMap keeps the
+    // buckets in ascending order, so the collected points come out time-sorted.
+    let mut buckets: std::collections::BTreeMap<i64, (i64, f64)> =
+        std::collections::BTreeMap::new();
+    for w in cumulative.windows(2) {
+        let (t0, v0) = w[0];
+        let (t1, v1) = w[1];
+        let dt = t1 - t0;
+        if dt <= 0 || dt > gap_max_secs {
+            continue; // non-advancing or a data gap → not a real rate
+        }
+        let rate = (v1 - v0).max(0) as f64 / dt as f64;
+        let entry = buckets.entry(t1 / stride).or_insert((t1, rate));
+        if rate > entry.1 {
+            *entry = (t1, rate);
+        }
+    }
+    buckets.into_values().collect()
+}
+
+/// Fetch resolution (seconds/sample) pulled from the store: full 1s fidelity for live windows,
+/// coarsening only enough to keep a wide (30-day) range within `MAX_FETCH_SAMPLES` rows. Always
+/// finer than the display bucket, so peaks still survive the in-memory MAX rollup.
+fn fetch_stride_secs(span_secs: i64) -> i64 {
+    ((span_secs + MAX_FETCH_SAMPLES - 1) / MAX_FETCH_SAMPLES).max(1)
 }
 
 /// metric_bucket is rolled off after 30 days, so that is the furthest back any range can reach.
@@ -214,6 +243,13 @@ const HISTORY_RETENTION_SECS: i64 = 30 * 24 * 3600;
 /// Downsample target: a long range (up to 30d ≈ 2.6M rows) is bucketed to at most this many
 /// points server-side, bounding both the payload and the client's render cost.
 const HISTORY_TARGET_POINTS: i64 = 1000;
+/// Cap on rows pulled from the store per history query, so a 30-day range stays bounded. A day of
+/// per-second samples is 86,400 — well under this — so all live windows fetch at full 1s fidelity.
+const MAX_FETCH_SAMPLES: i64 = 100_000;
+/// Floor for the gap threshold: an interval wider than this reads as a data gap (see
+/// `peak_tps_points`). 10s clears the observed live spacing (~1s, p90 2s) so normal jitter is never
+/// cut; the effective threshold scales up when a coarse fetch stride makes samples legitimately sparse.
+const GAP_MIN_SECS: i64 = 10;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct HistoryParams {
@@ -249,10 +285,15 @@ async fn stats_history(State(s): State<ApiState>, Query(p): Query<HistoryParams>
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let (from, to, stride) = history_query_bounds(&p, now);
-    match s.store.metric_history(from, to, stride).await {
+    let (from, to, display_stride) = history_query_bounds(&p, now);
+    // Fetch at fine (≈1s) resolution and MAX-roll up into display buckets, so peaks survive; the
+    // store's own coarse bucketing would hand back per-bucket averages and hide short bursts.
+    let fetch_stride = fetch_stride_secs((to - from).max(1));
+    // A gap is several missed fetch intervals; the floor keeps normal ~1s jitter from being cut.
+    let gap_max = (fetch_stride * 3).max(GAP_MIN_SECS);
+    match s.store.metric_history(from, to, fetch_stride).await {
         Ok(cum) => {
-            let points: Vec<_> = derive_tps_points(&cum)
+            let points: Vec<_> = peak_tps_points(&cum, display_stride, gap_max)
                 .into_iter()
                 .map(|(t, v)| serde_json::json!({ "t": t.to_string(), "v": v }))
                 .collect();
@@ -347,12 +388,78 @@ mod tests {
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
+    // A short burst inside a display bucket must surface as that bucket's PEAK, not be averaged
+    // away — the whole point of the MAX rollup. Regression lock for the "1D shows ~115k for a 1M
+    // burst" bug: here one 1s spike of +1,000,000 sits among idle seconds; the average over the
+    // 50s bucket is ~20k, so the assertion fails unless the peak is preserved.
     #[test]
-    fn derive_tps_points_is_the_counter_derivative() {
-        let cumulative = vec![(100i64, 10i64), (101, 25), (103, 55)];
+    fn peak_bucket_reports_the_burst_peak_not_the_average() {
+        let mut cum = vec![(0i64, 0i64)];
+        let mut total = 0i64;
+        for t in 1..=50i64 {
+            total += if t == 25 { 1_000_000 } else { 10 };
+            cum.push((t, total));
+        }
+        let pts = peak_tps_points(&cum, 100, 10);
         assert_eq!(
-            derive_tps_points(&cumulative),
-            vec![(101i64, 15.0), (103i64, 15.0)]
+            pts.len(),
+            1,
+            "50s inside one 100s display bucket → one point"
+        );
+        assert!(
+            (pts[0].1 - 1_000_000.0).abs() < 1.0,
+            "bucket must report the 1e6 burst peak, got {}",
+            pts[0].1
+        );
+    }
+
+    // A data gap (indexer downtime) must NOT be drawn as a rate: the counter climbs while nothing
+    // is recorded, so the lone cross-gap sample would smear ~a billion actions over the gap into a
+    // fake spike. Regression lock for the "last night" 11k/112k artifact.
+    #[test]
+    fn large_gap_is_dropped_not_smeared_into_a_fake_spike() {
+        let day = 86_400i64;
+        let cum = vec![
+            (0i64, 0i64),
+            (1, 5),
+            (1 + day, 1_000_000_000), // 24h gap, +1e9 actions → ~11.5k/s if smeared
+            (2 + day, 1_000_000_030),
+            (3 + day, 1_000_000_060),
+        ];
+        let pts = peak_tps_points(&cum, 1, 10);
+        assert_eq!(
+            pts.len(),
+            3,
+            "the three real 1s intervals survive; the gap does not"
+        );
+        assert!(
+            pts.iter().all(|&(_, v)| v < 100.0),
+            "cross-gap smear leaked a fake spike: {pts:?}"
+        );
+    }
+
+    // A counter that goes backwards (Redis flush / instance restart) contributes 0, never a
+    // negative rate that would invert the line.
+    #[test]
+    fn counter_reset_contributes_zero_not_a_negative_rate() {
+        let cum = vec![(0i64, 1_000_000i64), (1, 1_000_500), (2, 0)];
+        let pts = peak_tps_points(&cum, 1, 10);
+        assert_eq!(pts.len(), 2);
+        assert!(pts.iter().all(|&(_, v)| v >= 0.0), "negative rate: {pts:?}");
+    }
+
+    // Fine-fetch stays 1s for live windows (full peak fidelity) and only coarsens enough to bound
+    // the row count on a very wide (30-day) range.
+    #[test]
+    fn fetch_stride_is_full_resolution_until_the_row_budget() {
+        assert_eq!(fetch_stride_secs(86_400), 1); // 1 day → per-second
+        assert_eq!(fetch_stride_secs(900), 1); // 15 min → per-second
+        let thirty_days = 30 * 24 * 3600;
+        let s = fetch_stride_secs(thirty_days);
+        assert!(s > 1, "30d must coarsen to bound rows");
+        assert!(
+            thirty_days / s <= MAX_FETCH_SAMPLES,
+            "row count must stay within the fetch budget"
         );
     }
 
