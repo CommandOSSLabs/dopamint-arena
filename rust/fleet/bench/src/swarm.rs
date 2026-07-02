@@ -533,7 +533,6 @@ pub fn run_lifecycle_pipeline(
         .build()
         .expect("fleet bench runtime");
     let sui_context = sui_context.cloned();
-    let _ = &cohorts;
     let gas_context = sui_context.clone();
     let pool = tunnel_concurrency.max(1);
     let pre_open_gate = match bench_mode {
@@ -607,7 +606,11 @@ pub fn run_lifecycle_pipeline(
 
         let mut tasks = JoinSet::new();
         let mut next_index: u64 = 0;
-        for _ in 0..pool {
+        let initial_spawn_count = match (bench_mode, cohorts.open_cohort) {
+            (BenchMode::Warmup, Some(cohort)) => cohort.max(1).min(pool),
+            _ => pool,
+        };
+        for _ in 0..initial_spawn_count {
             spawn_tunnel(&mut tasks, next_index);
             next_index += 1;
         }
@@ -637,6 +640,9 @@ pub fn run_lifecycle_pipeline(
                     &mut tunnels_aborted,
                     &mut next_index,
                     &spawn_tunnel,
+                    cohorts.open_cohort.map(|cohort| cohort.max(1)),
+                    cohorts.open_spacing,
+                    pool as u64,
                     warmup_started,
                     Duration::from_secs(warmup_timeout_secs),
                 )
@@ -788,6 +794,9 @@ async fn wait_for_preopen(
     tunnels_aborted: &mut u64,
     next_index: &mut u64,
     spawn_tunnel: &impl Fn(&mut JoinSet<TunnelSample>, u64),
+    open_cohort: Option<usize>,
+    open_spacing: Duration,
+    pool: u64,
     started: Instant,
     timeout: Duration,
 ) -> Option<(Instant, u64)> {
@@ -801,11 +810,27 @@ async fn wait_for_preopen(
         if remaining.is_zero() {
             return None;
         }
+        if let Some(cohort) = open_cohort {
+            let opened_or_aborted = gate.opened() + *tunnels_aborted;
+            let in_flight = next_index.saturating_sub(opened_or_aborted);
+            if *next_index < pool && in_flight == 0 {
+                if open_spacing > Duration::ZERO {
+                    tokio::time::sleep(open_spacing).await;
+                }
+                let remaining = pool - *next_index;
+                for _ in 0..cohort.min(remaining as usize) {
+                    spawn_tunnel(tasks, *next_index);
+                    *next_index += 1;
+                }
+                continue;
+            }
+        }
 
         tokio::select! {
             biased;
 
             _ = gate.wait() => return Some((Instant::now(), retries)),
+            _ = gate.opened_progress(), if open_cohort.is_some() => {}
             result = tasks.join_next() => {
                 match result {
                     Some(result) => {
@@ -813,8 +838,10 @@ async fn wait_for_preopen(
                             *tunnels_aborted += 1;
                         }
                         retries += 1;
-                        spawn_tunnel(tasks, *next_index);
-                        *next_index += 1;
+                        if open_cohort.is_none() {
+                            spawn_tunnel(tasks, *next_index);
+                            *next_index += 1;
+                        }
                     }
                     None => return Some((Instant::now(), retries)),
                 }
@@ -1182,6 +1209,46 @@ mod tests {
         assert!(out.tunnels_opened >= 4, "whole initial fleet opened");
         assert!(out.warmup_elapsed_ms >= 1, "warm-up window recorded");
         assert_eq!(out.warmup_open_retries, 0);
+    }
+
+    #[test]
+    fn warmup_open_cohort_spaces_initial_spawn_waves() {
+        let out = run_lifecycle_pipeline(
+            2,
+            1,
+            None,
+            8,
+            ScenarioMode::Varied,
+            FrameCodecKind::Postcard,
+            AnchorMode::Memory,
+            None,
+            tunnel_core::protocol_id::PAYMENTS_V1,
+            200,
+            TunnelTelemetry {
+                collect: false,
+                record_transcript: false,
+                heartbeat: None,
+            },
+            true,
+            BenchMode::Warmup,
+            120,
+            CohortConfig {
+                open_cohort: Some(4),
+                open_spacing: Duration::from_millis(100),
+                settle_cohort: None,
+                settle_spacing: Duration::ZERO,
+            },
+        );
+
+        assert_eq!(out.bench_mode, "warmup");
+        assert_eq!(out.warmup_preopened, 8);
+        assert_eq!(out.tunnels_opened, 8);
+        assert_eq!(out.tunnels_aborted, 0);
+        assert!(
+            out.warmup_elapsed_ms >= 75,
+            "cohort spacing should delay the warm-up barrier, got {}ms",
+            out.warmup_elapsed_ms
+        );
     }
 
     #[test]
