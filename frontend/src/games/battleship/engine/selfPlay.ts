@@ -13,10 +13,17 @@
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
 import {
-  BattleshipProtocol,
   type BattleshipMove,
+  BattleshipProtocol,
   type BattleshipState,
+  pendingBoardReveal,
 } from "../protocol/battleship";
+import {
+  BOT_CONFIGS,
+  type BotDifficulty,
+  DEFAULT_BOT_DIFFICULTY,
+  pickShot,
+} from "./bot";
 import { CELL_COUNT, placeFleetRandom, placementsToBoard } from "./fleet";
 import {
   type BoardCommitment,
@@ -24,12 +31,6 @@ import {
   commitBoard,
   proveCell,
 } from "./merkle";
-import {
-  BOT_CONFIGS,
-  type BotDifficulty,
-  DEFAULT_BOT_DIFFICULTY,
-  pickShot,
-} from "./bot";
 
 /** A player's secret fleet plus its precomputed commitment. */
 export interface FleetSecret {
@@ -91,6 +92,16 @@ export function nextMove(
       };
     }
     return null;
+  }
+
+  if (state.phase === "awaitingBoardReveal") {
+    const winner = pendingBoardReveal(state);
+    if (!winner) return null;
+    const secret = secrets[winner];
+    return {
+      by: winner,
+      move: { type: "reveal_board", cells: secret.board, salts: secret.salts },
+    };
   }
 
   // phase === "playing"

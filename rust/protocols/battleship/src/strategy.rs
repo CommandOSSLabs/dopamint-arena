@@ -1,11 +1,24 @@
 use crate::{
-    commit_board, commitment_root, prove_cell, shots_at, splitmix_next, Battleship, BattleshipMove,
-    BattleshipPhase, BattleshipSeries, BattleshipSeriesState, BattleshipState, BattleshipWinner,
-    BOARD_SIZE, CELL_COUNT, FLEET_CELLS,
+    commit_board, commitment_root, pending_board_reveal, prove_cell, shots_at, splitmix_next,
+    Battleship, BattleshipMove, BattleshipPhase, BattleshipSeries, BattleshipSeriesState,
+    BattleshipState, BattleshipWinner, BOARD_SIZE, CELL_COUNT,
 };
 use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
 
 const ORTHO: [(i32, i32); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+
+/// A legal bench fleet: five ships on separate even rows (no diagonal contact),
+/// each a straight horizontal run. A legal board lets the sinker actually claim
+/// the win at the board-reveal gate instead of forfeiting an illegal fleet.
+fn legal_bench_board() -> Vec<u8> {
+    let mut board = vec![0u8; CELL_COUNT];
+    for (start, len) in [(0usize, 5usize), (20, 4), (40, 3), (60, 3), (80, 2)] {
+        for cell in board.iter_mut().skip(start).take(len) {
+            *cell = 1;
+        }
+    }
+    board
+}
 
 #[derive(Clone, Debug)]
 pub struct BattleshipStrategy {
@@ -18,10 +31,7 @@ pub struct BattleshipStrategy {
 impl BattleshipStrategy {
     pub fn new(seed: u64) -> Self {
         let mut rng_state = seed;
-        let mut board = vec![0u8; CELL_COUNT];
-        for cell in board.iter_mut().take(FLEET_CELLS as usize) {
-            *cell = 1;
-        }
+        let board = legal_bench_board();
         let salts: Vec<[u8; 32]> = (0..CELL_COUNT)
             .map(|_| {
                 let mut salt = [0u8; 32];
@@ -65,6 +75,13 @@ impl BattleshipStrategy {
     fn shoot_move(&mut self, state: &BattleshipState, seat: Seat) -> Option<BattleshipMove> {
         pick_shot(state, seat, || self.next_f64()).map(|cell| BattleshipMove::Shoot { cell })
     }
+
+    fn reveal_board_move(&self) -> BattleshipMove {
+        BattleshipMove::RevealBoard {
+            cells: self.board.clone(),
+            salts: self.salts.clone(),
+        }
+    }
 }
 
 impl MoveStrategy<Battleship> for BattleshipStrategy {
@@ -91,6 +108,9 @@ impl MoveStrategy<Battleship> for BattleshipStrategy {
                 (state.turn == seat)
                     .then(|| self.shoot_move(state, seat))
                     .flatten()
+            }
+            BattleshipPhase::AwaitingBoardReveal => {
+                (pending_board_reveal(state) == Some(seat)).then(|| self.reveal_board_move())
             }
             BattleshipPhase::Over => None,
         }

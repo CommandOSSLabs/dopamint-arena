@@ -1,13 +1,15 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
-import { BattleshipProtocol, type BattleshipState } from "./battleship.ts";
-import { FLEET_CELLS } from "../engine/fleet.ts";
+import { CELL_COUNT, FLEET_CELLS } from "../engine/fleet.ts";
+import { SALT_BYTES } from "../engine/merkle.ts";
 import {
   type FleetSecret,
+  makeFleetSecret,
   nextMove,
   randomFleetSecret,
 } from "../engine/selfPlay.ts";
+import { BattleshipProtocol, type BattleshipState } from "./battleship.ts";
 
 function mulberry32(seed: number): () => number {
   let a = seed;
@@ -149,37 +151,140 @@ test("only the defender reveals, for the pending cell, with a valid proof", () =
   assert.equal(st.hitsOnB, truth.isShip ? 1 : 0);
 });
 
-test("destroying a fleet ends the game and shifts the stake to the winner", () => {
-  const proto = new BattleshipProtocol(100n);
-  const s = secrets(7, 8);
+/** All-water board: a valid 32-byte commitment whose fleet is illegal (unsinkable). */
+function allWaterSecret(): FleetSecret {
+  const board = new Uint8Array(CELL_COUNT); // every cell is water
+  const salts = Array.from({ length: CELL_COUNT }, (_, i) => {
+    const salt = new Uint8Array(SALT_BYTES);
+    salt.fill((i % 251) + 1);
+    return salt;
+  });
+  return makeFleetSecret(board, salts);
+}
+
+/** Drive A to sink all of B's ships (B firing harmlessly at A's water) until A's win is pending. */
+function aSinksB(
+  proto: BattleshipProtocol,
+  s: { A: FleetSecret; B: FleetSecret },
+): BattleshipState {
   let st = commitBoth(proto, s);
-
   const bShips: number[] = [];
-  const aWater: number[] = [];
-  for (let c = 0; c < 100; c++) {
-    if (s.B.board[c] === 1) bShips.push(c);
-    if (s.A.board[c] === 0) aWater.push(c);
-  }
+  for (let c = 0; c < CELL_COUNT; c++) if (s.B.board[c] === 1) bShips.push(c);
   assert.equal(bShips.length, FLEET_CELLS);
-
-  let water = 0;
+  let bShot = 0;
   for (const target of bShips) {
     st = proto.applyMove(st, { type: "shoot", cell: target }, "A");
     const rev = nextMove(st, s, mulberry32(1))!;
-    st = proto.applyMove(st, rev.move, rev.by); // B reveals a hit
-    if (st.winner !== 0) break;
-    st = proto.applyMove(st, { type: "shoot", cell: aWater[water++] }, "B");
+    st = proto.applyMove(st, rev.move, rev.by); // B reveals the hit
+    if (st.phase === "awaitingBoardReveal") break;
+    st = proto.applyMove(st, { type: "shoot", cell: bShot++ }, "B");
     const miss = nextMove(st, s, mulberry32(1))!;
     st = proto.applyMove(st, miss.move, miss.by); // A reveals a miss
   }
+  return st;
+}
+
+test("destroying a fleet pends the win; the legal winner reveals to claim the stake", () => {
+  const proto = new BattleshipProtocol(100n);
+  const s = secrets(7, 8);
+  let st = aSinksB(proto, s);
+
+  // Reaching 17 hits no longer ends the game: the win is pending the board reveal.
+  assert.equal(st.phase, "awaitingBoardReveal");
+  assert.equal(st.winner, 0);
+  assert.equal(proto.isTerminal(st), false);
+  assert.equal(st.hitsOnB, FLEET_CELLS);
+  assert.equal(st.turn, "A"); // the prospective winner owes the board reveal
+
+  assert.equal(st.balanceA, 1000n); // pot untouched until the reveal verifies
+  assert.equal(st.balanceB, 1000n);
+
+  const reveal = nextMove(st, s, mulberry32(1))!;
+  assert.equal(reveal.move.type, "reveal_board");
+  assert.equal(reveal.by, "A");
+  st = proto.applyMove(st, reveal.move, reveal.by);
 
   assert.equal(st.winner, 1);
   assert.equal(st.phase, "over");
   assert.equal(proto.isTerminal(st), true);
-  assert.equal(st.hitsOnB, FLEET_CELLS);
   assert.equal(st.balanceA, 1100n);
   assert.equal(st.balanceB, 900n);
   assert.equal(st.balanceA + st.balanceB, st.total);
+});
+
+test("an all-water (unsinkable) board cannot win; the honest player is not robbed", () => {
+  const proto = new BattleshipProtocol(100n);
+  const s = { A: allWaterSecret(), B: randomFleetSecret(mulberry32(8)) };
+  let st = aSinksB(proto, s);
+
+  // The cheater reached 17 hits but the pot is still even and nothing is final.
+  assert.equal(st.phase, "awaitingBoardReveal");
+  assert.equal(st.winner, 0);
+  assert.equal(proto.isTerminal(st), false);
+  assert.equal(st.balanceA, 1000n);
+  assert.equal(st.balanceB, 1000n);
+
+  // Revealing the all-water board matches the commitment but fails the fleet check.
+  const reveal = nextMove(st, s, mulberry32(1))!;
+  assert.equal(reveal.move.type, "reveal_board");
+  st = proto.applyMove(st, reveal.move, reveal.by);
+
+  assert.equal(proto.isTerminal(st), true);
+  assert.equal(st.phase, "over");
+  assert.equal(st.winner, 2); // forfeit: the honest opponent wins
+  assert.equal(st.balanceB, 1100n);
+  assert.equal(st.balanceA, 900n);
+  assert.equal(st.balanceA + st.balanceB, st.total);
+});
+
+test("withholding the board reveal leaves the game non-terminal with an even pot", () => {
+  const proto = new BattleshipProtocol(100n);
+  const s = { A: allWaterSecret(), B: randomFleetSecret(mulberry32(8)) };
+  const st = aSinksB(proto, s);
+
+  // No legal board is revealed: settlement (driven by isTerminal) never fires for the cheater,
+  // and the held checkpoint keeps both stakes intact, so the cheater cannot profit by stalling.
+  assert.equal(proto.isTerminal(st), false);
+  assert.equal(st.balanceA, st.balanceB);
+  assert.equal(st.balanceA + st.balanceB, st.total);
+  // No further play is possible while the reveal is owed.
+  assert.throws(() => proto.applyMove(st, { type: "shoot", cell: 50 }, "A"));
+  assert.throws(() => proto.applyMove(st, { type: "shoot", cell: 50 }, "B"));
+});
+
+test("reveal_board is rejected unless it matches the commitment and the prospective winner sends it", () => {
+  const proto = new BattleshipProtocol(100n);
+  const s = secrets(7, 8);
+  const st = aSinksB(proto, s);
+  assert.equal(st.phase, "awaitingBoardReveal");
+
+  // Wrong revealer: B is the loser, not the prospective winner.
+  assert.throws(() =>
+    proto.applyMove(
+      st,
+      { type: "reveal_board", cells: s.A.board, salts: s.A.salts },
+      "B",
+    ),
+  );
+  // Tampered board: recomputed root no longer equals A's commitment.
+  const tampered = s.A.board.slice();
+  tampered[tampered.indexOf(0)] = 1;
+  assert.throws(() =>
+    proto.applyMove(
+      st,
+      { type: "reveal_board", cells: tampered, salts: s.A.salts },
+      "A",
+    ),
+  );
+  // A reveal_board is only valid while one is owed.
+  const playing = commitBoth(proto, s);
+  assert.throws(() =>
+    proto.applyMove(
+      playing,
+      { type: "reveal_board", cells: s.A.board, salts: s.A.salts },
+      "A",
+    ),
+  );
 });
 
 test("encodeState is deterministic and changes when public state changes", () => {
