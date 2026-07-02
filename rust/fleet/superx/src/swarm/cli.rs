@@ -12,7 +12,7 @@ use sui_tunnel_anchor::{
     SuiFundingProfile, SuiOpenBatchingConfig, SuiOpenMode, SuiSettleMode, SuiStakeSource,
 };
 
-use crate::swarm::anchor::{SuiAnchorOpts, SuiContext};
+use crate::swarm::anchor::{ptb_batching, SuiAnchorOpts, SuiContext};
 use crate::swarm::pipeline::{AnchorChoice, CohortConfig, HeartbeatConfig, SwarmParams};
 use crate::swarm::protocol::{ProtocolKind, Scenario};
 
@@ -114,6 +114,15 @@ pub struct RunSwarmArgs {
     /// Funder-owned stake coin object for `--sui-stake-source coin-object`.
     #[arg(long)]
     sui_funder_stake_coin_id: Option<String>,
+    /// Layer-2 PTB pack size for opens: max sponsored opens packed into one PTB
+    /// before submit; unset keeps the anchor default. Distinct from `--open-cohort`
+    /// (Layer-1 pipeline concurrency).
+    #[arg(long)]
+    sui_open_batch: Option<usize>,
+    /// Layer-2 PTB pack size for settles: max settles packed into one PTB before
+    /// submit; unset keeps the anchor default. Distinct from `--settle-cohort`.
+    #[arg(long)]
+    sui_settle_batch: Option<usize>,
 }
 
 impl RunSwarmArgs {
@@ -169,9 +178,19 @@ impl RunSwarmArgs {
         }
     }
 
-    /// Build the shared sponsored Sui anchor from the `--sui-*` flags. PTB batch
-    /// sizing (Layer 2) keeps its anchor defaults here; the batch-size knobs and
-    /// daemon-side flag forwarding land in the Sui hardening task.
+    /// The Layer-2 PTB batch configs (open, settle) derived from
+    /// `--sui-open-batch`/`--sui-settle-batch`. Split out so the mapping is
+    /// unit-testable without constructing a live Sui anchor.
+    fn sui_batching(&self) -> (SuiOpenBatchingConfig, SuiOpenBatchingConfig) {
+        (
+            ptb_batching(self.sui_open_batch),
+            ptb_batching(self.sui_settle_batch),
+        )
+    }
+
+    /// Build the shared sponsored Sui anchor from the `--sui-*` flags. The
+    /// `--sui-open-batch`/`--sui-settle-batch` knobs set the Layer-2 PTB pack size
+    /// (max entries per PTB); every other batching knob keeps its anchor default.
     fn build_sui_context(&self) -> Result<SuiContext, String> {
         let rpc_url = self
             .sui_rpc_url
@@ -218,6 +237,7 @@ impl RunSwarmArgs {
             }
             other => return Err(format!("--sui-funding-profile unsupported: {other}")),
         };
+        let (open_batching, settle_batching) = self.sui_batching();
         let opts = SuiAnchorOpts {
             rpc_url,
             backend_url,
@@ -226,8 +246,8 @@ impl RunSwarmArgs {
             open_mode,
             settle_mode,
             funding_profile,
-            open_batching: SuiOpenBatchingConfig::default(),
-            settle_batching: SuiOpenBatchingConfig::default(),
+            open_batching,
+            settle_batching,
         };
         SuiContext::build(&opts)
     }
@@ -290,6 +310,47 @@ mod tests {
         assert_eq!(params.cohorts.settle_spacing, Duration::from_millis(5));
         assert!(matches!(params.anchor, AnchorChoice::Memory));
         assert!(params.heartbeat.is_none());
+    }
+
+    #[test]
+    fn sui_batch_flags_map_to_ptb_pack_size() {
+        let args = parse(&[
+            "run-swarm",
+            "--run-id",
+            "r",
+            "--swarm-index",
+            "0",
+            "--swarm-count",
+            "1",
+            "--tunnels",
+            "1",
+            "--sui-open-batch",
+            "25",
+            "--sui-settle-batch",
+            "40",
+        ]);
+        let (open, settle) = args.sui_batching();
+        assert_eq!(open.max_batch_size, 25);
+        assert_eq!(settle.max_batch_size, 40);
+    }
+
+    #[test]
+    fn sui_batch_defaults_to_anchor_pack_size_when_unset() {
+        let args = parse(&[
+            "run-swarm",
+            "--run-id",
+            "r",
+            "--swarm-index",
+            "0",
+            "--swarm-count",
+            "1",
+            "--tunnels",
+            "1",
+        ]);
+        let (open, settle) = args.sui_batching();
+        let default = SuiOpenBatchingConfig::default();
+        assert_eq!(open.max_batch_size, default.max_batch_size);
+        assert_eq!(settle.max_batch_size, default.max_batch_size);
     }
 
     #[test]

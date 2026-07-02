@@ -9,6 +9,35 @@
 
 use crate::proto::{CohortWire, SpawnMode, StartRun};
 
+/// Sui-sponsored anchor settings forwarded verbatim to each swarm's hidden
+/// `run-swarm` subprocess.
+///
+/// These are the run-level `--sui-*` flags (connection, auth, and the Layer-2 PTB
+/// pack sizes). [`RunConfig::from_start`] leaves this all-`None` so memory runs and
+/// the `--`-passthrough (`extra`) path are unaffected; the daemon populates it per
+/// run — Task D2's account pool fills the per-swarm funder/gas fields, so keeping
+/// the connection identity structured here (rather than in opaque `extra`) is what
+/// lets [`swarm_args`] override those per swarm. `Layer 2` batch sizes are distinct
+/// from Layer-1 cohorts ([`CohortWire`]): cohort caps how many tunnels fly at once;
+/// batch size caps how many the anchor packs into one PTB.
+#[derive(Clone, Debug, Default)]
+pub struct SuiRunConfig {
+    pub rpc_url: Option<String>,
+    pub backend_url: Option<String>,
+    pub package_id: Option<String>,
+    pub tunnel_coin_type: Option<String>,
+    pub open_mode: Option<String>,
+    pub settle_mode: Option<String>,
+    pub funding_profile: Option<String>,
+    pub stake_source: Option<String>,
+    pub funder_priv_key: Option<String>,
+    pub funder_stake_coin_id: Option<String>,
+    /// `--sui-open-batch`: max sponsored opens the anchor packs into one PTB.
+    pub open_batch: Option<usize>,
+    /// `--sui-settle-batch`: max settles the anchor packs into one PTB.
+    pub settle_batch: Option<usize>,
+}
+
 /// A run's resolved configuration: a client's [`StartRun`] with the daemon's
 /// generated `run_id` folded in. Forwarded verbatim to each swarm except the
 /// numeric targets [`swarm_args`] splits for `distribute`.
@@ -31,6 +60,9 @@ pub struct RunConfig {
     /// `--heartbeat-url <root>/runs/<run_id>` so each swarm posts run-scoped
     /// telemetry the sink can fold back to this run.
     pub heartbeat_sink: Option<String>,
+    /// Sui-sponsored anchor settings forwarded to each swarm. All-`None` for
+    /// memory runs; the daemon populates it for `--anchor sui-sponsored`.
+    pub sui: SuiRunConfig,
 }
 
 impl RunConfig {
@@ -52,6 +84,7 @@ impl RunConfig {
             cohorts: start.cohorts,
             extra: start.extra,
             heartbeat_sink: None,
+            sui: SuiRunConfig::default(),
         }
     }
 }
@@ -117,8 +150,40 @@ pub fn swarm_args(cfg: &RunConfig, swarm_index: u64) -> Vec<String> {
             cfg.run_id
         ));
     }
+    push_sui_args(&mut args, &cfg.sui);
     args.extend(cfg.extra.iter().cloned());
     args
+}
+
+/// Append the run's `--sui-*` flags for every field the daemon set. Only present
+/// (`Some`) fields are emitted, so an unset knob keeps the `run-swarm` default
+/// rather than forcing a value. Memory runs pass an all-`None` config and add
+/// nothing.
+fn push_sui_args(args: &mut Vec<String>, sui: &SuiRunConfig) {
+    let mut push_str = |flag: &str, value: &Option<String>| {
+        if let Some(value) = value {
+            args.push(flag.to_string());
+            args.push(value.clone());
+        }
+    };
+    push_str("--sui-rpc-url", &sui.rpc_url);
+    push_str("--sui-backend-url", &sui.backend_url);
+    push_str("--sui-package-id", &sui.package_id);
+    push_str("--sui-tunnel-coin-type", &sui.tunnel_coin_type);
+    push_str("--sui-open-mode", &sui.open_mode);
+    push_str("--sui-settle-mode", &sui.settle_mode);
+    push_str("--sui-funding-profile", &sui.funding_profile);
+    push_str("--sui-stake-source", &sui.stake_source);
+    push_str("--sui-funder-priv-key", &sui.funder_priv_key);
+    push_str("--sui-funder-stake-coin-id", &sui.funder_stake_coin_id);
+    if let Some(open_batch) = sui.open_batch {
+        args.push("--sui-open-batch".to_string());
+        args.push(open_batch.to_string());
+    }
+    if let Some(settle_batch) = sui.settle_batch {
+        args.push("--sui-settle-batch".to_string());
+        args.push(settle_batch.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +272,50 @@ mod tests {
                 Some("http://127.0.0.1:9000/runs/run-1")
             );
         }
+    }
+
+    #[test]
+    fn swarm_args_forward_every_sui_flag_and_batch_size() {
+        let mut c = cfg(SpawnMode::Replicate, 2, 4);
+        c.extra.clear();
+        c.sui = SuiRunConfig {
+            rpc_url: Some("https://rpc".to_string()),
+            backend_url: Some("https://backend".to_string()),
+            package_id: Some("0xpkg".to_string()),
+            tunnel_coin_type: Some("0x2::sui::SUI".to_string()),
+            open_mode: Some("sponsored-create-and-fund".to_string()),
+            settle_mode: Some("backend-settle".to_string()),
+            funding_profile: Some("single-funder".to_string()),
+            stake_source: Some("coin-object".to_string()),
+            funder_priv_key: Some("suiprivkey1abc".to_string()),
+            funder_stake_coin_id: Some("0xcoin".to_string()),
+            open_batch: Some(25),
+            settle_batch: Some(40),
+        };
+        let a = swarm_args(&c, 0);
+        assert_eq!(flag(&a, "--sui-rpc-url"), Some("https://rpc"));
+        assert_eq!(flag(&a, "--sui-backend-url"), Some("https://backend"));
+        assert_eq!(flag(&a, "--sui-package-id"), Some("0xpkg"));
+        assert_eq!(flag(&a, "--sui-tunnel-coin-type"), Some("0x2::sui::SUI"));
+        assert_eq!(flag(&a, "--sui-open-mode"), Some("sponsored-create-and-fund"));
+        assert_eq!(flag(&a, "--sui-settle-mode"), Some("backend-settle"));
+        assert_eq!(flag(&a, "--sui-funding-profile"), Some("single-funder"));
+        assert_eq!(flag(&a, "--sui-stake-source"), Some("coin-object"));
+        assert_eq!(flag(&a, "--sui-funder-priv-key"), Some("suiprivkey1abc"));
+        assert_eq!(flag(&a, "--sui-funder-stake-coin-id"), Some("0xcoin"));
+        assert_eq!(flag(&a, "--sui-open-batch"), Some("25"));
+        assert_eq!(flag(&a, "--sui-settle-batch"), Some("40"));
+    }
+
+    #[test]
+    fn memory_runs_forward_no_sui_flags() {
+        let mut c = cfg(SpawnMode::Replicate, 1, 1);
+        c.extra.clear();
+        let a = swarm_args(&c, 0);
+        assert!(
+            !a.iter().any(|x| x.starts_with("--sui-")),
+            "an all-None sui config must not emit any --sui-* flag: {a:?}"
+        );
     }
 
     #[test]

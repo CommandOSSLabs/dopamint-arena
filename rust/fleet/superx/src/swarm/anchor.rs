@@ -168,6 +168,20 @@ pub struct SuiAnchorOpts {
     pub settle_batching: SuiOpenBatchingConfig,
 }
 
+/// Map a `--sui-open-batch`/`--sui-settle-batch` flag to the anchor's PTB batch
+/// config (Layer 2). `Some(n)` caps `max_batch_size` at `n` — the entries the
+/// sponsored anchor packs into one PTB before submit; `None` keeps the anchor
+/// default. The other batching knobs (debounce, in-flight, spacing) keep their
+/// defaults: the swarm surfaces only the pack size, since Layer-1 cohorts already
+/// govern how many tunnels fly at once.
+pub fn ptb_batching(batch_size: Option<usize>) -> SuiOpenBatchingConfig {
+    let mut config = SuiOpenBatchingConfig::default();
+    if let Some(batch_size) = batch_size {
+        config.max_batch_size = batch_size;
+    }
+    config
+}
+
 /// Run-level handle to one shared sponsored Sui anchor. Built once per run; each
 /// tunnel derives its own open-intent-scoped anchor from it so open idempotency is
 /// keyed per tunnel while the batch executors and gas cache stay shared.
@@ -281,5 +295,19 @@ mod tests {
             .await
             .unwrap();
         assert!(!opened.tunnel_id.is_empty());
+    }
+
+    #[test]
+    fn ptb_batching_caps_pack_size_and_defaults_when_unset() {
+        // A provided batch size caps how many entries the anchor packs per PTB.
+        assert_eq!(ptb_batching(Some(25)).max_batch_size, 25);
+        // An unset knob keeps the anchor's default pack size and leaves the other
+        // batching knobs at their defaults.
+        let default = SuiOpenBatchingConfig::default();
+        assert_eq!(ptb_batching(None), default);
+        assert_eq!(
+            ptb_batching(Some(25)).flush_interval_ms,
+            default.flush_interval_ms
+        );
     }
 }
