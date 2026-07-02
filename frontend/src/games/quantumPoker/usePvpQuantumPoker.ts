@@ -70,6 +70,7 @@ import type { BotContext } from "@/agent/gameKit";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
 import type { PokerPvpView } from "./quantumPokerPvpView";
 
@@ -1279,6 +1280,16 @@ function useWorkerPvpPoker(windowId: string): PvpQuantumPoker {
   const s = v?.state ?? null;
   const self: Party | null = snap.role;
   const phase: PvpPokerStatus = snap.status;
+
+  // Arena one-sig auto-enter (ADR-0028), same as caro/blackjack: claim quantum-poker's fleet-bot
+  // allocation from the store and join it in the worker on wallet-connect (allocate → join → play, the
+  // dev-raid flow) — replacing the quickMatch path that had no bot and hung at "finding opponent".
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "quantum-poker",
+    arenaGameId: "quantum_poker",
+    isIdle: () => snap.status === "idle",
+  });
 
   const myTurnToBet = v?.myTurnToBet ?? false;
   const myHole = v?.myHole ?? null;

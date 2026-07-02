@@ -65,6 +65,7 @@ import { blackjackMoveCodec } from "sui-tunnel-ts/protocol/blackjackCodec";
 import { engineEnabled } from "@/engine/flag";
 import { engineClient } from "@/engine/engineClient";
 import { useGameMatch } from "@/engine/react/useGameMatch";
+import { useArenaWorkerEntry } from "@/engine/react/useArenaWorkerEntry";
 import type { MatchSnapshot } from "@/engine/engineApi";
 import type { BlackjackPvpView } from "@/games/blackjack/blackjackPvpView";
 
@@ -1322,6 +1323,17 @@ function useWorkerBlackjackPvp(windowId: string): PvpView {
                 : snap.status === "error"
                   ? "error"
                   : "idle";
+
+  // Arena one-sig auto-enter (ADR-0028), same as caro: claim blackjack's fleet-bot allocation from the
+  // store and join it in the worker on wallet-connect — vs a real bot. This is the dev-raid flow
+  // (allocate → join → play). The `queue` fallback below still calls findMatch, but auto-enter is the
+  // primary path so the window no longer hangs at "finding opponent" (quickMatch has no bot).
+  useArenaWorkerEntry({
+    windowId,
+    gameId: "blackjack",
+    arenaGameId: BLACKJACK_ARENA_GAME_ID,
+    isIdle: () => snap.status === "idle",
+  });
 
   const playerHand = s ? s.playerHand : [];
   const dealerHand = s
