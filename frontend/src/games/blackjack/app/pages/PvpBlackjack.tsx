@@ -246,7 +246,7 @@ export default function PvpBlackjack() {
       <SketchDefs />
 
       {/* Play area felt wrapper */}
-      <div className="relative z-10 flex-1 w-full flex items-center justify-center p-4">
+      <div className="relative z-10 flex-1 w-full flex items-center justify-center p-1 md:p-2">
         <div className="bj-felt w-full h-full relative">
           {playing && (
             <button
@@ -449,7 +449,7 @@ export default function PvpBlackjack() {
           {!playing && (
             <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
               <div className="qp-panel qp-stroke max-w-[min(48rem,95%)] p-10 md:p-12 flex flex-col items-center gap-5 text-center relative">
-                <span className="qp-eyebrow">Blackjack · PvP</span>
+                {/* <span className="qp-eyebrow">Blackjack · PvP</span> */}
                 <h2 className="qp-title uppercase text-center mb-1">
                   Blackjack PvP
                 </h2>
@@ -566,46 +566,21 @@ export default function PvpBlackjack() {
 
       {/* Bottom HUD */}
       {playing && (
-        <div className="w-full qp-ticker border-t-2 border-[var(--qp-ink)] bg-[var(--qp-paper)] z-30 select-none px-4 py-2 flex flex-col md:flex-row items-center justify-between gap-3">
-          {/* Left: Balances */}
-          <div className="flex flex-row items-center gap-x-5 gap-y-1">
-            <div className="flex flex-col items-start">
-              <div className="flex items-center gap-1.5 text-xl md:text-2xl font-bold uppercase tracking-wider text-[var(--qp-ink)]">
-                <span>{selfLabel} chips:</span>
-                <span className="font-mono font-black">
-                  {selfBalance.toLocaleString()}
-                </span>
-                <span className="text-[var(--qp-ink-soft)]">({selfSum})</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-xl md:text-2xl font-bold uppercase tracking-wider text-[var(--qp-ink)]">
-                <span>{oppLabel} chips:</span>
-                <span className="font-mono font-black">
-                  {oppBalance.toLocaleString()}
-                </span>
-                <span className="text-[var(--qp-ink-soft)]">({oppSum})</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Center: Controls */}
-          <div
-            className={`flex items-center gap-2 justify-center ${
-              isPortrait ? "flex-wrap animate-none" : "flex-shrink-0"
-            }`}
-          >
+        <div className="w-full qp-ticker border-t-2 border-[var(--qp-ink)] bg-[var(--qp-paper)] z-30 select-none px-2 py-2 flex overflow-x-auto overflow-y-hidden">
+          <div className="flex items-center flex-nowrap justify-center gap-2 min-w-max mx-auto px-1">
             {g.phase === "playing" && g.myTurn && (
               <>
                 <button
                   onClick={g.hit}
                   disabled={g.auto}
-                  className="qp-btn qp-btn--go !px-8 !py-3.5 !text-xl font-black uppercase disabled:opacity-30"
+                  className="qp-btn qp-btn--go !px-4 !py-2 !text-sm font-black uppercase disabled:opacity-30"
                 >
                   Hit
                 </button>
                 <button
                   onClick={g.stand}
                   disabled={g.auto}
-                  className="qp-btn qp-btn--stop !px-8 !py-3.5 !text-xl font-black uppercase disabled:opacity-30"
+                  className="qp-btn qp-btn--stop !px-4 !py-2 !text-sm font-black uppercase disabled:opacity-30"
                 >
                   Stand
                 </button>
@@ -614,7 +589,7 @@ export default function PvpBlackjack() {
             {g.phase === "playing" && g.inRoundOver && (
               <>
                 {!g.terminal && !g.isDealer && (
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center flex-nowrap justify-center gap-1.5">
                     <span className="text-[11px] text-[var(--qp-ink)] uppercase tracking-wide mr-0.5 font-bold">
                       Bet:
                     </span>
@@ -623,7 +598,7 @@ export default function PvpBlackjack() {
                         key={amt}
                         onClick={() => g.bet(amt)}
                         disabled={g.auto}
-                        className="qp-btn qp-btn--go !px-4 !py-2.5 !text-sm font-black"
+                        className="qp-btn qp-btn--go !px-2 !py-1.5 !text-xs font-black"
                       >
                         ${amt}
                       </button>
@@ -637,7 +612,7 @@ export default function PvpBlackjack() {
                 )}
                 <button
                   onClick={g.stop}
-                  className="qp-btn qp-btn--stop !px-6 !py-3.5 !text-base font-black uppercase"
+                  className="qp-btn qp-btn--stop !px-3 !py-2 !text-xs font-black uppercase"
                 >
                   Stop &amp; settle
                 </button>
@@ -649,24 +624,16 @@ export default function PvpBlackjack() {
                   g.leave();
                   g.queue();
                 }}
-                className="qp-btn qp-btn--go !px-8 !py-3.5 !text-base font-black uppercase"
+                className="qp-btn qp-btn--go !px-4 !py-2 !text-sm font-black uppercase"
               >
                 Rematch
               </button>
             )}
-          </div>
 
-          {/* Right: Auto Toggle */}
-          <div
-            className={`flex items-center ${
-              isPortrait
-                ? "justify-center gap-4 animate-none"
-                : "flex-1 justify-end gap-4"
-            }`}
-          >
+            {/* Auto Toggle */}
             <button
               onClick={() => g.setAuto(!g.auto)}
-              className={`qp-btn !px-4 !py-2.5 !text-sm font-black uppercase flex items-center gap-1.5 ${g.auto ? "qp-btn--go" : ""}`}
+              className={`qp-btn !px-3 !py-2 !text-xs font-black uppercase flex items-center gap-1.5 ${g.auto ? "qp-btn--go" : ""}`}
             >
               <span
                 className={`grid h-3.5 w-3.5 place-items-center rounded border ${g.auto ? "border-emerald-600 bg-emerald-500/20 text-emerald-850" : "border-zinc-500"}`}
