@@ -12,6 +12,7 @@ import {
   QuantumPokerSeatDriver,
   type PokerState,
   type PokerMove,
+  type SlotSecret,
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import { pokerMoveCodec } from "sui-tunnel-ts/protocol/quantumPokerCodec";
 import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
@@ -239,4 +240,62 @@ test("poker cold-load: rebuilt seat reveals the next move byte-identically", () 
     "rebuilt poker seat reveals byte-identically to the in-memory reference",
   );
   clearResumeRecord(tid);
+});
+
+// Regression guard for the field "opponent's turn" poker deadlock (mid-commit reload). A commit_slots
+// move carries the seat's private per-slot secrets, but the WIRE codec strips them — the peer must
+// never see them. A seat that reloads while its commit is still an unconfirmed pending restores that
+// move from the LOCAL resume record; if the record dropped the secrets too, the commit confirms with
+// no localSecrets, `state.localSecretsA` stays null, and the seat can never build its reveal
+// (`secretsFor` -> null) — it stalls forever showing "opponent's turn". So the resume adapter must
+// keep the commit secrets in the LOCAL record even though the wire strips them.
+test("poker mid-commit reload: pending commit keeps slot secrets so the draw can still reveal", () => {
+  const proto = new QuantumPokerProtocol(4n);
+  const state = proto.initialState({
+    tunnelId: `0x${"5a".repeat(32)}`,
+    initialBalances: { a: 10_000n, b: 10_000n },
+  });
+  assert.equal(state.phase, "commit");
+
+  const commit = new QuantumPokerSeatDriver("A").chooseMove(state, mulberry32(3));
+  assert.equal(commit?.kind, "commit_slots");
+  const minted = (commit as { localSecrets?: (SlotSecret | null)[] }).localSecrets;
+  assert.ok(
+    minted && minted.every((s) => s),
+    "a fresh commit mints a full set of slot secrets",
+  );
+
+  const adapter = makePokerResumeAdapter({
+    getSecret: () => readSecret(state),
+    setSecret: () => {},
+  });
+
+  // The WIRE codec drops the secrets (the peer must never learn them) — so the record adapter, not
+  // the wire, is what has to preserve them across a reload.
+  const overWire = pokerMoveCodec.decode(pokerMoveCodec.encode(commit!));
+  assert.equal(
+    (overWire as { localSecrets?: unknown }).localSecrets ?? null,
+    null,
+    "wire codec strips commit secrets",
+  );
+
+  // The LOCAL resume-record round-trip MUST keep them, byte-for-byte.
+  const restored = adapter.deserializeMove(
+    adapter.serializeMove!(commit!) as never,
+  );
+  const restoredSecrets = (restored as { localSecrets?: (SlotSecret | null)[] })
+    .localSecrets;
+  assert.ok(
+    restoredSecrets && restoredSecrets.every((s) => s),
+    "resume record keeps the pending commit's slot secrets across reload",
+  );
+  assert.deepEqual(restoredSecrets, minted);
+
+  // The heal: confirming the restored pending commit repopulates localSecretsA, so the seat's later
+  // reveal has the secrets it needs. Without them applyCommit leaves localSecretsA null -> deadlock.
+  const confirmed = proto.applyMove(state, restored, "A");
+  assert.ok(
+    confirmed.localSecretsA && confirmed.localSecretsA.every((s) => s),
+    "restored commit repopulates localSecretsA, unblocking the reveal",
+  );
 });
