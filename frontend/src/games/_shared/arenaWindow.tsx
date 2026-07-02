@@ -114,8 +114,11 @@ export function createArenaWindow<Pvp extends ArenaPvp>(
       return (
         <>
           {spec.renderPvpBoard(pvp, onBoardBack)}
+          {/* Gated on isLiveMatch too: a natural terminal (settled) can arrive while the
+              dialog is open, and this board keeps rendering through settled — without the
+              gate, the dialog would linger open offering a now-stale Forfeit option. */}
           <ForfeitDialog
-            open={confirmOpen}
+            open={isLiveMatch && confirmOpen}
             stake={formatStake(pvp.stake)}
             onKeepPlaying={() => setConfirmOpen(false)}
             onForfeit={() => {

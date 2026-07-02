@@ -16,6 +16,12 @@ import {
   type CanvasFocus,
 } from "../canvasShared";
 import { WC, ERASER_COLOR, PALETTE } from "./tokens";
+import { ForfeitDialog } from "@/pvp/ForfeitDialog";
+
+/** Per-seat stake (MIST) as the dialog's fixed copy expects, e.g. "100 MTPS". */
+function formatStake(stake: number): string {
+  return `${stake} MTPS`;
+}
 
 const CHUNK = 256;
 /** Fixed canvas backdrop (matches solo) — Excalidraw-style white, passed to WorldCanvas so
@@ -95,6 +101,12 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
   const [color, setColor] = useState(13);
   const [brushSize, setBrushSize] = useState(1);
   const [revision, setRevision] = useState(0);
+  // Leave during a live match asks first — forfeiting hands the whole pot to the opponent, so
+  // it's confirmed via ForfeitDialog rather than firing immediately like `leave()`. `isLiveMatch`
+  // mirrors arenaWindow's guard: Board itself only renders for playing/settling (see
+  // PvpCanvasView above), but gating the dialog on it too keeps this resilient if that ever changes.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isLiveMatch = m.status === "playing" || m.status === "settling";
 
   // Your toolbar color drives YOUR seat's bot too (like solo): the autopilot's randomMove
   // reads this hint, so toggling Auto on paints in your chosen color. (Brush size already
@@ -288,17 +300,28 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
           onClick={() => viewParticipant("opp")}
         />
         <span style={ctlDividerStyle} />
-        {/* Leave: publish our settlement half and return to the lobby — the staying seat / grace
-            path submits the close, so leaving the shared canvas settles instead of stranding it. */}
+        {/* Leave: during a live match this confirms via ForfeitDialog first (forfeiting hands the
+            whole pot to the opponent), instead of settling immediately like the other arena games'
+            non-live Back. */}
         <button
           type="button"
-          onClick={m.leave}
-          title="Publish your half and leave the canvas"
+          onClick={() => setConfirmOpen(true)}
+          title="Leave the match — forfeits your stake"
           style={ctlButtonStyle}
         >
           Leave
         </button>
       </div>
+
+      <ForfeitDialog
+        open={isLiveMatch && confirmOpen}
+        stake={formatStake(m.stake)}
+        onKeepPlaying={() => setConfirmOpen(false)}
+        onForfeit={() => {
+          setConfirmOpen(false);
+          m.forfeit();
+        }}
+      />
     </div>
   );
 }
