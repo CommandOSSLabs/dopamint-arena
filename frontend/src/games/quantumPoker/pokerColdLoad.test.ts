@@ -257,9 +257,13 @@ test("poker mid-commit reload: pending commit keeps slot secrets so the draw can
   });
   assert.equal(state.phase, "commit");
 
-  const commit = new QuantumPokerSeatDriver("A").chooseMove(state, mulberry32(3));
+  const commit = new QuantumPokerSeatDriver("A").chooseMove(
+    state,
+    mulberry32(3),
+  );
   assert.equal(commit?.kind, "commit_slots");
-  const minted = (commit as { localSecrets?: (SlotSecret | null)[] }).localSecrets;
+  const minted = (commit as { localSecrets?: (SlotSecret | null)[] })
+    .localSecrets;
   assert.ok(
     minted && minted.every((s) => s),
     "a fresh commit mints a full set of slot secrets",
