@@ -4,7 +4,7 @@
 //! pipeline, resources, cgroup, stats, report, heartbeat, drain). Only the CLI
 //! surface exists in the skeleton.
 pub mod cli;
-// pub mod protocol;
+pub mod protocol;
 pub mod gates;
 // pub mod anchor;
 // pub mod settle_manager;
